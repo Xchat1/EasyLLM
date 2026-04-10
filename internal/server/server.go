@@ -7,6 +7,7 @@ import (
 	"easyllm/internal/models"
 	"easyllm/internal/proxy"
 	"easyllm/internal/storage"
+	"io"
 	"fmt"
 	"log"
 	"net/http"
@@ -34,6 +35,7 @@ type App struct {
 	settings       *handlers.SettingsHandler
 	codexProxy     *proxy.CodexProxy
 	sessionScanner *proxy.SessionScanner
+	openaiStore    *storage.OpenAIStorage
 	router         *gin.Engine
 }
 
@@ -86,6 +88,7 @@ func New(cfg *config.Config) (*App, error) {
 		settings:       handlers.NewSettingsHandler(),
 		codexProxy:     codexProxy,
 		sessionScanner: sessionScanner,
+		openaiStore:    openaiStore,
 	}
 
 	// Initialize default password if configured
@@ -103,6 +106,10 @@ func (a *App) setupRouter() {
 	}
 
 	r := gin.New()
+	// Allow large multipart uploads (batch import token JSON files).
+	// Gin defaults to 32 MiB which easily triggers "multipart: message too large".
+	// Setting a very large value effectively removes the limit (bounded by machine resources).
+	r.MaxMultipartMemory = 8 << 30 // 8 GiB
 	r.Use(conditionalLogger(a.cfg))
 	r.Use(gin.Recovery())
 	r.Use(ipBlacklistMiddleware(a.cfg))
@@ -169,8 +176,8 @@ func (a *App) setupRouter() {
 		c.JSON(http.StatusOK, status)
 	})
 
-	// Codex/OpenAI compatible proxy (v1/*)
-	r.Any("/v1/*path", a.proxyCodexRequest)
+	// OpenAI-compatible proxy (v1/*)
+	r.Any("/v1/*path", a.proxyV1Request)
 
 	// ChatGPT-native Codex path — used by Codex CLI when chatgpt_base_url points here.
 	// CLI appends "codex/*" to chatgpt_base_url, resulting in /backend-api/codex/* paths.
@@ -200,20 +207,10 @@ func (a *App) proxyCodexRequest(c *gin.Context) {
 	// Exception: skip the check if the request token matches a managed account
 	// (passthrough mode for local Codex CLI routing through the proxy).
 	if requiredKey, ok := storage.GetSetting("proxy_api_key"); ok && requiredKey != "" {
-		auth := c.GetHeader("Authorization")
-		token := ""
-		if len(auth) > 7 && (auth[:7] == "Bearer " || auth[:7] == "bearer ") {
-			token = auth[7:]
-		}
+		token := extractBearerToken(c.GetHeader("Authorization"))
 		isPassthrough := a.codexProxy != nil && a.codexProxy.IsKnownToken(token)
 		if token != requiredKey && !isPassthrough {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"error": gin.H{
-					"message": "Invalid API key",
-					"type":    "invalid_api_key",
-					"code":    "401",
-				},
-			})
+			rejectUnauthorized(c)
 			return
 		}
 	}
@@ -225,6 +222,137 @@ func (a *App) proxyCodexRequest(c *gin.Context) {
 	}
 
 	a.codexProxy.ProxyRequest(c.Writer, c.Request)
+}
+
+func (a *App) proxyV1Request(c *gin.Context) {
+	// API key authentication: if proxy_api_key is set, require it (same as codex proxy).
+	if requiredKey, ok := storage.GetSetting("proxy_api_key"); ok && requiredKey != "" {
+		token := extractBearerToken(c.GetHeader("Authorization"))
+		if token != requiredKey {
+			rejectUnauthorized(c)
+			return
+		}
+	}
+
+	// If explicitly configured to keep legacy behavior, route /v1/* into the Codex proxy.
+	// This keeps backward compatibility for users who intentionally proxy /v1/* to chatgpt.com Codex backend.
+	if mode, ok := storage.GetSetting("v1_proxy_mode"); ok && mode == "codex" {
+		if a.codexProxy == nil || !a.codexProxy.IsEnabled() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": gin.H{
+					"message": "Codex proxy is not enabled",
+					"type":    "service_unavailable",
+				},
+			})
+			return
+		}
+		a.codexProxy.ProxyRequest(c.Writer, c.Request)
+		return
+	}
+
+	// If there's no active API account, fall back to OAuth pool for the classic
+	// /v1/chat/completions path (so curl can work with OAuth-only setups).
+	if c.Request.URL.Path == "/v1/chat/completions" && a.codexProxy != nil && a.codexProxy.IsEnabled() {
+		// Only use this fallback when no active API account is configured.
+		if a.openaiStore != nil {
+			if active, err := a.openaiStore.GetCodexActive(); err != nil || active == nil || active.AccountType != models.OpenAIAccountTypeAPI {
+				a.codexProxy.ProxyChatCompletions(c.Writer, c.Request)
+				return
+			}
+		}
+	}
+
+	// Default: forward to active API account base_url with its api_key.
+	if a.openaiStore == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{
+				"message": "OpenAI storage not initialized",
+				"type":    "service_unavailable",
+			},
+		})
+		return
+	}
+
+	active, err := a.openaiStore.GetCodexActive()
+	if err != nil || active == nil || active.AccountType != models.OpenAIAccountTypeAPI {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{
+				"message": "No active API account configured. Add an API account in the OpenAI page and switch it to active (Codex).",
+				"type":    "no_active_api_account",
+				"code":    "503",
+			},
+		})
+		return
+	}
+
+	baseURL := ""
+	if active.BaseURL != nil {
+		baseURL = strings.TrimSpace(*active.BaseURL)
+	}
+	apiKey := ""
+	if active.APIKey != nil {
+		apiKey = strings.TrimSpace(*active.APIKey)
+	}
+	if baseURL == "" || apiKey == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{
+				"message": "Active API account is missing base_url or api_key.",
+				"type":    "invalid_upstream_config",
+				"code":    "503",
+			},
+		})
+		return
+	}
+
+	upstreamURL := strings.TrimRight(baseURL, "/") + c.Request.URL.Path
+	if q := c.Request.URL.RawQuery; q != "" {
+		upstreamURL += "?" + q
+	}
+
+	req, err := http.NewRequest(c.Request.Method, upstreamURL, c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"message": "Failed to create upstream request", "type": "internal_error"},
+		})
+		return
+	}
+
+	// Copy headers except Authorization/Host; set upstream Authorization to the API account key.
+	for k, vals := range c.Request.Header {
+		lk := strings.ToLower(k)
+		if lk == "authorization" || lk == "host" || lk == "content-length" {
+			continue
+		}
+		for _, v := range vals {
+			req.Header.Add(k, v)
+		}
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	client := &http.Client{Timeout: 180 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{"message": "Upstream request failed: " + err.Error(), "type": "upstream_error"},
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	for k, vals := range resp.Header {
+		lk := strings.ToLower(k)
+		if lk == "transfer-encoding" || lk == "connection" || lk == "keep-alive" || lk == "content-length" {
+			continue
+		}
+		for _, v := range vals {
+			c.Writer.Header().Add(k, v)
+		}
+	}
+	c.Writer.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(c.Writer, resp.Body)
 }
 
 func isWebSocketUpgrade(r *http.Request) bool {
@@ -347,18 +475,24 @@ func conditionalLogger(cfg *config.Config) gin.HandlerFunc {
 }
 
 func ipBlacklistMiddleware(cfg *config.Config) gin.HandlerFunc {
+	// Pre-build the blocklist set once, not per-request.
+	type blacklist struct {
+		enabled bool
+		ips     map[string]struct{}
+	}
+	bl := &blacklist{
+		enabled: cfg.IPBlacklist.Enabled && len(cfg.IPBlacklist.IPs) > 0,
+		ips:     make(map[string]struct{}, len(cfg.IPBlacklist.IPs)),
+	}
+	for _, ip := range cfg.IPBlacklist.IPs {
+		bl.ips[ip] = struct{}{}
+	}
 	return func(c *gin.Context) {
-		if !cfg.IPBlacklist.Enabled || len(cfg.IPBlacklist.IPs) == 0 {
+		if !bl.enabled {
 			c.Next()
 			return
 		}
-		clientIP := c.ClientIP()
-		// Build a set for O(1) lookup
-		blocked := make(map[string]struct{}, len(cfg.IPBlacklist.IPs))
-		for _, ip := range cfg.IPBlacklist.IPs {
-			blocked[ip] = struct{}{}
-		}
-		if _, ok := blocked[clientIP]; ok {
+		if _, ok := bl.ips[c.ClientIP()]; ok {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error": gin.H{
 					"message": "Your IP has been blocked",
@@ -370,4 +504,23 @@ func ipBlacklistMiddleware(cfg *config.Config) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// extractBearerToken extracts the token from an Authorization: Bearer <token> header.
+func extractBearerToken(auth string) string {
+	if len(auth) > 7 && (auth[:7] == "Bearer " || auth[:7] == "bearer ") {
+		return auth[7:]
+	}
+	return ""
+}
+
+// rejectUnauthorized writes a standard 401 JSON response.
+func rejectUnauthorized(c *gin.Context) {
+	c.JSON(http.StatusUnauthorized, gin.H{
+		"error": gin.H{
+			"message": "Invalid API key",
+			"type":    "invalid_api_key",
+			"code":    "401",
+		},
+	})
 }

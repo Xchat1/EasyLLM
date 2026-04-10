@@ -1,0 +1,3 @@
+# 将 127.0.0.1:8022 转发到 127.0.0.1:8026（解决 ghost socket 占用 8022）
+# 由 setup-pf-8022-redirect.sh 安装到 /etc/pf.anchors/easyllm
+rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 8022 -> 127.0.0.1 port 8026

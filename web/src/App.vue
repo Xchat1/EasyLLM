@@ -110,7 +110,7 @@ const systemRoutes = [
 ]
 
 const serverRunning = ref(false)
-const serverPort = ref(8021)
+const serverPort = ref(8022)
 
 const notification = ref({ show: false, message: '', type: 'info' })
 let notificationTimer = null

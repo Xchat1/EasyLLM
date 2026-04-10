@@ -63,38 +63,41 @@ type OpenAIAccount struct {
 	Quota7dResetSeconds  *int64   `json:"quota_7d_reset_seconds,omitempty"`
 	Quota7dWindowMinutes *int64   `json:"quota_7d_window_minutes,omitempty"`
 	QuotaIsForbidden     bool     `json:"quota_is_forbidden" gorm:"default:false"`
+	QuotaHTTPStatus      *int     `json:"_quota_http_status,omitempty"`
+	QuotaError           *string  `json:"_quota_error,omitempty"`
+	QuotaVerified        bool     `json:"_verified" gorm:"default:false"`
 }
 
 // OpenAIAPIKey represents an OpenAI API key
 type OpenAIAPIKey struct {
-	ID          string    `json:"id" gorm:"primaryKey"`
-	AccountID   string    `json:"account_id"`
-	Name        string    `json:"name"`
-	Key         string    `json:"key"`
-	CreatedAt   time.Time `json:"created_at"`
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	ID         string     `json:"id" gorm:"primaryKey"`
+	AccountID  string     `json:"account_id"`
+	Name       string     `json:"name"`
+	Key        string     `json:"key"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
 // CodexAccount represents a Codex account in the pool
 type CodexAccount struct {
-	ID          string     `json:"id" gorm:"primaryKey"`
-	AccountID   string     `json:"account_id"`
-	Email       string     `json:"email"`
-	AccessToken string     `json:"access_token"`
-	Enabled     bool       `json:"enabled" gorm:"default:true"`
-	RequestCount int64     `json:"request_count" gorm:"default:0"`
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID           string     `json:"id" gorm:"primaryKey"`
+	AccountID    string     `json:"account_id"`
+	Email        string     `json:"email"`
+	AccessToken  string     `json:"access_token"`
+	Enabled      bool       `json:"enabled" gorm:"default:true"`
+	RequestCount int64      `json:"request_count" gorm:"default:0"`
+	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // CodexServerConfig holds Codex proxy server configuration
 type CodexServerConfig struct {
-	Enabled          bool   `json:"enabled"`
-	Port             int    `json:"port"`
-	Strategy         string `json:"strategy"` // "round_robin", "random", "least_used"
-	MaxConcurrent    int    `json:"max_concurrent"`
-	RequestTimeout   int    `json:"request_timeout"`
+	Enabled        bool   `json:"enabled"`
+	Port           int    `json:"port"`
+	Strategy       string `json:"strategy"` // "round_robin", "random", "least_used"
+	MaxConcurrent  int    `json:"max_concurrent"`
+	RequestTimeout int    `json:"request_timeout"`
 }
 
 // CodexLog represents a Codex request log entry
@@ -115,8 +118,8 @@ type CodexLog struct {
 
 // CodexPoolStatus represents the current status of the Codex account pool
 type CodexPoolStatus struct {
-	TotalAccounts   int           `json:"total_accounts"`
-	EnabledAccounts int           `json:"enabled_accounts"`
-	TotalRequests   int64         `json:"total_requests"`
+	TotalAccounts   int            `json:"total_accounts"`
+	EnabledAccounts int            `json:"enabled_accounts"`
+	TotalRequests   int64          `json:"total_requests"`
 	Accounts        []CodexAccount `json:"accounts"`
 }

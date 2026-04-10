@@ -280,19 +280,19 @@ const checking = ref(false)
 const importing = ref(false)
 
 const showAPIRef = ref(false)
-const augmentBaseURL = computed(() => `${window.location.protocol}//${window.location.hostname}:${window.location.port || 8021}`)
+const augmentBaseURL = computed(() => `${window.location.protocol}//${window.location.hostname}:${window.location.port || 8022}`)
 const importAPIEndpoints = [
   {
     path: '/api/import/session',
     desc: '导入单个 Augment session（兼容原 ATM 接口）',
-    example: `curl -X POST ${window.location.protocol}//${window.location.hostname}:${window.location.port || 8021}/api/import/session \\
+    example: `curl -X POST ${window.location.protocol}//${window.location.hostname}:${window.location.port || 8022}/api/import/session \\
   -H "Content-Type: application/json" \\
   -d '{"session":"your_session_here"}'`
   },
   {
     path: '/api/import/sessions',
     desc: '批量导入多个 Augment sessions（兼容原 ATM 接口）',
-    example: `curl -X POST ${window.location.protocol}//${window.location.hostname}:${window.location.port || 8021}/api/import/sessions \\
+    example: `curl -X POST ${window.location.protocol}//${window.location.hostname}:${window.location.port || 8022}/api/import/sessions \\
   -H "Content-Type: application/json" \\
   -d '{"sessions":["session1","session2"]}'`
   }

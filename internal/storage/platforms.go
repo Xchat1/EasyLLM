@@ -25,6 +25,16 @@ func (s *OpenAIStorage) Get(id string) (*models.OpenAIAccount, error) {
 	var a models.OpenAIAccount
 	return &a, s.db.Where("id = ?", id).First(&a).Error
 }
+
+// GetCodexActive returns the account marked as is_codex_active=true.
+// This is used as the default upstream configuration for /v1/* proxying.
+func (s *OpenAIStorage) GetCodexActive() (*models.OpenAIAccount, error) {
+	var a models.OpenAIAccount
+	if err := s.db.Where("is_codex_active = ?", true).First(&a).Error; err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
 func (s *OpenAIStorage) Delete(id string) error {
 	return s.db.Where("id = ?", id).Delete(&models.OpenAIAccount{}).Error
 }

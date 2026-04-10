@@ -64,27 +64,70 @@
           <div class="text-xs text-gray-500">
             <span v-if="quotaLastFetched">配额更新于 {{ quotaLastFetched }}</span>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap justify-end">
             <button
-              @click="refreshTokensCurrentPage"
-              :disabled="refreshingPageTokens || paginatedOAuth.length === 0"
+              @click="refreshAllTokens"
+              :disabled="refreshingAllTokens || oauthAccounts.length === 0"
               class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-              title="刷新当前页账号的 Token"
+              title="刷新全部 OAuth 账号的 Token"
             >
-              <svg class="w-3.5 h-3.5" :class="refreshingPageTokens ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-3.5 h-3.5" :class="refreshingAllTokens ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
               </svg>
-              {{ refreshingPageTokens ? '刷新中...' : '刷新 Token' }}
+              {{ refreshingAllTokens ? '正在刷新所有 Token...' : '刷新所有 Token' }}
             </button>
             <button
-              @click="fetchQuotas"
-              :disabled="fetchingQuotas"
+              @click="fetchAllQuotas"
+              :disabled="fetchingQuotas || oauthAccounts.length === 0"
               class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
+              title="查询全部 OAuth 账号配额"
             >
               <svg class="w-3.5 h-3.5" :class="fetchingQuotas ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
               </svg>
-              {{ fetchingQuotas ? '查询中...' : '查询配额' }}
+              {{ fetchingQuotas ? '正在查询所有配额...' : '查询所有配额' }}
+            </button>
+            <button
+              @click="exportAccounts"
+              :disabled="exportingAccounts"
+              class="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700/20 hover:bg-emerald-700/30 border border-emerald-600/40 text-emerald-300 rounded-lg text-xs transition-colors disabled:opacity-40"
+              title="导出全部账号的最新落库数据"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+              </svg>
+              {{ exportingAccounts ? '正在导出所有最新数据...' : '一键导出所有最新数据' }}
+            </button>
+
+            <!-- Search + Quota result filter + bulk delete -->
+            <input
+              v-model="searchQuery"
+              class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 w-40 transition-colors focus:outline-none focus:border-blue-500 placeholder-gray-600"
+              placeholder="搜索账号 (email)"
+              title="按 email 搜索账号"
+            />
+            <select
+              v-model="quotaFilter"
+              class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 transition-colors focus:outline-none focus:border-blue-500"
+              title="按上次配额查询结果过滤账号"
+            >
+              <option value="all">全部</option>
+              <option value="200">200（成功）</option>
+              <option value="401">401（失效/未授权）</option>
+              <option value="403">403（地区受限/禁止）</option>
+              <option value="429">429（限流）</option>
+            </select>
+
+            <button
+              v-if="filteredOAuthAccounts.length > 0"
+              @click="openBulkDeleteConfirm"
+              :disabled="bulkDeleting"
+              class="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-600/40 text-red-300 rounded-lg text-xs transition-colors disabled:opacity-40"
+              :title="quotaFilter === 'all'
+                ? `批量删除所有 OAuth 账号（${filteredOAuthAccounts.length}）`
+                : `批量删除筛选结果（${filteredOAuthAccounts.length}）`"
+            >
+              {{ bulkDeleting ? '删除中...' : `批量删除(${filteredOAuthAccounts.length})` }}
             </button>
           </div>
         </div>
@@ -100,6 +143,8 @@
               <span class="inline-block w-2 h-2 rounded-full shrink-0" :class="account.proxy_enabled ? 'bg-green-400' : 'bg-gray-500'"></span>
               <span class="text-sm font-medium text-white truncate flex-1" :title="account.email">{{ account.email }}</span>
               <span v-if="account.is_codex_active" class="shrink-0 text-[10px] font-bold text-blue-300 bg-blue-600/30 px-1.5 py-0.5 rounded">Codex</span>
+              <span v-if="account.status === 'reauth_required'" class="shrink-0 text-[10px] font-bold text-red-300 bg-red-600/20 px-1.5 py-0.5 rounded">重登</span>
+              <span v-if="account._quota_http_status && account._quota_http_status !== 200" class="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded" :class="account._quota_http_status === 403 ? 'text-red-300 bg-red-600/20' : account._quota_http_status === 401 ? 'text-orange-300 bg-orange-600/20' : 'text-yellow-300 bg-yellow-600/20'">{{ account._quota_http_status }}</span>
             </div>
             <!-- Row 2: info + quota -->
             <div class="flex items-center gap-3 text-[11px] text-gray-500 mb-1.5 min-w-0">
@@ -119,8 +164,8 @@
                   class="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide"
                   :class="planBadge(account).cls"
                 >{{ planBadge(account).text }}</span>
+                <span v-if="isRegionRestricted(account)" class="text-[10px] text-amber-300">地区受限</span>
                 <span v-if="account._verified && !hasQuotaData(account)" class="text-[10px] text-green-400">✓ 有效</span>
-                <span v-if="account._quota_error" class="text-[10px] text-red-400 truncate">✗ {{ account._quota_error }}</span>
               </div>
 
               <!-- Forbidden badge -->
@@ -129,6 +174,13 @@
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8 0-1.85.63-3.55 1.69-4.9L16.9 18.31C15.55 19.37 13.85 20 12 20zm6.31-3.1L7.1 5.69C8.45 4.63 10.15 4 12 4c4.42 0 8 3.58 8 8 0 1.85-.63 3.55-1.69 4.9z"/>
                 </svg>
                 账号被禁用
+              </div>
+
+              <div v-if="isRegionRestricted(account)" class="flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2 1 21h22L12 2zm0 6 1 7h-2l1-7zm0 10.5a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/>
+                </svg>
+                当前出口地区受限，无法刷新该账号
               </div>
 
               <!-- 5h quota bar -->
@@ -201,7 +253,7 @@
               <!-- No quota data yet -->
               <div v-if="!hasQuotaData(account) && !account.quota_is_forbidden" class="text-[9px] text-gray-600">
                 <span v-if="jwtPlanType(account) === 'free'">免费账号·配额头部不开放</span>
-                <span v-else>点击上方「查询配额」获取</span>
+                <span v-else>点击卡片「配额」或上方「查询配额」获取</span>
               </div>
             </div>
             <!-- Row 3: all action buttons in one row -->
@@ -224,6 +276,12 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                 </svg>
               </button>
+              <button
+                @click="fetchQuotaForAccount(account)"
+                :disabled="fetchingQuotas || isFetchingQuota(account.id)"
+                class="card-btn card-btn--secondary"
+                title="查询配额"
+              >{{ isFetchingQuota(account.id) ? '...' : '配额' }}</button>
               <button @click="deleteAccount(account.id)" class="card-btn card-btn--danger" title="删除">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
@@ -299,6 +357,74 @@
 
     <!-- ==================== Modals ==================== -->
 
+    <!-- Delete Confirm Dialog -->
+    <div v-if="showDeleteConfirm" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="closeDeleteConfirm">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
+        <div class="flex items-center justify-between p-6 border-b border-gray-700">
+          <h2 class="text-lg font-semibold text-white">确认删除</h2>
+          <button @click="closeDeleteConfirm" class="text-gray-400 hover:text-white" :disabled="deletingAccount">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <div class="p-6 space-y-3">
+          <div class="text-sm text-gray-200">
+            将永久删除该账号<span v-if="deleteTargetLabel" class="text-white font-medium">（{{ deleteTargetLabel }}）</span>，此操作不可恢复。
+          </div>
+          <div class="text-xs text-gray-500">
+            提示：删除后不会影响你本地浏览器/客户端已存在的 token 文件，只会从 EasyLLM 中移除该账号记录。
+          </div>
+        </div>
+        <div class="p-6 pt-0 flex items-center justify-end gap-2">
+          <button @click="closeDeleteConfirm" class="btn btn-secondary" :disabled="deletingAccount">取消</button>
+          <button @click="confirmDeleteAccount" class="btn btn-danger" :disabled="deletingAccount">
+            {{ deletingAccount ? '删除中...' : '删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bulk Delete Confirm Dialog -->
+    <div v-if="showBulkDeleteConfirm" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="closeBulkDeleteConfirm">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
+        <div class="flex items-center justify-between p-6 border-b border-gray-700">
+          <h2 class="text-lg font-semibold text-white">确认批量删除</h2>
+          <button @click="closeBulkDeleteConfirm" class="text-gray-400 hover:text-white" :disabled="bulkDeleting">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <div class="p-6 space-y-3">
+          <div class="text-sm text-gray-200">
+            将永久删除筛选结果中的 <span class="text-white font-semibold">{{ bulkDeleteIds.length }}</span> 个 OAuth 账号
+            <span class="text-gray-400">（筛选：{{ quotaFilterLabel }}）</span>，此操作不可恢复。
+          </div>
+          <div v-if="quotaFilter === 'all'" class="text-xs text-red-300 bg-red-600/10 border border-red-600/30 rounded-lg px-3 py-2">
+            警告：你选择的是「全部」，将删除所有 OAuth 账号。
+          </div>
+          <div class="text-xs text-gray-500">
+            提示：仅删除 EasyLLM 内的账号记录，不会删除你本地浏览器/客户端已存在的 token 文件。
+          </div>
+          <div v-if="bulkDeletePreview.length" class="bg-gray-800/60 border border-gray-700 rounded-lg p-3">
+            <div class="text-[11px] text-gray-400 mb-1">将删除（预览前 {{ bulkDeletePreview.length }} 个）：</div>
+            <div class="space-y-1 max-h-24 overflow-y-auto">
+              <div v-for="(e, i) in bulkDeletePreview" :key="i" class="text-xs text-gray-300 truncate">
+                {{ i + 1 }}. {{ e }}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="p-6 pt-0 flex items-center justify-end gap-2">
+          <button @click="closeBulkDeleteConfirm" class="btn btn-secondary" :disabled="bulkDeleting">取消</button>
+          <button @click="confirmBulkDelete" class="btn btn-danger" :disabled="bulkDeleting">
+            {{ bulkDeleting ? '删除中...' : `删除 ${bulkDeleteIds.length} 个` }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Batch Import Dialog -->
     <div v-if="showImportDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-xl shadow-2xl">
@@ -340,13 +466,17 @@
               <input ref="multiFileInput" type="file" accept=".json" multiple class="hidden" @change="handleMultiFileSelect"/>
               <div
                 @click="$refs.multiFileInput.click()"
+                @dragover.prevent="dragging = true"
+                @dragleave.prevent="dragging = false"
+                @drop.prevent="handleDrop"
                 class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-blue-500 hover:bg-blue-900/10 transition-colors"
+                :class="{ 'border-blue-500 bg-blue-900/10': dragging }"
               >
                 <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                 </svg>
-                <p class="text-gray-400 text-sm">点击选择多个 token JSON 文件</p>
-                <p class="text-xs text-gray-600 mt-1">可同时选择多个文件，支持 token_*.json 格式</p>
+                <p class="text-gray-400 text-sm">点击或拖拽文件到此处</p>
+                <p class="text-xs text-gray-600 mt-1">支持多个 token_*.json 文件</p>
               </div>
             </div>
             <div v-else>
@@ -398,12 +528,16 @@
               <input ref="fileInput" type="file" accept=".json,.txt" class="hidden" @change="handleFileSelect"/>
               <div
                 @click="$refs.fileInput.click()"
+                @dragover.prevent="dragging = true"
+                @dragleave.prevent="dragging = false"
+                @drop.prevent="handleDrop"
                 class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-blue-500 hover:bg-blue-900/10 transition-colors"
+                :class="{ 'border-blue-500 bg-blue-900/10': dragging }"
               >
                 <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                 </svg>
-                <p class="text-gray-400 text-sm">上传包含 refresh_token 数组的 JSON</p>
+                <p class="text-gray-400 text-sm">点击或拖拽文件到此处</p>
                 <pre class="text-xs text-gray-600 mt-2">["rt_xxx", "rt_yyy"]</pre>
               </div>
             </div>
@@ -420,6 +554,39 @@
             </div>
           </div>
 
+          <!-- Mode 5: Import from Sub2API JSON format -->
+          <div v-if="importMode === 'sub2api'">
+            <div class="bg-blue-900/20 border border-blue-700/40 rounded-lg p-3 text-xs text-blue-300 mb-3">
+              🚀 直接导入 Sub2API 格式的 JSON 文件（支持包含 accounts 数组的文件）
+            </div>
+            <div v-if="!importSub2APIFile">
+              <input ref="importSub2APIFileInput" type="file" accept=".json" class="hidden" @change="handleSub2APIFileSelect"/>
+              <div
+                @click="$refs.importSub2APIFileInput.click()"
+                @dragover.prevent="dragging = true"
+                @dragleave.prevent="dragging = false"
+                @drop.prevent="handleDrop"
+                class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-blue-500 hover:bg-blue-900/10 transition-colors"
+                :class="{ 'border-blue-500 bg-blue-900/10': dragging }"
+              >
+                <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                </svg>
+                <p class="text-gray-400 text-sm">点击或拖拽 Sub2API 文件到此处</p>
+                <p class="text-xs text-gray-600 mt-1">支持包含 accounts 数组的 JSON 格式</p>
+              </div>
+            </div>
+            <div v-else class="space-y-2">
+              <div class="flex items-center justify-between">
+                <div class="text-sm text-gray-300">
+                  已解析：
+                  <span class="text-white font-medium">{{ importSub2APIFile.accounts?.length ?? 0 }}</span> 个账号
+                </div>
+                <button @click="importSub2APIFile = null; importResults = null" class="text-xs text-gray-500 hover:text-red-400">重新选择</button>
+              </div>
+            </div>
+          </div>
+
           <!-- Mode 4: Re-import from exported backup JSON -->
           <div v-if="importMode === 'from-export'">
             <div class="bg-purple-900/20 border border-purple-700/40 rounded-lg p-3 text-xs text-purple-300 mb-3">
@@ -429,12 +596,16 @@
               <input ref="importBackupFileInput" type="file" accept=".json" class="hidden" @change="handleBackupFileSelect"/>
               <div
                 @click="$refs.importBackupFileInput.click()"
+                @dragover.prevent="dragging = true"
+                @dragleave.prevent="dragging = false"
+                @drop.prevent="handleDrop"
                 class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-purple-500 hover:bg-purple-900/10 transition-colors"
+                :class="{ 'border-purple-500 bg-purple-900/10': dragging }"
               >
                 <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                 </svg>
-                <p class="text-gray-400 text-sm">点击上传 easyllm-accounts-*.json 备份文件</p>
+                <p class="text-gray-400 text-sm">点击或拖拽备份文件到此处</p>
                 <p class="text-xs text-gray-600 mt-1">仅支持「导出账号」生成的文件</p>
               </div>
             </div>
@@ -608,12 +779,13 @@
           <div class="flex items-center gap-2">
             <button
               @click="exportAccounts"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg text-sm transition-colors"
+              :disabled="exportingAccounts"
+              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
               </svg>
-              导出账号
+              {{ exportingAccounts ? '导出中...' : '导出账号' }}
             </button>
             <button @click="showServiceConfigDialog = false" class="text-gray-400 hover:text-white">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -779,7 +951,7 @@
 
 <script setup>
 import { ref, computed, onMounted, inject } from 'vue'
-import api, { longApi } from '@/api/index.js'
+import api, { longApi, openaiAPI } from '@/api/index.js'
 
 // State
 const accounts = ref([])
@@ -787,7 +959,7 @@ const loading = ref(false)
 const activeTab = ref('oauth')
 
 // Proxy endpoints
-const baseURL = computed(() => `${window.location.protocol}//${window.location.hostname}:${window.location.port || 8021}`)
+const baseURL = computed(() => `${window.location.protocol}//${window.location.hostname}:${window.location.port || 8022}`)
 const proxyEndpoints = [
   { method: 'POST', path: '/v1/chat/completions', desc: '聊天补全（OpenAI 兼容）' },
   { method: 'GET',  path: '/v1/models',           desc: '获取可用模型列表' },
@@ -799,11 +971,26 @@ function copyText(text) {
 }
 const switchingId = ref(null)
 const refreshingId = ref(null)
-const refreshingPageTokens = ref(false)
+const refreshingAllTokens = ref(false)
 const togglingProxyId = ref(null)
 const togglingProxyAll = ref(false)
 const fetchingQuotas = ref(false)
+const fetchingQuotaIds = ref([])
 const quotaLastFetched = ref('')
+const quotaFilter = ref('all') // all | 200 | 401 | 403 | 429
+const searchQuery = ref('') // search by email
+const bulkDeleting = ref(false)
+const showBulkDeleteConfirm = ref(false)
+const bulkDeleteIds = ref([])
+const bulkDeletePreview = ref([])
+
+const quotaFilterLabel = computed(() => {
+  if (quotaFilter.value === '429') return '429（限流）'
+  if (quotaFilter.value === '403') return '403（地区受限/禁止）'
+  if (quotaFilter.value === '401') return '401（失效/未授权）'
+  if (quotaFilter.value === '200') return '200（成功）'
+  return '全部'
+})
 
 // Import dialog
 const showImportDialog = ref(false)
@@ -813,14 +1000,18 @@ const importFiles = ref([])
 const importResults = ref(null)
 const fileInput = ref(null)
 const multiFileInput = ref(null)
-const importMode = ref('token-files') // 'token-files' | 'scan-dir' | 'refresh-tokens' | 'from-export'
+const dragging = ref(false)
+const scanDir = ref('./auth')
+const importSub2APIFile = ref(null)
+const importSub2APIFileInput = ref(null)
+const importMode = ref('token-files') // 'token-files' | 'scan-dir' | 'refresh-tokens' | 'sub2api' | 'from-export'
 const importBackupFile = ref(null)  // 从备份导入用的解析后的 JSON 对象
 const importBackupFileInput = ref(null)
-const scanDir = ref('./auth')
 const importModes = [
   { id: 'token-files',  label: '⚡ Token文件' },
   { id: 'scan-dir',     label: '🗂 扫描目录' },
   { id: 'refresh-tokens', label: '🔄 refresh_token' },
+  { id: 'sub2api',      label: '🚀 Sub2API' },
   { id: 'from-export',  label: '📦 从备份导入' },
 ]
 
@@ -844,6 +1035,7 @@ const apiForm = ref({
 
 const showServiceConfigDialog = ref(false)
 const savingServiceConfig = ref(false)
+const exportingAccounts = ref(false)
 const showApiKey = ref(false)
 const serviceApiKeyInput = ref('')
 const serviceConfig = ref({
@@ -866,6 +1058,12 @@ const strategies = [
 // Toast
 const toast = ref({ show: false, message: '', type: 'success' })
 
+// Delete confirm dialog
+const showDeleteConfirm = ref(false)
+const deleteTargetId = ref(null)
+const deleteTargetLabel = ref('')
+const deletingAccount = ref(false)
+
 const formatExample = `[
   "refresh_token_1_here",
   "refresh_token_2_here",
@@ -878,15 +1076,33 @@ const apiAccounts = computed(() => accounts.value.filter(a => a.account_type ===
 const proxyEnabledCount = computed(() => accounts.value.filter(a => a.proxy_enabled).length)
 const proxyAllOn = computed(() => oauthAccounts.value.length > 0 && proxyEnabledCount.value === oauthAccounts.value.length)
 
+const filteredOAuthAccounts = computed(() => {
+  let list = oauthAccounts.value
+  // Search filter
+  const q = searchQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter(a => (a.email || '').toLowerCase().includes(q) || (a.chatgpt_account_id || '').toLowerCase().includes(q))
+  }
+  // Quota status filter
+  const f = quotaFilter.value
+  if (f === 'all') return list
+  const want = Number(f)
+  return list.filter(a => {
+    if (Number(a._quota_http_status) === want) return true
+    if (want === 401 && a.status === 'reauth_required') return true
+    return false
+  })
+})
+
 // Pagination
 const PAGE_SIZE = 20
 const oauthPage = ref(1)
 const apiPage = ref(1)
-const oauthTotalPages = computed(() => Math.ceil(oauthAccounts.value.length / PAGE_SIZE) || 1)
+const oauthTotalPages = computed(() => Math.ceil(filteredOAuthAccounts.value.length / PAGE_SIZE) || 1)
 const apiTotalPages = computed(() => Math.ceil(apiAccounts.value.length / PAGE_SIZE) || 1)
 const paginatedOAuth = computed(() => {
   const start = (oauthPage.value - 1) * PAGE_SIZE
-  return oauthAccounts.value.slice(start, start + PAGE_SIZE)
+  return filteredOAuthAccounts.value.slice(start, start + PAGE_SIZE)
 })
 const paginatedAPI = computed(() => {
   const start = (apiPage.value - 1) * PAGE_SIZE
@@ -948,30 +1164,27 @@ async function switchAPIAccount(account) {
   }
 }
 
-async function refreshTokensCurrentPage() {
-  const pageAccounts = paginatedOAuth.value
-  if (pageAccounts.length === 0) {
-    showToast('当前页没有账号', 'error')
+async function refreshAllTokens() {
+  if (oauthAccounts.value.length === 0) {
+    showToast('没有可刷新的 OAuth 账号', 'error')
     return
   }
-  refreshingPageTokens.value = true
-  let ok = 0
-  let fail = 0
-  for (const account of pageAccounts) {
-    try {
-      await api.post(`/openai/accounts/${account.id}/refresh-token`)
-      ok++
-    } catch {
-      fail++
-    }
-  }
-  refreshingPageTokens.value = false
-  if (fail === 0) {
-    showToast(`已刷新当前页 ${ok} 个账号`, 'success')
+  refreshingAllTokens.value = true
+  try {
+    const res = await openaiAPI.refreshAll()
+    const success = res?.success ?? 0
+    const skipped = res?.skipped ?? 0
+    const failed = res?.failed ?? 0
+    const parts = []
+    if (success > 0) parts.push(`成功 ${success}`)
+    if (skipped > 0) parts.push(`跳过 ${skipped}`)
+    if (failed > 0) parts.push(`失败 ${failed}`)
+    showToast(`全部刷新完成：${parts.join('，') || '无可用账号'}`, failed > 0 && success === 0 ? 'error' : 'success')
     await loadAccounts()
-  } else {
-    showToast(`刷新完成：成功 ${ok}，失败 ${fail}`, fail === pageAccounts.length ? 'error' : 'success')
-    if (ok > 0) await loadAccounts()
+  } catch (e) {
+    showToast('刷新全部失败: ' + e.message, 'error')
+  } finally {
+    refreshingAllTokens.value = false
   }
 }
 
@@ -989,13 +1202,51 @@ async function refreshToken(account) {
 }
 
 async function deleteAccount(id) {
-  if (!confirm('确认删除该账号？')) return
+  const target = accounts.value.find(a => a.id === id)
+  if (!target) {
+    showToast('找不到该账号', 'error')
+    return
+  }
+  deleteTargetId.value = id
+  deleteTargetLabel.value = target.account_type === 'api'
+      ? `${target.model_provider || 'API'}${target.model ? ` / ${target.model}` : ''}`
+      : (target.email || target.chatgpt_account_id || String(id))
+  showDeleteConfirm.value = true
+}
+
+function closeDeleteConfirm() {
+  if (deletingAccount.value) return
+  resetDeleteConfirm()
+}
+
+function resetDeleteConfirm() {
+  deletingAccount.value = false
+  showDeleteConfirm.value = false
+  deleteTargetId.value = null
+  deleteTargetLabel.value = ''
+}
+
+async function confirmDeleteAccount() {
+  const id = deleteTargetId.value
+  if (!id) return
+  deletingAccount.value = true
   try {
     await api.delete(`/openai/accounts/${id}`)
-    accounts.value = accounts.value.filter(a => a.id !== id)
+    // Remove locally for instant push
+    accounts.value = accounts.value.filter(a => String(a.id) !== String(id))
+    if (activeTab.value === 'oauth' && oauthPage.value > oauthTotalPages.value) {
+      oauthPage.value = oauthTotalPages.value
+    }
+    if (activeTab.value === 'api' && apiPage.value > apiTotalPages.value) {
+      apiPage.value = apiTotalPages.value
+    }
     showToast('已删除', 'success')
+    resetDeleteConfirm()
+    // Refresh list from server as fail-safe
+    await loadAccounts()
   } catch (e) {
-    showToast('删除失败', 'error')
+    showToast('删除失败: ' + (e.response?.data?.error || e.message), 'error')
+    deletingAccount.value = false
   }
 }
 
@@ -1083,6 +1334,7 @@ const canRunImport = computed(() => {
   if (importMode.value === 'token-files') return importFiles.value.length > 0
   if (importMode.value === 'scan-dir') return scanDir.value.trim().length > 0
   if (importMode.value === 'refresh-tokens') return importTokens.value.length > 0
+  if (importMode.value === 'sub2api') return !!importSub2APIFile.value
   if (importMode.value === 'from-export') return !!importBackupFile.value
   return false
 })
@@ -1091,6 +1343,9 @@ const importButtonLabel = computed(() => {
   if (importMode.value === 'token-files') return `导入 ${importFiles.value.length} 个文件`
   if (importMode.value === 'scan-dir') return `扫描并导入目录`
   if (importMode.value === 'refresh-tokens') return `导入 ${importTokens.value.length} 个账号`
+  if (importMode.value === 'sub2api') {
+    return `导入 ${importSub2APIFile.value?.accounts?.length ?? 0} 个账号`
+  }
   if (importMode.value === 'from-export') {
     const total = (importBackupFile.value?.oauth_accounts?.length ?? 0) + (importBackupFile.value?.api_accounts?.length ?? 0)
     return `从备份导入 ${total} 个账号`
@@ -1098,16 +1353,18 @@ const importButtonLabel = computed(() => {
   return '导入'
 })
 
-function handleMultiFileSelect(event) {
-  const files = Array.from(event.target.files || [])
+function handleFiles(files) {
   if (!files.length) return
-  importFiles.value = files
+  importFiles.value = Array.from(files)
   importResults.value = null
+}
+
+function handleMultiFileSelect(event) {
+  handleFiles(event.target.files)
   event.target.value = ''
 }
 
-function handleBackupFileSelect(event) {
-  const file = event.target.files?.[0]
+function parseBackupFile(file) {
   if (!file) return
   const reader = new FileReader()
   reader.onload = (e) => {
@@ -1124,29 +1381,95 @@ function handleBackupFileSelect(event) {
     }
   }
   reader.readAsText(file)
-  event.target.value = ''
 }
 
-function handleFileSelect(event) {
-  const file = event.target.files?.[0]
+function parseRefreshTokenFile(file) {
   if (!file) return
   const reader = new FileReader()
   reader.onload = (e) => {
     try {
-      const data = JSON.parse(e.target.result)
-      const tokens = Array.isArray(data) ? data : [data]
-      const valid = tokens.filter(t => typeof t === 'string' && t.trim().length > 0)
+      const raw = String(e.target.result ?? '')
+      let tokens = []
+      try {
+        const data = JSON.parse(raw)
+        tokens = Array.isArray(data) ? data : [data]
+      } catch {
+        tokens = raw.split(/\r?\n|,/)
+      }
+      const valid = tokens
+        .filter(t => typeof t === 'string' && t.trim().length > 0)
+        .map(t => t.trim())
       if (valid.length === 0) {
         showToast('文件中没有有效的 refresh_token', 'error')
         return
       }
-      importTokens.value = valid.map(t => t.trim())
+      importTokens.value = valid
       importResults.value = null
     } catch (err) {
       showToast('文件解析失败: ' + err.message, 'error')
     }
   }
   reader.readAsText(file)
+}
+
+function parseSub2APIFile(file) {
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result)
+      if (!data.accounts || !Array.isArray(data.accounts)) {
+        showToast('文件格式不正确，缺少 accounts 数组', 'error')
+        return
+      }
+      importSub2APIFile.value = data
+      importResults.value = null
+    } catch (err) {
+      showToast('文件解析失败: ' + err.message, 'error')
+    }
+  }
+  reader.readAsText(file)
+}
+
+function handleDrop(event) {
+  dragging.value = false
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (!files.length) return
+
+  if (importMode.value === 'token-files') {
+    handleFiles(files)
+    return
+  }
+
+  const [file] = files
+  if (importMode.value === 'refresh-tokens') {
+    parseRefreshTokenFile(file)
+    return
+  }
+  if (importMode.value === 'sub2api') {
+    parseSub2APIFile(file)
+    return
+  }
+  if (importMode.value === 'from-export') {
+    parseBackupFile(file)
+  }
+}
+
+function handleBackupFileSelect(event) {
+  const file = event.target.files?.[0]
+  parseBackupFile(file)
+  event.target.value = ''
+}
+
+function handleFileSelect(event) {
+  const file = event.target.files?.[0]
+  parseRefreshTokenFile(file)
+  event.target.value = ''
+}
+
+function handleSub2APIFileSelect(event) {
+  const file = event.target.files?.[0]
+  parseSub2APIFile(file)
   event.target.value = ''
 }
 
@@ -1207,6 +1530,16 @@ async function runImport() {
         results: res?.results ?? []
       }
 
+    } else if (importMode.value === 'sub2api') {
+      res = await api.post('/openai/import/sub2api', importSub2APIFile.value)
+      importResults.value = {
+        success: res?.success ?? 0,
+        skipped: res?.skipped ?? 0,
+        failed:  res?.failed  ?? 0,
+        total:   res?.total   ?? 0,
+        results: res?.results ?? []
+      }
+
     } else {
       // Legacy: refresh_token list requires OpenAI API calls
       res = await api.post('/openai/import/refresh-tokens', {
@@ -1244,6 +1577,7 @@ function closeImportDialog() {
   importTokens.value = []
   importFiles.value = []
   importBackupFile.value = null
+  importSub2APIFile.value = null
   importResults.value = null
 }
 
@@ -1340,6 +1674,7 @@ async function loadServiceConfig() {
   try {
     const res = await api.get('/openai/service-config')
     Object.assign(serviceConfig.value, res)
+    // If the backend returns api_key, use it. Otherwise use masked.
     serviceApiKeyInput.value = res.api_key || ''
   } catch (e) {
     console.error('Failed to load service config:', e)
@@ -1353,36 +1688,23 @@ async function openServiceConfig() {
   await loadServiceConfig()
 }
 
-function exportAccounts() {
-  const payload = {
-    exported_at: new Date().toISOString(),
-    _usage: '恢复时：在"批量导入 → 从备份导入"中上传此文件即可一键恢复所有账号，无需任何 API 调用。请妥善保管此文件。',
-    oauth_accounts: oauthAccounts.value.map(a => ({
-      email: a.email || '',
-      refresh_token: a.refresh_token || '',
-      access_token: a.access_token || '',
-      id_token: a.id_token || '',
-      chatgpt_account_id: a.chatgpt_account_id || '',
-      expires_at: a.expires_at || '',
-    })),
-    api_accounts: apiAccounts.value.map(a => ({
-      model_provider: a.model_provider || '',
-      model: a.model || '',
-      base_url: a.base_url || '',
-      api_key: a.api_key || '',
-      wire_api: a.wire_api || 'responses',
-      model_reasoning_effort: a.model_reasoning_effort || '',
-      proxy_enabled: a.proxy_enabled,
-    })),
+async function exportAccounts() {
+  exportingAccounts.value = true
+  try {
+    const payload = await openaiAPI.exportJSON()
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `easyllm-accounts-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    showToast(`已导出 ${payload.oauth_accounts?.length ?? 0} 个 OAuth + ${payload.api_accounts?.length ?? 0} 个 API 账号（基于后端最新落库数据）`, 'success')
+  } catch (e) {
+    showToast('导出失败: ' + e.message, 'error')
+  } finally {
+    exportingAccounts.value = false
   }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `easyllm-accounts-${new Date().toISOString().slice(0, 10)}.json`
-  a.click()
-  URL.revokeObjectURL(url)
-  showToast(`已导出 ${payload.oauth_accounts.length} 个 OAuth + ${payload.api_accounts.length} 个 API 账号，请妥善保管`, 'success')
 }
 
 async function toggleServiceProxyPool() {
@@ -1426,10 +1748,143 @@ async function saveServiceApiKey() {
 }
 
 // ---- Quota ----
-async function fetchQuotas() {
+function isFetchingQuota(id) {
+  return fetchingQuotaIds.value.includes(String(id))
+}
+
+function setFetchingQuota(id, loading) {
+  const key = String(id)
+  if (loading) {
+    if (!fetchingQuotaIds.value.includes(key)) {
+      fetchingQuotaIds.value = [...fetchingQuotaIds.value, key]
+    }
+    return
+  }
+  fetchingQuotaIds.value = fetchingQuotaIds.value.filter(item => item !== key)
+}
+
+function oauthAccountPriority(account) {
+  const code = Number(account?._quota_http_status || 0)
+  if (code === 200 && !account?.quota_is_forbidden) return 0
+  if (code === 429) return 1
+  if (code === 403) return 2
+  if (code === 401) return 3
+  if (account?.status === 'reauth_required') return 4
+  return 5
+}
+
+function reorderOAuthAccounts() {
+  const decorated = accounts.value.map((account, index) => ({ account, index }))
+  decorated.sort((left, right) => {
+    const leftIsOAuth = !left.account.account_type || left.account.account_type === 'oauth'
+    const rightIsOAuth = !right.account.account_type || right.account.account_type === 'oauth'
+    if (leftIsOAuth && rightIsOAuth) {
+      const priorityDiff = oauthAccountPriority(left.account) - oauthAccountPriority(right.account)
+      if (priorityDiff !== 0) return priorityDiff
+    } else if (leftIsOAuth !== rightIsOAuth) {
+      return leftIsOAuth ? -1 : 1
+    }
+    return left.index - right.index
+  })
+  accounts.value = decorated.map(item => item.account)
+}
+
+function applyQuotaResult(result) {
+  const acc = accounts.value.find(a => String(a.id) === String(result.id))
+  if (!acc) return null
+
+  if (result.success && result.is_forbidden) {
+    acc.quota_is_forbidden = true
+    acc._quota_http_status = 403
+    acc._verified = false
+    acc._quota_error = ''
+    return 'forbidden'
+  }
+
+  if (result.success && (result.quota_5h_used_percent != null || result.quota_7d_used_percent != null || result.total > 0)) {
+    acc.quota_is_forbidden = false
+    acc._quota_http_status = 200
+    acc.quota_5h_used_percent = result.quota_5h_used_percent ?? null
+    acc.quota_5h_reset_seconds = result.quota_5h_reset_seconds ?? null
+    acc.quota_5h_window_minutes = result.quota_5h_window_minutes ?? null
+    acc.quota_7d_used_percent = result.quota_7d_used_percent ?? null
+    acc.quota_7d_reset_seconds = result.quota_7d_reset_seconds ?? null
+    acc.quota_7d_window_minutes = result.quota_7d_window_minutes ?? null
+    acc.quota_total = result.total || null
+    acc.quota_used = result.used || null
+    acc.quota_reset_at = result.reset || null
+    acc.quota_updated_at = new Date().toISOString()
+    acc._verified = false
+    acc._quota_error = ''
+    return 'quota'
+  }
+
+  if (result.success && result.verified) {
+    acc._quota_http_status = 200
+    acc._verified = true
+    acc._quota_error = ''
+    return 'verified'
+  }
+
+  acc._verified = false
+  acc._quota_error = result.error || '查询失败'
+  acc._quota_http_status = result.http_status || (acc._quota_http_status ?? null)
+  // Clear only 5h quota data on failure, keep 7d data for display
+  acc.quota_5h_used_percent = null
+  acc.quota_5h_reset_seconds = null
+  acc.quota_5h_window_minutes = null
+  // Keep 7d quota data
+  // acc.quota_7d_used_percent = null
+  // acc.quota_7d_reset_seconds = null
+  // acc.quota_7d_window_minutes = null
+  acc.quota_total = null
+  acc.quota_used = null
+  acc.quota_reset_at = null
+  return 'failed'
+}
+
+async function fetchQuotaForAccount(account) {
+  setFetchingQuota(account.id, true)
+  try {
+    const res = await longApi.post('/openai/accounts/fetch-quotas', { ids: [account.id] })
+    const result = res?.results?.find(r => String(r.id) === String(account.id))
+    if (!result) {
+      throw new Error('未返回该账号的配额结果')
+    }
+
+    const status = applyQuotaResult(result)
+    quotaLastFetched.value = new Date().toLocaleTimeString('zh')
+
+    if (status === 'quota') {
+      showToast(`${account.email || '账号'} 配额已更新`, 'success')
+    } else if (status === 'verified') {
+      showToast(`${account.email || '账号'} 账号有效，但未返回配额头`, 'success')
+    } else if (status === 'forbidden') {
+      showToast(`${account.email || '账号'} 已被禁用`, 'error')
+    } else {
+      showToast(`${account.email || '账号'} 配额查询失败: ${result.error || '查询失败'}`, 'error')
+    }
+    reorderOAuthAccounts()
+    // Reload accounts to get updated status
+    await loadAccounts()
+  } catch (e) {
+    showToast('配额查询失败: ' + e.message, 'error')
+  } finally {
+    setFetchingQuota(account.id, false)
+  }
+}
+
+async function fetchQuotaBatch(ids, scopeLabel = '全部') {
+  if (!ids.length) {
+    if (oauthAccounts.value.length === 0) {
+      showToast(`${scopeLabel}没有OAuth账号，无法查询配额`, 'error')
+    } else {
+      showToast(`${scopeLabel}没有可查询的账号`, 'error')
+    }
+    return
+  }
   fetchingQuotas.value = true
   try {
-    const ids = paginatedOAuth.value.map(a => a.id)
     const res = await longApi.post('/openai/accounts/fetch-quotas', { ids })
     let quotaCount = 0
     let verifiedCount = 0
@@ -1437,36 +1892,14 @@ async function fetchQuotas() {
     let forbiddenCount = 0
     if (res?.results) {
       for (const r of res.results) {
-        const acc = accounts.value.find(a => a.id === r.id)
-        if (!acc) continue
-
-        if (r.success && r.is_forbidden) {
-          acc.quota_is_forbidden = true
-          acc._verified = false
-          acc._quota_error = ''
+        const status = applyQuotaResult(r)
+        if (status === 'forbidden') {
           forbiddenCount++
-        } else if (r.success && (r.quota_5h_used_percent != null || r.quota_7d_used_percent != null || r.total > 0)) {
-          acc.quota_is_forbidden = false
-          acc.quota_5h_used_percent = r.quota_5h_used_percent ?? null
-          acc.quota_5h_reset_seconds = r.quota_5h_reset_seconds ?? null
-          acc.quota_5h_window_minutes = r.quota_5h_window_minutes ?? null
-          acc.quota_7d_used_percent = r.quota_7d_used_percent ?? null
-          acc.quota_7d_reset_seconds = r.quota_7d_reset_seconds ?? null
-          acc.quota_7d_window_minutes = r.quota_7d_window_minutes ?? null
-          acc.quota_total = r.total || null
-          acc.quota_used = r.used || null
-          acc.quota_reset_at = r.reset || null
-          acc.quota_updated_at = new Date().toISOString()
-          acc._verified = false
-          acc._quota_error = ''
+        } else if (status === 'quota') {
           quotaCount++
-        } else if (r.success && r.verified) {
-          acc._verified = true
-          acc._quota_error = ''
+        } else if (status === 'verified') {
           verifiedCount++
-        } else {
-          acc._verified = false
-          acc._quota_error = r.error || '查询失败'
+        } else if (status === 'failed') {
           failedCount++
         }
       }
@@ -1477,11 +1910,69 @@ async function fetchQuotas() {
     if (verifiedCount > 0) parts.push(`${verifiedCount} 个账号有效`)
     if (forbiddenCount > 0) parts.push(`${forbiddenCount} 个被禁用`)
     if (failedCount > 0) parts.push(`${failedCount} 个失败`)
-    showToast(`查询完成：${parts.join('，')}`, failedCount > 0 && quotaCount + verifiedCount === 0 ? 'error' : 'success')
+    reorderOAuthAccounts()
+    if (parts.length === 0 && failedCount > 0) {
+      showToast(`${scopeLabel}查询完成：${failedCount} 个失败`, 'error')
+    } else {
+      showToast(`${scopeLabel}查询完成：${parts.join('，') || '无返回结果'}`, failedCount > 0 && quotaCount + verifiedCount === 0 ? 'error' : 'success')
+    }
+    // Reload accounts to get updated status
+    await loadAccounts()
   } catch (e) {
-    showToast('配额查询失败: ' + e.message, 'error')
+    showToast(`${scopeLabel}配额查询失败: ` + e.message, 'error')
   } finally {
     fetchingQuotas.value = false
+  }
+}
+
+async function fetchAllQuotas() {
+  await fetchQuotaBatch(oauthAccounts.value.map(a => a.id), '全部')
+}
+
+function openBulkDeleteConfirm() {
+  const list = filteredOAuthAccounts.value
+  if (!list.length) {
+    showToast('没有可删除的账号', 'error')
+    return
+  }
+  bulkDeleteIds.value = list.map(a => a.id)
+  bulkDeletePreview.value = list
+    .slice(0, 12)
+    .map(a => a.email || a.chatgpt_account_id || a.id)
+  showBulkDeleteConfirm.value = true
+}
+
+function closeBulkDeleteConfirm() {
+  if (bulkDeleting.value) return
+  resetBulkDeleteConfirm()
+}
+
+function resetBulkDeleteConfirm() {
+  bulkDeleting.value = false
+  showBulkDeleteConfirm.value = false
+  bulkDeleteIds.value = []
+  bulkDeletePreview.value = []
+}
+
+async function confirmBulkDelete() {
+  const ids = bulkDeleteIds.value
+  if (!ids.length) return
+  bulkDeleting.value = true
+  try {
+    await api.request({
+      method: 'DELETE',
+      url: '/openai/accounts',
+      data: { ids },
+    })
+    const idSet = new Set(ids)
+    accounts.value = accounts.value.filter(a => !idSet.has(a.id))
+    oauthPage.value = 1
+    showToast(`已批量删除 ${ids.length} 个账号`, 'success')
+    resetBulkDeleteConfirm()
+    await loadAccounts()
+  } catch (e) {
+    showToast('批量删除失败: ' + (e.response?.data?.error || e.message), 'error')
+    bulkDeleting.value = false
   }
 }
 
@@ -1501,6 +1992,12 @@ function pctColor(remainPct) {
   if (remainPct <= 10) return 'text-red-400'
   if (remainPct <= 30) return 'text-yellow-400'
   return 'text-green-400'
+}
+
+function isRegionRestricted(account) {
+  const error = String(account?._quota_error || '')
+  return Number(account?._quota_http_status) === 403 &&
+    (error.includes('unsupported_country_region_territory') || error.includes('Country, region, or territory not supported'))
 }
 
 function formatResetTime(seconds) {
@@ -1648,6 +2145,9 @@ onMounted(loadAccounts)
 }
 .btn-secondary {
   @apply bg-gray-700 hover:bg-gray-600 text-gray-200;
+}
+.btn-danger {
+  @apply bg-red-600 hover:bg-red-700 text-white;
 }
 .btn-ghost {
   @apply bg-transparent hover:bg-gray-700 text-gray-400 hover:text-white;

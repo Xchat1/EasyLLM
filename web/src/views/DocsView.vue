@@ -197,11 +197,11 @@ least_used   — 选择请求次数最少的账号</pre>
   easyllm:
     build: .
     ports:
-      - "8021:8021"
+      - "8022:8022"
     volumes:
       - ./data:/app/data
     environment:
-      - SERVER_PORT=8021
+      - SERVER_PORT=8022
       - DB_TYPE=sqlite
     restart: unless-stopped</pre>
           <button @click="copyCurl('docker')" class="doc-code-copy">复制</button>
@@ -233,7 +233,7 @@ import { ref, inject, onMounted } from 'vue'
 import { settingsAPI } from '@/api'
 
 const notify = inject('notify')
-const port = ref(8021)
+const port = ref(8022)
 
 onMounted(async () => {
   try {
@@ -308,11 +308,11 @@ print(response.output_text)`,
   easyllm:
     build: .
     ports:
-      - "8021:8021"
+      - "8022:8022"
     volumes:
       - ./data:/app/data
     environment:
-      - SERVER_PORT=8021
+      - SERVER_PORT=8022
       - DB_TYPE=sqlite
     restart: unless-stopped`,
 }

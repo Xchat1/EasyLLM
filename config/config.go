@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"os"
 	"strconv"
@@ -62,9 +64,9 @@ func Load() *Config {
 	once.Do(func() {
 		instance = &Config{
 			Server: ServerConfig{
-				Port:    getEnvInt("SERVER_PORT", 8021),
+				Port:    getEnvInt("SERVER_PORT", 8022),
 				Host:    getEnv("SERVER_HOST", "0.0.0.0"),
-				APIPort: getEnvInt("SERVER_PORT", 8021), // same port; APIPort is legacy, kept for struct compat
+				APIPort: getEnvInt("SERVER_PORT", 8022), // same port; APIPort is legacy, kept for struct compat
 			},
 			Database: DatabaseConfig{
 				Type:       getEnv("DB_TYPE", "sqlite"),
@@ -80,7 +82,7 @@ func Load() *Config {
 			},
 			App: AppConfig{
 				DataDir:         getEnv("DATA_DIR", "./data"),
-				SecretKey:       getEnv("SECRET_KEY", "easyllm-secret-key-change-in-production"),
+				SecretKey:       getEnv("SECRET_KEY", ""),
 				Debug:           getEnvBool("DEBUG", false),
 				DefaultPassword: getEnv("DEFAULT_PASSWORD", ""),
 			},
@@ -93,10 +95,18 @@ func Load() *Config {
 			},
 		}
 	})
-	if instance.App.SecretKey == "easyllm-secret-key-change-in-production" {
-		log.Println("[WARNING] Using default SECRET_KEY — set SECRET_KEY env var for production use")
+	if instance.App.SecretKey == "" {
+		instance.App.SecretKey = generateRandomSecretKey()
+		log.Println("[WARNING] No SECRET_KEY set — generated a random one for this session. Set SECRET_KEY env var for persistent sessions.")
 	}
 	return instance
+}
+
+// generateRandomSecretKey generates a 32-byte random hex string.
+func generateRandomSecretKey() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func Get() *Config {

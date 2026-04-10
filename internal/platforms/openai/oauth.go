@@ -20,7 +20,6 @@ const (
 	tokenURL           = "https://auth.openai.com/oauth/token"
 	defaultRedirectURI = "http://localhost:1455/auth/callback"
 	defaultScopes      = "openid profile email offline_access"
-	refreshScopes      = "openid profile email"
 )
 
 // TokenResponse is the OpenAI OAuth token response
@@ -34,14 +33,14 @@ type TokenResponse struct {
 
 // IDTokenClaims holds parsed JWT claims from id_token
 type IDTokenClaims struct {
-	Email     *string                `json:"email"`
-	OpenAIAuth *OpenAIAuthClaims     `json:"https://api.openai.com/auth"`
+	Email      *string           `json:"email"`
+	OpenAIAuth *OpenAIAuthClaims `json:"https://api.openai.com/auth"`
 }
 
 type OpenAIAuthClaims struct {
-	ChatGPTAccountID *string      `json:"chatgpt_account_id"`
-	ChatGPTUserID    *string      `json:"chatgpt_user_id"`
-	Organizations    []OrgInfo    `json:"organizations"`
+	ChatGPTAccountID *string   `json:"chatgpt_account_id"`
+	ChatGPTUserID    *string   `json:"chatgpt_user_id"`
+	Organizations    []OrgInfo `json:"organizations"`
 }
 
 type OrgInfo struct {
@@ -98,7 +97,6 @@ func RefreshToken(refreshToken string) (*TokenResponse, error) {
 	params.Set("grant_type", "refresh_token")
 	params.Set("refresh_token", refreshToken)
 	params.Set("client_id", clientID)
-	params.Set("scope", refreshScopes)
 
 	client := createHTTPClient()
 	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(params.Encode()))

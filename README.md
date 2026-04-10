@@ -49,7 +49,7 @@ CGO_ENABLED=1 go build -o easyllm .
 ./easyllm
 ```
 
-访问 http://localhost:8021
+访问 http://localhost:8022
 
 ### 方式二：Docker 部署
 
@@ -59,7 +59,7 @@ cd EasyLLM
 docker compose up -d
 ```
 
-访问 http://localhost:8021
+访问 http://localhost:8022
 
 ### 方式三：一键启动脚本（推荐）
 
@@ -91,13 +91,17 @@ scripts\start.bat --build
 scripts\start.bat --prod
 ```
 
+**若提示「端口被 ghost socket 占用」**（常见于 Mac 上 LVSecurityAgent 等代理曾占用 8022）：
+- **不重启**：执行一次 `sudo ./scripts/setup-pf-8022-redirect.sh`，将 8022 转发到 8026；然后 `SERVER_PORT=8026 ./scripts/start.sh` 启动，访问 http://localhost:8022 即可。
+- **重启 Mac**：内核会释放 ghost socket，之后直接 `./scripts/start.sh` 使用 8022。
+
 ## 配置
 
 复制 `.env.example` 为 `.env` 并按需修改：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SERVER_PORT` | `8021` | 服务端口 |
+| `SERVER_PORT` | `8022` | 服务端口 |
 | `SERVER_HOST` | `0.0.0.0` | 监听地址 |
 | `DB_TYPE` | `sqlite` | 数据库类型（sqlite / postgres） |
 | `DB_SQLITE_PATH` | `./data/easyllm.db` | SQLite 文件路径 |
@@ -117,7 +121,7 @@ scripts\start.bat --prod
 **代理池模式：** 启用多个账号的代理开关后，在 `~/.codex/config.toml` 中配置：
 
 ```toml
-chatgpt_base_url = "http://localhost:8021"
+chatgpt_base_url = "http://localhost:8022"
 ```
 
 Codex CLI 的所有请求将自动通过 EasyLLM 轮询池中的账号。
@@ -136,13 +140,13 @@ GET  /pool/status               — 代理池状态
 
 ```bash
 # 发送请求（通过代理池）
-curl http://localhost:8021/v1/responses \
+curl http://localhost:8022/v1/responses \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{"model":"gpt-5.4","input":"hello","stream":true}'
 
 # 查看代理池状态
-curl http://localhost:8021/pool/status
+curl http://localhost:8022/pool/status
 ```
 
 ### 管理 API

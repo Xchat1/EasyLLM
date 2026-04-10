@@ -266,7 +266,7 @@ const tabs = [
   { id: 'security', label: '安全' },
 ]
 
-const sysInfo = ref({ version: '-', db_type: '-', server_port: 8021, proxy_enabled: false, log_enabled: true, ip_blacklist_enabled: false })
+const sysInfo = ref({ version: '-', db_type: '-', server_port: 8022, proxy_enabled: false, log_enabled: true, ip_blacklist_enabled: false })
 
 const platformLabels = {
   openai: 'OpenAI',

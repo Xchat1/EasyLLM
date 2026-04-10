@@ -14,7 +14,7 @@ $rootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $rootDir
 
 # ── 读取端口 ──────────────────────────────────────────────────────────────────
-$port = if ($env:SERVER_PORT) { $env:SERVER_PORT } else { "8021" }
+$port = if ($env:SERVER_PORT) { $env:SERVER_PORT } else { "8022" }
 if (Test-Path ".env") {
     $line = Get-Content ".env" | Where-Object { $_ -match '^\s*SERVER_PORT\s*=' } | Select-Object -Last 1
     if ($line) { $port = ($line -split '=', 2)[1].Trim() }

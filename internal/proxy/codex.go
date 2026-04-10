@@ -1,16 +1,12 @@
 package proxy
 
 import (
-	"bytes"
 	"easyllm/internal/models"
 	openaiplatform "easyllm/internal/platforms/openai"
 	"easyllm/internal/storage"
 	"encoding/json"
-	"fmt"
-	"io"
 	"math/rand"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -250,210 +246,92 @@ func (p *CodexProxy) pickEntry() *poolEntry {
 		}
 		return least
 	default: // round_robin
-		idx := int(atomic.AddInt64(&p.currentIndex, 1)-1) % len(p.pool)
+		idx := int(atomicAddInt64(&p.currentIndex, 1) - 1) % len(p.pool)
 		return &p.pool[idx]
 	}
 }
 
-// ProxyRequest forwards a /v1/* request to the correct upstream.
-// For Codex-compatible paths it routes to chatgpt.com/backend-api/codex/*
-// and injects the chatgpt-account-id header required by the ChatGPT Codex API.
-//
-// Passthrough mode: when the incoming request carries an Authorization token
-// that matches a known managed account, the proxy forwards the request as-is
-// (no pool rotation) but still logs the request. This enables Codex CLI to
-// route through the proxy for logging while keeping its own auth.
-func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
-	// Try passthrough first: match the incoming token to a managed account
-	entry := p.matchIncomingToken(r)
-	passthrough := entry != nil
-
-	if !passthrough {
-		if !p.enabled {
-			writeError(w, http.StatusServiceUnavailable, "Proxy is disabled", "service_unavailable")
-			return
-		}
-		entry = p.pickEntry()
-		if entry == nil {
-			writeError(w, http.StatusServiceUnavailable, "No available accounts in pool", "no_available_account")
-			return
-		}
+// pickEntryExcluding returns a random pool entry not in the tried set.
+// Callers should maintain tried tokens to avoid repeating invalidated accounts.
+func (p *CodexProxy) pickEntryExcluding(tried map[string]bool) *poolEntry {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if len(p.pool) == 0 {
+		return nil
 	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Failed to read request body", "invalid_request")
-		return
-	}
-
-	if !passthrough {
-		// Normalize body for chatgpt.com Codex backend requirements.
-		body, _ = normalizeCodexBody(body)
-	}
-
-	upstreamURL := buildUpstreamURL(r.URL.Path, r.URL.RawQuery)
-
-	upstreamReq, err := http.NewRequest(r.Method, upstreamURL, bytes.NewReader(body))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to create upstream request", "internal_error")
-		return
-	}
-
-	// Copy headers; in passthrough mode keep original Authorization
-	for key, values := range r.Header {
-		lower := strings.ToLower(key)
-		if lower == "chatgpt-account-id" {
+	// Build candidate indexes.
+	cands := make([]int, 0, len(p.pool))
+	for i := range p.pool {
+		tok := p.pool[i].accessToken
+		if tok == "" {
 			continue
 		}
-		if lower == "authorization" && !passthrough {
+		if tried != nil && tried[tok] {
 			continue
 		}
-		for _, v := range values {
-			upstreamReq.Header.Add(key, v)
-		}
+		cands = append(cands, i)
 	}
-	if !passthrough {
-		upstreamReq.Header.Set("Authorization", "Bearer "+entry.accessToken)
+	if len(cands) == 0 {
+		return nil
 	}
-
-	// chatgpt-account-id is required by the ChatGPT Codex backend API
-	if entry.chatgptAccountID != "" {
-		upstreamReq.Header.Set("chatgpt-account-id", entry.chatgptAccountID)
-	}
-
-	// Headers required by chatgpt.com/backend-api/codex to identify the client
-	// as a legitimate Codex CLI agent and bypass Cloudflare bot detection.
-	if upstreamReq.Header.Get("User-Agent") == "" {
-		upstreamReq.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
-	}
-	if upstreamReq.Header.Get("OpenAI-Beta") == "" {
-		upstreamReq.Header.Set("OpenAI-Beta", "responses=experimental")
-	}
-	if upstreamReq.Header.Get("originator") == "" {
-		upstreamReq.Header.Set("originator", "codex_cli_rs")
-	}
-
-	shouldLog := r.Method == http.MethodPost
-
-	startTime := time.Now()
-	resp, err := p.httpClient.Do(upstreamReq)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("Upstream request failed: %v", err), "upstream_error")
-		return
-	}
-	defer resp.Body.Close()
-
-	// Capture rate-limit headers and persist to the OpenAI account
-	p.saveRateLimits(entry, resp)
-
-	// Persist stats for codex-source accounts
-	if entry.source == "codex" && p.codexDB != nil {
-		p.codexDB.IncrementRequestCount(entry.id)
-	}
-	if entry.requests != nil {
-		atomic.AddInt64(entry.requests, 1)
-	}
-
-	// For /models responses in passthrough mode, disable WebSocket support
-	// so Codex CLI falls back to HTTP (which respects chatgpt_base_url).
-	isModelsReq := r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/models")
-	if isModelsReq && passthrough {
-		respBody, readErr := io.ReadAll(resp.Body)
-		if readErr == nil {
-			respBody = disableWebSocketInModels(respBody)
-		}
-		copyResponseHeaders(w, resp)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(respBody)))
-		w.WriteHeader(resp.StatusCode)
-		w.Write(respBody) //nolint:errcheck
-		return
-	}
-
-	copyResponseHeaders(w, resp)
-	w.WriteHeader(resp.StatusCode)
-
-	// Stream the response body; capture the last SSE "data:" line for token usage.
-	flusher, canFlush := w.(http.Flusher)
-	buf := make([]byte, 8192)
-	var lastDataLine string
-	var streamBuf strings.Builder
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			w.Write(buf[:n]) //nolint:errcheck
-			if canFlush {
-				flusher.Flush()
-			}
-			if shouldLog {
-				streamBuf.Write(buf[:n])
-				remaining := streamBuf.String()
-				for {
-					idx := strings.Index(remaining, "\n")
-					if idx < 0 {
-						break
-					}
-					line := strings.TrimSpace(remaining[:idx])
-					remaining = remaining[idx+1:]
-					if strings.HasPrefix(line, "data: ") {
-						lastDataLine = line[6:]
-					}
-				}
-				streamBuf.Reset()
-				if remaining != "" {
-					streamBuf.WriteString(remaining)
-				}
-			}
-		}
-		if readErr != nil {
-			break
-		}
-	}
-
-	duration := time.Since(startTime).Milliseconds()
-
-	if shouldLog {
-		p.saveLog(entry, body, r.URL.Path, lastDataLine, resp.StatusCode, duration, r.UserAgent())
-	}
+	idx := cands[rand.Intn(len(cands))]
+	return &p.pool[idx]
 }
 
-func copyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
-	for key, values := range resp.Header {
-		lower := strings.ToLower(key)
-		if lower == "transfer-encoding" || lower == "connection" || lower == "keep-alive" || lower == "content-length" {
-			continue
-		}
-		for _, v := range values {
-			w.Header().Add(key, v)
+// IsKnownToken checks if a Bearer token belongs to any managed account.
+func (p *CodexProxy) IsKnownToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	p.mu.RLock()
+	_, found := p.tokenIndex[token]
+	p.mu.RUnlock()
+	if found {
+		return true
+	}
+
+	if p.openaiDB != nil {
+		account, err := p.openaiDB.GetByAccessToken(token)
+		if err == nil && account != nil {
+			return true
 		}
 	}
+	return false
 }
 
-// disableWebSocketInModels rewrites the models JSON to prevent clients
-// from using WebSocket connections, forcing them to use HTTP POST instead.
-func disableWebSocketInModels(body []byte) []byte {
-	var data map[string]interface{}
-	if err := json.Unmarshal(body, &data); err != nil {
-		return body
-	}
-	models, ok := data["models"].([]interface{})
-	if !ok {
-		return body
-	}
-	for _, m := range models {
-		model, ok := m.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		model["prefer_websockets"] = false
-		model["supports_websockets"] = false
-	}
-	out, err := json.Marshal(data)
-	if err != nil {
-		return body
-	}
-	return out
+func (p *CodexProxy) IsEnabled() bool { return p.enabled }
+func (p *CodexProxy) SetEnabled(v bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.enabled = v
 }
 
+func (p *CodexProxy) GetStrategy() string { return p.strategy }
+func (p *CodexProxy) SetStrategy(s string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.strategy = s
+}
+
+func (p *CodexProxy) PoolSize() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.pool)
+}
+
+func (p *CodexProxy) TotalRequests() int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	var total int64
+	for _, e := range p.pool {
+		if e.requests != nil {
+			total += atomic.LoadInt64(e.requests)
+		}
+	}
+	return total
+}
+
+// saveRateLimits captures rate-limit headers from upstream and persists them to the OpenAI account.
 func (p *CodexProxy) saveRateLimits(entry *poolEntry, resp *http.Response) {
 	if entry.source != "openai" || p.openaiDB == nil {
 		return
@@ -483,6 +361,7 @@ func (p *CodexProxy) saveRateLimits(entry *poolEntry, resp *http.Response) {
 	_ = p.openaiDB.Save(acc)
 }
 
+// saveLog persists a request log entry.
 func (p *CodexProxy) saveLog(entry *poolEntry, requestBody []byte, requestPath, lastSSEData string, statusCode int, durationMs int64, userAgent string) {
 	if p.codexDB == nil {
 		return
@@ -514,228 +393,7 @@ func (p *CodexProxy) saveLog(entry *poolEntry, requestBody []byte, requestPath, 
 	})
 }
 
-func parsePlatform(ua string) string {
-	ua = strings.ToLower(ua)
-	switch {
-	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad"):
-		return "iOS"
-	case strings.Contains(ua, "android"):
-		return "Android"
-	case strings.Contains(ua, "macintosh") || strings.Contains(ua, "mac os") || strings.Contains(ua, "darwin"):
-		return "macOS"
-	case strings.Contains(ua, "windows"):
-		return "Windows"
-	case strings.Contains(ua, "linux"):
-		return "Linux"
-	case strings.Contains(ua, "codex_cli"):
-		return "Codex CLI"
-	case ua == "":
-		return ""
-	default:
-		return "Other"
-	}
-}
-
-func extractUsageFromSSE(data string) (inputTokens, outputTokens int64) {
-	var obj map[string]interface{}
-	if err := json.Unmarshal([]byte(data), &obj); err != nil {
-		return 0, 0
-	}
-	// Look for usage in response.completed events or top-level response object
-	resp, _ := obj["response"].(map[string]interface{})
-	if resp == nil {
-		resp = obj
-	}
-	usage, _ := resp["usage"].(map[string]interface{})
-	if usage == nil {
-		return 0, 0
-	}
-	if v, ok := usage["input_tokens"].(float64); ok {
-		inputTokens = int64(v)
-	}
-	if v, ok := usage["output_tokens"].(float64); ok {
-		outputTokens = int64(v)
-	}
-	return
-}
-
-// buildUpstreamURL maps /v1/* to https://chatgpt.com/backend-api/codex/*
-// which is the real Codex backend. This matches the upstream target used by
-// the original augment-token-mng Tauri app.
-// client_version is always appended because the chatgpt.com Codex API requires it.
-func buildUpstreamURL(path, query string) string {
-	const base = "https://chatgpt.com"
-	const clientVersion = "0.98.0"
-	mapped := mapCodexPath(path)
-	if strings.Contains(query, "client_version=") {
-		return base + mapped + "?" + query
-	}
-	var qs string
-	if query != "" {
-		qs = query + "&client_version=" + clientVersion
-	} else {
-		qs = "client_version=" + clientVersion
-	}
-	return base + mapped + "?" + qs
-}
-
-// mapCodexPath converts /v1/<tail> → /backend-api/codex/<tail>
-// and passes through any path already starting with /backend-api/codex.
-func mapCodexPath(path string) string {
-	if path == "/v1" {
-		return "/backend-api/codex"
-	}
-	if tail := strings.TrimPrefix(path, "/v1/"); tail != path {
-		return "/backend-api/codex/" + tail
-	}
-	if strings.HasPrefix(path, "/backend-api/codex") {
-		return path
-	}
-	return path
-}
-
-// knownUnsupportedParams are stripped before forwarding to avoid upstream errors.
-var knownUnsupportedParams = map[string]bool{
-	"max_output_tokens":      true,
-	"prompt_cache_retention": true,
-	"safety_identifier":      true,
-}
-
-// normalizeCodexBody normalises a Responses-API request body for the
-// chatgpt.com/backend-api/codex backend which has a few quirks:
-//   - input must be a JSON array of message objects, not a plain string
-//   - instructions field must be present
-//   - stream must be true (the backend only supports streaming)
-//
-// Returns the normalised body and whether streaming was force-enabled.
-func normalizeCodexBody(body []byte) ([]byte, bool) {
-	var data map[string]interface{}
-	if err := json.Unmarshal(body, &data); err != nil {
-		return body, false
-	}
-
-	modified := false
-	streamForced := false
-
-	// Convert string input to message-list format
-	if inputRaw, ok := data["input"]; ok {
-		if text, ok := inputRaw.(string); ok {
-			data["input"] = []interface{}{
-				map[string]interface{}{
-					"role": "user",
-					"content": []interface{}{
-						map[string]interface{}{"type": "input_text", "text": text},
-					},
-				},
-			}
-			modified = true
-		}
-	}
-
-	// Add default instructions if missing
-	if _, ok := data["instructions"]; !ok {
-		data["instructions"] = "You are a helpful assistant."
-		modified = true
-	}
-
-	// chatgpt.com Codex backend only supports streaming responses
-	if v, ok := data["stream"]; !ok || v == false || v == nil {
-		data["stream"] = true
-		streamForced = true
-		modified = true
-	}
-
-	// chatgpt.com Codex backend requires store = false
-	if v, ok := data["store"]; !ok || v == true {
-		data["store"] = false
-		modified = true
-	}
-
-	// Strip unsupported params
-	for param := range knownUnsupportedParams {
-		if _, ok := data[param]; ok {
-			delete(data, param)
-			modified = true
-		}
-	}
-
-	if !modified {
-		return body, false
-	}
-	cleaned, err := json.Marshal(data)
-	if err != nil {
-		return body, false
-	}
-	return cleaned, streamForced
-}
-
-// cleanRequestBody is kept for compatibility; actual normalisation happens in normalizeCodexBody.
-func cleanRequestBody(body []byte) []byte {
-	cleaned, _ := normalizeCodexBody(body)
-	return cleaned
-}
-
-func writeError(w http.ResponseWriter, status int, message, code string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]interface{}{
-			"message": message,
-			"type":    code,
-			"code":    fmt.Sprintf("%d", status),
-		},
-	})
-}
-
-// IsKnownToken checks if a Bearer token belongs to any managed account.
-func (p *CodexProxy) IsKnownToken(token string) bool {
-	if token == "" {
-		return false
-	}
-	p.mu.RLock()
-	_, found := p.tokenIndex[token]
-	p.mu.RUnlock()
-	if found {
-		return true
-	}
-
-	if p.openaiDB != nil {
-		account, err := p.openaiDB.GetByAccessToken(token)
-		if err == nil && account != nil {
-			return true
-		}
-	}
-	return false
-}
-
-func (p *CodexProxy) IsEnabled() bool  { return p.enabled }
-func (p *CodexProxy) SetEnabled(v bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.enabled = v
-}
-
-func (p *CodexProxy) GetStrategy() string { return p.strategy }
-func (p *CodexProxy) SetStrategy(s string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.strategy = s
-}
-
-func (p *CodexProxy) PoolSize() int {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return len(p.pool)
-}
-
-func (p *CodexProxy) TotalRequests() int64 {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	var total int64
-	for _, e := range p.pool {
-		if e.requests != nil {
-			total += atomic.LoadInt64(e.requests)
-		}
-	}
-	return total
+// atomicAddInt64 is a helper that wraps atomic.AddInt64 for cleaner call sites.
+func atomicAddInt64(addr *int64, delta int64) int64 {
+	return atomic.AddInt64(addr, delta)
 }

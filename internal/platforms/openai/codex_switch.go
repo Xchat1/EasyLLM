@@ -48,7 +48,7 @@ func SwitchCodexOAuthAccount(accessToken, refreshToken, idToken string, accountI
 	if _, err := os.Stat(configFile); err == nil {
 		cleanConfigTOMLAPIFields(configFile)
 	}
-	injectChatGPTBaseURL(configFile, "http://localhost:8021")
+	injectChatGPTBaseURL(configFile, "http://localhost:8022")
 
 	return nil
 }

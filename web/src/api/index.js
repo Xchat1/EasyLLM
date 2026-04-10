@@ -77,6 +77,8 @@ export const augmentAPI = {
 // OpenAI API
 export const openaiAPI = {
   list: () => api.get('/openai/accounts'),
+  exportJSON: () => api.get('/openai/export'),
+  refreshAll: () => api.post('/openai/accounts/refresh-all'),
   add: (data) => api.post('/openai/accounts', data),
   update: (id, data) => api.put(`/openai/accounts/${id}`, data),
   delete: (id) => api.delete(`/openai/accounts/${id}`),

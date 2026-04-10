@@ -9,7 +9,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build Go backend
-FROM golang:1.22-alpine AS backend-builder
+FROM golang:1.25-alpine AS backend-builder
 WORKDIR /app
 
 # Install build dependencies for sqlite
@@ -25,7 +25,7 @@ COPY --from=frontend-builder /app/web/dist ./web/dist
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o easyllm .
 
 # Stage 3: Final runtime image
-FROM alpine:3.19
+FROM alpine:3.21
 WORKDIR /app
 
 # Install runtime dependencies
