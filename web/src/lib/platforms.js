@@ -1,0 +1,167 @@
+export const cockpitPlatforms = [
+  {
+    id: 'antigravity',
+    label: 'Antigravity',
+    icon: '🚀',
+    route: '/antigravity',
+    description: '多账号、实例与唤醒任务的核心工作台。',
+    category: 'workspace',
+    managementMode: 'generic',
+    heroClass: 'from-orange-500/20 via-amber-400/10 to-gray-950',
+    supports: { instances: true, wakeup: true, quota: true },
+  },
+  {
+    id: 'codex',
+    label: 'Codex',
+    icon: '🤖',
+    route: '/codex',
+    description: '沿用 EasyLLM 现有 OpenAI / Codex 代理池和账号切换能力。',
+    category: 'workspace',
+    managementMode: 'legacy',
+    heroClass: 'from-sky-500/20 via-blue-400/10 to-gray-950',
+    supports: { instances: true, wakeup: true, quota: true },
+  },
+  {
+    id: 'github-copilot',
+    label: 'GitHub Copilot',
+    icon: '🐙',
+    route: '/github-copilot',
+    description: '统一管理 Copilot 账号、实例和额度备注。',
+    category: 'ide',
+    managementMode: 'generic',
+    heroClass: 'from-violet-500/20 via-indigo-400/10 to-gray-950',
+    supports: { instances: true, wakeup: false, quota: true },
+  },
+  {
+    id: 'windsurf',
+    label: 'Windsurf',
+    icon: '🌊',
+    route: '/windsurf',
+    description: '管理 Windsurf 多账号与多实例配置。',
+    category: 'ide',
+    managementMode: 'generic',
+    heroClass: 'from-cyan-500/20 via-sky-400/10 to-gray-950',
+    supports: { instances: true, wakeup: false, quota: true },
+  },
+  {
+    id: 'kiro',
+    label: 'Kiro',
+    icon: '🪐',
+    route: '/kiro',
+    description: '对齐 cockpit-tools 的账号、路径与实例编排。',
+    category: 'ide',
+    managementMode: 'generic',
+    heroClass: 'from-fuchsia-500/20 via-pink-400/10 to-gray-950',
+    supports: { instances: true, wakeup: false, quota: true },
+  },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    icon: '💻',
+    route: '/cursor',
+    description: '兼容原有 Cursor 数据并切到统一驾驶舱视图。',
+    category: 'ide',
+    managementMode: 'generic',
+    heroClass: 'from-emerald-500/20 via-teal-400/10 to-gray-950',
+    supports: { instances: true, wakeup: false, quota: true },
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini CLI',
+    icon: '✨',
+    route: '/gemini',
+    description: '管理 Gemini CLI 账号、路径和刷新策略。',
+    category: 'cli',
+    managementMode: 'generic',
+    heroClass: 'from-yellow-500/20 via-lime-300/10 to-gray-950',
+    supports: { instances: false, wakeup: false, quota: true },
+  },
+  {
+    id: 'codebuddy',
+    label: 'CodeBuddy',
+    icon: '🧩',
+    route: '/codebuddy',
+    description: '统一账号台账、实例和配额备注。',
+    category: 'ide',
+    managementMode: 'generic',
+    heroClass: 'from-rose-500/20 via-red-400/10 to-gray-950',
+    supports: { instances: true, wakeup: false, quota: true },
+  },
+  {
+    id: 'codebuddy-cn',
+    label: 'CodeBuddy CN',
+    icon: '🀄',
+    route: '/codebuddy-cn',
+    description: '面向国内客户端的账号与实例管理。',
+    category: 'ide',
+    managementMode: 'generic',
+    heroClass: 'from-red-500/20 via-orange-400/10 to-gray-950',
+    supports: { instances: true, wakeup: false, quota: true },
+  },
+  {
+    id: 'qoder',
+    label: 'Qoder',
+    icon: '📐',
+    route: '/qoder',
+    description: '支持额度记录和实例编排的统一面板。',
+    category: 'ide',
+    managementMode: 'generic',
+    heroClass: 'from-indigo-500/20 via-violet-400/10 to-gray-950',
+    supports: { instances: true, wakeup: false, quota: true },
+  },
+  {
+    id: 'trae',
+    label: 'Trae',
+    icon: '🛤️',
+    route: '/trae',
+    description: '围绕额度、实例和启动路径的统一管理视图。',
+    category: 'ide',
+    managementMode: 'generic',
+    heroClass: 'from-blue-500/20 via-cyan-400/10 to-gray-950',
+    supports: { instances: true, wakeup: false, quota: true },
+  },
+  {
+    id: 'zed',
+    label: 'Zed',
+    icon: '⚡',
+    route: '/zed',
+    description: '账号、额度与启动路径配置统一收口。',
+    category: 'editor',
+    managementMode: 'generic',
+    heroClass: 'from-slate-200/15 via-zinc-200/5 to-gray-950',
+    supports: { instances: false, wakeup: false, quota: true },
+  },
+  {
+    id: 'workbuddy',
+    label: 'Workbuddy',
+    icon: '🧠',
+    route: '/workbuddy',
+    description: '预留与 cockpit-tools 同层级的平台工作台。',
+    category: 'ide',
+    managementMode: 'generic',
+    heroClass: 'from-green-500/20 via-emerald-400/10 to-gray-950',
+    supports: { instances: true, wakeup: false, quota: true },
+  },
+]
+
+export const cockpitPlatformMap = Object.fromEntries(cockpitPlatforms.map((item) => [item.id, item]))
+
+export const cockpitSystemRoutes = [
+  { path: '/dashboard', icon: '📊', label: '总览' },
+  { path: '/instances', icon: '🪟', label: '实例' },
+  { path: '/wakeup', icon: '⏰', label: '唤醒' },
+  { path: '/docs', icon: '📖', label: '文档' },
+  { path: '/settings', icon: '⚙️', label: '设置' },
+]
+
+export function getPlatformMeta(id) {
+  return cockpitPlatformMap[id] || null
+}
+
+export function getWakeupPlatforms() {
+  return cockpitPlatforms.filter((item) => item.supports.wakeup)
+}
+
+export function getInstancePlatforms() {
+  return cockpitPlatforms.filter((item) => item.supports.instances)
+}

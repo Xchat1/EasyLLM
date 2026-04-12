@@ -1,60 +1,119 @@
 <template>
-  <div class="p-6 max-w-4xl">
-    <h1 class="text-2xl font-bold text-white mb-6">📖 使用文档</h1>
+  <div class="p-6 max-w-5xl">
+    <!-- Header -->
+    <div class="mb-8">
+      <h1 class="text-3xl font-bold text-white mb-2">📖 使用文档</h1>
+      <p class="text-gray-400">快速上手 EasyLLM，管理你的 AI 开发工具与账号</p>
+    </div>
 
     <!-- Quick nav -->
-    <div class="flex flex-wrap gap-2 mb-6">
-      <button v-for="section in sections" :key="section.id"
-        @click="scrollTo(section.id)"
-        class="btn btn-secondary btn-sm">
-        {{ section.icon }} {{ section.label }}
-      </button>
+    <div class="card p-4 mb-8">
+      <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">快速导航</div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9 gap-2">
+        <button v-for="section in sections" :key="section.id"
+          @click="scrollTo(section.id)"
+          class="flex items-center gap-2 px-3 py-2 bg-gray-800/50 hover:bg-gray-700/50 rounded-lg text-sm text-gray-300 hover:text-white transition-all duration-200 border border-gray-700/50 hover:border-blue-500/50">
+          <span class="text-lg">{{ section.icon }}</span>
+          <span class="truncate">{{ section.label }}</span>
+        </button>
+      </div>
     </div>
 
     <div class="space-y-6">
 
+      <!-- Overview -->
+      <div id="sec-overview" class="card p-5">
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-2xl">🎯</span> 产品简介
+        </h2>
+        <div class="grid md:grid-cols-3 gap-4 mb-4">
+          <div class="bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-lg p-4">
+            <div class="text-2xl mb-2">🤖</div>
+            <div class="text-sm font-semibold text-white mb-1">多平台账号管理</div>
+            <div class="text-xs text-gray-400">OpenAI / Codex、Cursor、Antigravity 统一Web界面管理</div>
+          </div>
+          <div class="bg-gradient-to-br from-green-500/10 to-teal-500/10 border border-green-500/20 rounded-lg p-4">
+            <div class="text-2xl mb-2">⚡</div>
+            <div class="text-sm font-semibold text-white mb-1">智能代理池</div>
+            <div class="text-xs text-gray-400">多账号自动负载均衡，支持轮询/随机/最少使用策略</div>
+          </div>
+          <div class="bg-gradient-to-br from-orange-500/10 to-red-500/10 border border-orange-500/20 rounded-lg p-4">
+            <div class="text-2xl mb-2">🔒</div>
+            <div class="text-sm font-semibold text-white mb-1">安全可靠</div>
+            <div class="text-xs text-gray-400">API Key 鉴权、IP 黑名单、请求日志监控</div>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-2 text-xs">
+          <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">Go 1.25</span>
+          <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">Vue 3</span>
+          <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">SQLite / PostgreSQL</span>
+          <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">Docker 支持</span>
+        </div>
+      </div>
+
       <!-- Codex CLI -->
       <div id="sec-codex" class="card p-5">
-        <h2 class="text-lg font-semibold text-white mb-1">Codex CLI 接入</h2>
-        <p class="text-sm text-gray-400 mb-4">将 EasyLLM 作为 Codex CLI 的代理，实现多账号轮询、请求日志记录。</p>
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-2xl">🖥️</span> Codex CLI 接入
+        </h2>
+        <p class="text-sm text-gray-400 mb-5">将 EasyLLM 作为 Codex CLI 的代理，实现多账号轮询、请求日志记录。</p>
 
-        <h3 class="text-sm font-semibold text-blue-400 mb-2">方式一：OAuth 账号（推荐）</h3>
-        <p class="text-xs text-gray-400 mb-2">在 OpenAI / Codex 页面添加 OAuth 账号后，点击"切换"按钮即可自动写入 <code class="code">~/.codex/auth.json</code>。EasyLLM 会自动注入 <code class="code">chatgpt_base_url</code>，让 Codex CLI 的请求经过本地代理。</p>
-        <div class="doc-code mb-4">
-          <div class="doc-code-header">自动配置的 ~/.codex/config.toml</div>
-          <pre>chatgpt_base_url = "http://localhost:{{ port }}"</pre>
+        <!-- Method 1 -->
+        <div class="mb-5 p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="px-2 py-0.5 bg-blue-500/20 text-blue-400 text-xs font-semibold rounded">推荐</span>
+            <h3 class="text-sm font-semibold text-white">方式一：OAuth 账号</h3>
+          </div>
+          <p class="text-xs text-gray-400 mb-3">在 OpenAI / Codex 页面添加 OAuth 账号后，点击"切换"按钮即可自动写入配置文件。</p>
+          <div class="doc-code">
+            <div class="doc-code-header">自动配置的 ~/.codex/config.toml</div>
+            <pre>chatgpt_base_url = "http://localhost:{{ port }}"</pre>
+            <button @click="copyCurl('codex-oauth')" class="doc-code-copy">复制</button>
+          </div>
         </div>
 
-        <h3 class="text-sm font-semibold text-blue-400 mb-2">方式二：API Key 账号</h3>
-        <p class="text-xs text-gray-400 mb-2">在 OpenAI / Codex 页面的"API 配置"标签添加第三方 Provider（如 OpenRouter、DeepSeek 等），点击"切换"后自动写入 <code class="code">~/.codex/config.toml</code>。</p>
-        <div class="doc-code mb-4">
-          <div class="doc-code-header">示例：配置 OpenRouter</div>
-          <pre>model_provider = "openrouter"
+        <!-- Method 2 -->
+        <div class="mb-5">
+          <h3 class="text-sm font-semibold text-white mb-2">方式二：API Key 账号</h3>
+          <p class="text-xs text-gray-400 mb-3">在 OpenAI / Codex 页面的"API 配置"标签添加第三方 Provider（如 OpenRouter、DeepSeek 等）。</p>
+          <div class="doc-code">
+            <div class="doc-code-header">示例：配置 OpenRouter</div>
+            <pre>model_provider = "openrouter"
 model = "deepseek/deepseek-chat"
 
 [model_providers.openrouter]
 name = "openrouter"
 base_url = "https://openrouter.ai/api/v1"
 wire_api = "chat"</pre>
+            <button @click="copyCurl('openrouter')" class="doc-code-copy">复制</button>
+          </div>
         </div>
 
-        <h3 class="text-sm font-semibold text-blue-400 mb-2">方式三：代理池模式</h3>
-        <p class="text-xs text-gray-400 mb-2">启用多个 OAuth 账号的"代理开关"，然后在 Codex CLI 中将 <code class="code">chatgpt_base_url</code> 指向 EasyLLM，请求将自动轮询池中账号。</p>
-        <div class="doc-code">
-          <div class="doc-code-header">~/.codex/config.toml</div>
-          <pre>chatgpt_base_url = "http://localhost:{{ port }}"</pre>
+        <!-- Method 3 -->
+        <div>
+          <h3 class="text-sm font-semibold text-white mb-2">方式三：代理池模式</h3>
+          <p class="text-xs text-gray-400 mb-3">启用多个 OAuth 账号的"代理开关"，请求将自动轮询池中账号。</p>
+          <div class="doc-code">
+            <div class="doc-code-header">~/.codex/config.toml</div>
+            <pre>chatgpt_base_url = "http://localhost:{{ port }}"</pre>
+            <button @click="copyCurl('codex-pool')" class="doc-code-copy">复制</button>
+          </div>
         </div>
       </div>
 
-      <!-- curl -->
+      <!-- cURL -->
       <div id="sec-curl" class="card p-5">
-        <h2 class="text-lg font-semibold text-white mb-1">cURL 调用示例</h2>
-        <p class="text-sm text-gray-400 mb-4">通过代理池的 OpenAI 兼容接口发送请求。</p>
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-2xl">📡</span> cURL 调用示例
+        </h2>
+        <p class="text-sm text-gray-400 mb-5">通过代理池的 OpenAI 兼容接口发送请求。</p>
 
-        <h3 class="text-sm font-semibold text-blue-400 mb-2">Chat Completions（流式）</h3>
-        <div class="doc-code mb-4">
-          <div class="doc-code-header">bash</div>
-          <pre>curl http://localhost:{{ port }}/v1/responses \
+        <div class="space-y-4">
+          <div>
+            <h3 class="text-sm font-semibold text-white mb-2">Chat Completions（流式）</h3>
+            <div class="doc-code">
+              <div class="doc-code-header">bash</div>
+              <pre>curl http://localhost:{{ port }}/v1/responses \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
@@ -62,28 +121,36 @@ wire_api = "chat"</pre>
     "input": "写一个快速排序算法",
     "stream": true
   }'</pre>
-          <button @click="copyCurl('responses')" class="doc-code-copy">复制</button>
-        </div>
+              <button @click="copyCurl('responses')" class="doc-code-copy">复制</button>
+            </div>
+          </div>
 
-        <h3 class="text-sm font-semibold text-blue-400 mb-2">获取可用模型</h3>
-        <div class="doc-code mb-4">
-          <div class="doc-code-header">bash</div>
-          <pre>curl http://localhost:{{ port }}/v1/models \
+          <div>
+            <h3 class="text-sm font-semibold text-white mb-2">获取可用模型列表</h3>
+            <div class="doc-code">
+              <div class="doc-code-header">bash</div>
+              <pre>curl http://localhost:{{ port }}/v1/models \
   -H "Authorization: Bearer YOUR_API_KEY"</pre>
-          <button @click="copyCurl('models')" class="doc-code-copy">复制</button>
-        </div>
+              <button @click="copyCurl('models')" class="doc-code-copy">复制</button>
+            </div>
+          </div>
 
-        <h3 class="text-sm font-semibold text-blue-400 mb-2">查看代理池状态</h3>
-        <div class="doc-code">
-          <div class="doc-code-header">bash</div>
-          <pre>curl http://localhost:{{ port }}/pool/status</pre>
-          <button @click="copyCurl('pool')" class="doc-code-copy">复制</button>
+          <div>
+            <h3 class="text-sm font-semibold text-white mb-2">查看代理池状态</h3>
+            <div class="doc-code">
+              <div class="doc-code-header">bash</div>
+              <pre>curl http://localhost:{{ port }}/pool/status</pre>
+              <button @click="copyCurl('pool')" class="doc-code-copy">复制</button>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Python -->
       <div id="sec-python" class="card p-5">
-        <h2 class="text-lg font-semibold text-white mb-1">Python 调用</h2>
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-2xl">🐍</span> Python 调用
+        </h2>
         <p class="text-sm text-gray-400 mb-4">使用 OpenAI Python SDK 通过 EasyLLM 代理池发送请求。</p>
 
         <div class="doc-code">
@@ -105,38 +172,41 @@ print(response.output_text)</pre>
         </div>
       </div>
 
-      <!-- Augment Import -->
-      <div id="sec-augment" class="card p-5">
-        <h2 class="text-lg font-semibold text-white mb-1">Augment Session 导入</h2>
-        <p class="text-sm text-gray-400 mb-4">通过 API 批量导入 Augment 的 auth session。</p>
+      <!-- Quota -->
+      <div id="sec-quota" class="card p-5">
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-2xl">📊</span> 配额查询
+        </h2>
+        <p class="text-sm text-gray-400 mb-4">查看 5 小时和 7 天配额使用情况（与 cockpit-tools 逻辑一致）。</p>
 
-        <h3 class="text-sm font-semibold text-blue-400 mb-2">导入单个 Session</h3>
-        <div class="doc-code mb-4">
-          <div class="doc-code-header">bash</div>
-          <pre>curl -X POST http://localhost:{{ port }}/api/import/session \
-  -H "Content-Type: application/json" \
-  -d '{"session": "YOUR_AUTH_SESSION_STRING"}'</pre>
-          <button @click="copyCurl('augment-single')" class="doc-code-copy">复制</button>
+        <div class="grid md:grid-cols-2 gap-4 mb-4">
+          <div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">
+            <div class="text-sm font-semibold text-white mb-2">⏱️ 5 小时配额</div>
+            <div class="text-xs text-gray-400">短期会话限制，快速重置</div>
+          </div>
+          <div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">
+            <div class="text-sm font-semibold text-white mb-2">📅 7 天配额</div>
+            <div class="text-xs text-gray-400">长期总量限制，周重置周期</div>
+          </div>
         </div>
-
-        <h3 class="text-sm font-semibold text-blue-400 mb-2">批量导入 Sessions</h3>
-        <div class="doc-code">
-          <div class="doc-code-header">bash</div>
-          <pre>curl -X POST http://localhost:{{ port }}/api/import/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"sessions": ["SESSION_1", "SESSION_2", "SESSION_3"]}'</pre>
-          <button @click="copyCurl('augment-batch')" class="doc-code-copy">复制</button>
+        <div class="text-xs text-gray-500">
+          💡 在 OpenAI 账号列表中点击"刷新配额"即可获取最新的配额数据
         </div>
       </div>
 
-      <!-- OpenAI Token Import -->
+      <!-- Import -->
       <div id="sec-import" class="card p-5">
-        <h2 class="text-lg font-semibold text-white mb-1">OpenAI 账号批量导入</h2>
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-2xl">📦</span> 批量导入
+        </h2>
         <p class="text-sm text-gray-400 mb-4">通过 refresh_token 批量导入 OpenAI OAuth 账号。</p>
 
-        <div class="doc-code mb-4">
-          <div class="doc-code-header">bash</div>
-          <pre>curl -X POST http://localhost:{{ port }}/api/v1/openai/import/refresh-tokens \
+        <div class="space-y-4">
+          <div>
+            <h3 class="text-sm font-semibold text-white mb-2">通过 refresh_token 导入</h3>
+            <div class="doc-code">
+              <div class="doc-code-header">bash</div>
+              <pre>curl -X POST http://localhost:{{ port }}/api/v1/openai/import/refresh-tokens \
   -H "Content-Type: application/json" \
   -d '{
     "refresh_tokens": [
@@ -144,41 +214,47 @@ print(response.output_text)</pre>
       "REFRESH_TOKEN_2"
     ]
   }'</pre>
-          <button @click="copyCurl('openai-import')" class="doc-code-copy">复制</button>
-        </div>
+              <button @click="copyCurl('openai-import')" class="doc-code-copy">复制</button>
+            </div>
+          </div>
 
-        <h3 class="text-sm font-semibold text-blue-400 mb-2">通过扫描目录导入</h3>
-        <p class="text-xs text-gray-400 mb-2">将 token JSON 文件放在 <code class="code">./auth/</code> 目录下，然后调用扫描接口自动导入。</p>
-        <div class="doc-code">
-          <div class="doc-code-header">bash</div>
-          <pre>curl -X POST http://localhost:{{ port }}/api/v1/openai/import/scan-dir \
+          <div>
+            <h3 class="text-sm font-semibold text-white mb-2">扫描目录导入</h3>
+            <p class="text-xs text-gray-400 mb-2">将 token JSON 文件放在 <code class="code">./auth/</code> 目录下，然后调用扫描接口自动导入。</p>
+            <div class="doc-code">
+              <div class="doc-code-header">bash</div>
+              <pre>curl -X POST http://localhost:{{ port }}/api/v1/openai/import/scan-dir \
   -H "Content-Type: application/json" \
   -d '{"dir": "./auth"}'</pre>
-          <button @click="copyCurl('openai-scan')" class="doc-code-copy">复制</button>
+              <button @click="copyCurl('openai-scan')" class="doc-code-copy">复制</button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- API Key Auth -->
+      <!-- Auth -->
       <div id="sec-auth" class="card p-5">
-        <h2 class="text-lg font-semibold text-white mb-1">代理池鉴权</h2>
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-2xl">🔒</span> 代理池鉴权
+        </h2>
         <p class="text-sm text-gray-400 mb-4">保护你的代理池端点，防止未授权访问。</p>
 
-        <div class="space-y-3 text-sm text-gray-300">
-          <div class="flex gap-2">
-            <span class="text-blue-400 font-bold shrink-0">1.</span>
-            <span>在 OpenAI / Codex 页面 → 服务配置 → 设置一个 API Key</span>
+        <div class="space-y-3 mb-4">
+          <div class="flex gap-3 items-start p-3 bg-gray-800/30 rounded-lg">
+            <span class="flex-shrink-0 w-6 h-6 bg-blue-500/20 text-blue-400 text-xs font-bold rounded-full flex items-center justify-center">1</span>
+            <span class="text-sm text-gray-300">在 OpenAI / Codex 页面 → 服务配置 → 设置一个 API Key</span>
           </div>
-          <div class="flex gap-2">
-            <span class="text-blue-400 font-bold shrink-0">2.</span>
-            <span>所有 <code class="code">/v1/*</code> 请求都需要携带 <code class="code">Authorization: Bearer YOUR_KEY</code></span>
+          <div class="flex gap-3 items-start p-3 bg-gray-800/30 rounded-lg">
+            <span class="flex-shrink-0 w-6 h-6 bg-blue-500/20 text-blue-400 text-xs font-bold rounded-full flex items-center justify-center">2</span>
+            <span class="text-sm text-gray-300">所有 <code class="code">/v1/*</code> 请求都需要携带 <code class="code">Authorization: Bearer YOUR_KEY</code></span>
           </div>
-          <div class="flex gap-2">
-            <span class="text-blue-400 font-bold shrink-0">3.</span>
-            <span>本地 Codex CLI 通过已知的 managed token 认证（passthrough 模式），无需额外配置</span>
+          <div class="flex gap-3 items-start p-3 bg-gray-800/30 rounded-lg">
+            <span class="flex-shrink-0 w-6 h-6 bg-blue-500/20 text-blue-400 text-xs font-bold rounded-full flex items-center justify-center">3</span>
+            <span class="text-sm text-gray-300">本地 Codex CLI 通过已知的 managed token 认证（passthrough 模式），无需额外配置</span>
           </div>
         </div>
 
-        <div class="doc-code mt-4">
+        <div class="doc-code">
           <div class="doc-code-header">支持的负载均衡策略</div>
           <pre>round_robin  — 轮询（默认），均匀分配请求到各账号
 random       — 随机选择一个账号
@@ -188,7 +264,9 @@ least_used   — 选择请求次数最少的账号</pre>
 
       <!-- Docker -->
       <div id="sec-docker" class="card p-5">
-        <h2 class="text-lg font-semibold text-white mb-1">Docker 部署</h2>
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-2xl">🐳</span> Docker 部署
+        </h2>
         <p class="text-sm text-gray-400 mb-4">使用 Docker 快速部署 EasyLLM。</p>
 
         <div class="doc-code mb-4">
@@ -215,11 +293,16 @@ least_used   — 选择请求次数最少的账号</pre>
 
       <!-- FAQ -->
       <div id="sec-faq" class="card p-5">
-        <h2 class="text-lg font-semibold text-white mb-3">常见问题</h2>
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+          <span class="text-2xl">❓</span> 常见问题
+        </h2>
         <div class="space-y-4">
-          <div v-for="faq in faqs" :key="faq.q">
-            <div class="text-sm font-medium text-white">{{ faq.q }}</div>
-            <div class="text-sm text-gray-400 mt-1">{{ faq.a }}</div>
+          <div v-for="(faq, index) in faqs" :key="index" class="p-4 bg-gray-800/30 rounded-lg border border-gray-700/50">
+            <div class="text-sm font-semibold text-white mb-2 flex items-start gap-2">
+              <span class="text-blue-400 mt-0.5">Q:</span>
+              <span>{{ faq.q }}</span>
+            </div>
+            <div class="text-sm text-gray-400 ml-5">{{ faq.a }}</div>
           </div>
         </div>
       </div>
@@ -243,10 +326,11 @@ onMounted(async () => {
 })
 
 const sections = [
+  { id: 'sec-overview', icon: '🎯', label: '简介' },
   { id: 'sec-codex', icon: '🖥️', label: 'Codex CLI' },
   { id: 'sec-curl', icon: '📡', label: 'cURL' },
   { id: 'sec-python', icon: '🐍', label: 'Python' },
-  { id: 'sec-augment', icon: '🔑', label: 'Augment' },
+  { id: 'sec-quota', icon: '📊', label: '配额查询' },
   { id: 'sec-import', icon: '📦', label: '批量导入' },
   { id: 'sec-auth', icon: '🔒', label: '鉴权' },
   { id: 'sec-docker', icon: '🐳', label: 'Docker' },
@@ -260,9 +344,19 @@ const faqs = [
   { q: '配额查询显示 Forbidden', a: '该账号可能没有 Codex 访问权限（需要 ChatGPT Plus/Pro 订阅），或 Token 已失效。' },
   { q: '如何更改数据库？', a: '在设置 → 数据库页面切换为 PostgreSQL 并填写 DSN，保存后重启服务即可。' },
   { q: '如何在公网暴露服务？', a: '建议在前面加 Nginx 反向代理并启用 HTTPS。同时务必设置代理池 API Key 和 IP 黑名单来保护端点。' },
+  { q: '5h 和 7d 配额是什么意思？', a: '5h 是短期会话限制，7d 是长期总量限制。在 OpenAI 页面点击"刷新配额"可查看最新使用情况。' },
 ]
 
 const curlSnippets = {
+  'codex-oauth': `chatgpt_base_url = "http://localhost:PORT"`,
+  openrouter: `model_provider = "openrouter"
+model = "deepseek/deepseek-chat"
+
+[model_providers.openrouter]
+name = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+wire_api = "chat"`,
+  'codex-pool': `chatgpt_base_url = "http://localhost:PORT"`,
   responses: `curl http://localhost:PORT/v1/responses \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
@@ -287,12 +381,6 @@ response = client.responses.create(
 )
 
 print(response.output_text)`,
-  'augment-single': `curl -X POST http://localhost:PORT/api/import/session \\
-  -H "Content-Type: application/json" \\
-  -d '{"session": "YOUR_AUTH_SESSION_STRING"}'`,
-  'augment-batch': `curl -X POST http://localhost:PORT/api/import/sessions \\
-  -H "Content-Type: application/json" \\
-  -d '{"sessions": ["SESSION_1", "SESSION_2", "SESSION_3"]}'`,
   'openai-import': `curl -X POST http://localhost:PORT/api/v1/openai/import/refresh-tokens \\
   -H "Content-Type: application/json" \\
   -d '{

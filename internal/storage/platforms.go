@@ -36,7 +36,14 @@ func (s *OpenAIStorage) GetCodexActive() (*models.OpenAIAccount, error) {
 	return &a, nil
 }
 func (s *OpenAIStorage) Delete(id string) error {
-	return s.db.Where("id = ?", id).Delete(&models.OpenAIAccount{}).Error
+	res := s.db.Where("id = ?", id).Delete(&models.OpenAIAccount{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 func (s *OpenAIStorage) DeleteMany(ids []string) error {
 	return s.db.Where("id IN ?", ids).Delete(&models.OpenAIAccount{}).Error
@@ -63,13 +70,25 @@ func (s *OpenAIStorage) ListProxyEnabled() ([]models.OpenAIAccount, error) {
 
 // SetCodexActive marks one account as is_codex_active=true, clears all others
 func (s *OpenAIStorage) SetCodexActive(id string) error {
-	// Clear all first
-	if err := s.db.Model(&models.OpenAIAccount{}).
-		Where("1 = 1").Update("is_codex_active", false).Error; err != nil {
+	var account models.OpenAIAccount
+	if err := s.db.Select("id").Where("id = ?", id).First(&account).Error; err != nil {
 		return err
 	}
-	return s.db.Model(&models.OpenAIAccount{}).
-		Where("id = ?", id).Update("is_codex_active", true).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.OpenAIAccount{}).
+			Where("1 = 1").Update("is_codex_active", false).Error; err != nil {
+			return err
+		}
+		res := tx.Model(&models.OpenAIAccount{}).
+			Where("id = ?", id).Update("is_codex_active", true)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 // ToggleProxy flips proxy_enabled for a single account
@@ -122,47 +141,36 @@ func (s *CursorStorage) Get(id string) (*models.CursorAccount, error) {
 	return &a, s.db.Where("id = ?", id).First(&a).Error
 }
 func (s *CursorStorage) Delete(id string) error {
-	return s.db.Where("id = ?", id).Delete(&models.CursorAccount{}).Error
+	res := s.db.Where("id = ?", id).Delete(&models.CursorAccount{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 func (s *CursorStorage) DeleteMany(ids []string) error {
 	return s.db.Where("id IN ?", ids).Delete(&models.CursorAccount{}).Error
 }
 func (s *CursorStorage) SetActive(id string) error {
-	if err := s.db.Model(&models.CursorAccount{}).Where("1 = 1").Update("active", false).Error; err != nil {
+	var account models.CursorAccount
+	if err := s.db.Select("id").Where("id = ?", id).First(&account).Error; err != nil {
 		return err
 	}
-	return s.db.Model(&models.CursorAccount{}).Where("id = ?", id).Update("active", true).Error
-}
-
-// --- Windsurf ---
-
-type WindsurfStorage struct{ db *gorm.DB }
-
-func NewWindsurfStorage(db *gorm.DB) *WindsurfStorage { return &WindsurfStorage{db: db} }
-
-func (s *WindsurfStorage) Save(account *models.WindsurfAccount) error {
-	account.UpdatedAt = time.Now()
-	return s.db.Save(account).Error
-}
-func (s *WindsurfStorage) List() ([]models.WindsurfAccount, error) {
-	var list []models.WindsurfAccount
-	return list, s.db.Order("created_at desc").Find(&list).Error
-}
-func (s *WindsurfStorage) Get(id string) (*models.WindsurfAccount, error) {
-	var a models.WindsurfAccount
-	return &a, s.db.Where("id = ?", id).First(&a).Error
-}
-func (s *WindsurfStorage) Delete(id string) error {
-	return s.db.Where("id = ?", id).Delete(&models.WindsurfAccount{}).Error
-}
-func (s *WindsurfStorage) DeleteMany(ids []string) error {
-	return s.db.Where("id IN ?", ids).Delete(&models.WindsurfAccount{}).Error
-}
-func (s *WindsurfStorage) SetActive(id string) error {
-	if err := s.db.Model(&models.WindsurfAccount{}).Where("1 = 1").Update("active", false).Error; err != nil {
-		return err
-	}
-	return s.db.Model(&models.WindsurfAccount{}).Where("id = ?", id).Update("active", true).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.CursorAccount{}).Where("1 = 1").Update("active", false).Error; err != nil {
+			return err
+		}
+		res := tx.Model(&models.CursorAccount{}).Where("id = ?", id).Update("active", true)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 // --- Antigravity ---
@@ -184,40 +192,34 @@ func (s *AntigravityStorage) Get(id string) (*models.AntigravityAccount, error) 
 	return &a, s.db.Where("id = ?", id).First(&a).Error
 }
 func (s *AntigravityStorage) Delete(id string) error {
-	return s.db.Where("id = ?", id).Delete(&models.AntigravityAccount{}).Error
+	res := s.db.Where("id = ?", id).Delete(&models.AntigravityAccount{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 func (s *AntigravityStorage) DeleteMany(ids []string) error {
 	return s.db.Where("id IN ?", ids).Delete(&models.AntigravityAccount{}).Error
 }
 func (s *AntigravityStorage) SetActive(id string) error {
-	if err := s.db.Model(&models.AntigravityAccount{}).Where("1 = 1").Update("active", false).Error; err != nil {
+	var account models.AntigravityAccount
+	if err := s.db.Select("id").Where("id = ?", id).First(&account).Error; err != nil {
 		return err
 	}
-	return s.db.Model(&models.AntigravityAccount{}).Where("id = ?", id).Update("active", true).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.AntigravityAccount{}).Where("1 = 1").Update("active", false).Error; err != nil {
+			return err
+		}
+		res := tx.Model(&models.AntigravityAccount{}).Where("id = ?", id).Update("active", true)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
-
-// --- Claude ---
-
-type ClaudeStorage struct{ db *gorm.DB }
-
-func NewClaudeStorage(db *gorm.DB) *ClaudeStorage { return &ClaudeStorage{db: db} }
-
-func (s *ClaudeStorage) Save(account *models.ClaudeAccount) error {
-	account.UpdatedAt = time.Now()
-	return s.db.Save(account).Error
-}
-func (s *ClaudeStorage) List() ([]models.ClaudeAccount, error) {
-	var list []models.ClaudeAccount
-	return list, s.db.Order("created_at desc").Find(&list).Error
-}
-func (s *ClaudeStorage) Get(id string) (*models.ClaudeAccount, error) {
-	var a models.ClaudeAccount
-	return &a, s.db.Where("id = ?", id).First(&a).Error
-}
-func (s *ClaudeStorage) Delete(id string) error {
-	return s.db.Where("id = ?", id).Delete(&models.ClaudeAccount{}).Error
-}
-func (s *ClaudeStorage) DeleteMany(ids []string) error {
-	return s.db.Where("id IN ?", ids).Delete(&models.ClaudeAccount{}).Error
-}
-

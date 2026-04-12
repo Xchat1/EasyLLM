@@ -5,6 +5,10 @@ easyllm_new
 
 # Environment
 .env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
 
 # Data
 data/
@@ -12,6 +16,8 @@ data/
 
 # Auth tokens
 auth/*.json
+cred.json
+big_token.json
 
 # OS files
 .DS_Store

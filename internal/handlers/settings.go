@@ -124,17 +124,24 @@ func getAccountCounts() gin.H {
 	counts := gin.H{}
 	tables := map[string]string{
 		"openai":      "open_ai_accounts",
-		"augment":     "augment_tokens",
 		"cursor":      "cursor_accounts",
-		"windsurf":    "windsurf_accounts",
 		"antigravity": "antigravity_accounts",
-		"claude":      "claude_accounts",
 		"codex_pool":  "codex_accounts",
+		"instances":   "platform_instances",
+		"wakeup":      "wakeup_tasks",
 	}
 	for key, table := range tables {
 		var count int64
 		if err := db.Table(table).Count(&count).Error; err == nil {
 			counts[key] = count
+		}
+	}
+	if db.Migrator().HasTable("platform_accounts") {
+		for _, def := range models.GetCockpitPlatformDefinitions() {
+			var count int64
+			if err := db.Table("platform_accounts").Where("platform = ?", def.ID).Count(&count).Error; err == nil {
+				counts[def.ID] = count
+			}
 		}
 	}
 	return counts
@@ -178,10 +185,23 @@ func (h *SettingsHandler) UpdateSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
-	config.Get().Update(updates)
+
+	sanitized := make(map[string]interface{}, len(updates))
+	for k, v := range updates {
+		if !isSupportedSettingsUpdateKey(k) {
+			c.JSON(http.StatusBadRequest, models.APIError{Error: "unsupported settings key: " + k, Code: "INVALID_REQUEST"})
+			return
+		}
+		if !isSupportedSettingsUpdateValue(v) {
+			c.JSON(http.StatusBadRequest, models.APIError{Error: "unsupported value type for key: " + k, Code: "INVALID_REQUEST"})
+			return
+		}
+		sanitized[k] = v
+	}
+	config.Get().Update(sanitized)
 
 	// Persist to database
-	for k, v := range updates {
+	for k, v := range sanitized {
 		storage.SaveSetting(k, toString(v))
 	}
 
@@ -199,9 +219,9 @@ func (h *SettingsHandler) GetSwitches(c *gin.Context) {
 
 func (h *SettingsHandler) UpdateSwitches(c *gin.Context) {
 	var req struct {
-		LogEnabled          *bool `json:"log_enabled"`
-		IPBlacklistEnabled  *bool `json:"ip_blacklist_enabled"`
-		ProxyEnabled        *bool `json:"proxy_enabled"`
+		LogEnabled         *bool `json:"log_enabled"`
+		IPBlacklistEnabled *bool `json:"ip_blacklist_enabled"`
+		ProxyEnabled       *bool `json:"proxy_enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
@@ -375,3 +395,20 @@ func toString(v interface{}) string {
 	}
 }
 
+func isSupportedSettingsUpdateKey(key string) bool {
+	switch key {
+	case "proxy_enabled", "proxy_host", "proxy_port", "proxy_username", "proxy_password", "db_type", "db_dsn", "log_enabled", "ip_blacklist_enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedSettingsUpdateValue(value interface{}) bool {
+	switch value.(type) {
+	case string, bool, float64, int:
+		return true
+	default:
+		return false
+	}
+}

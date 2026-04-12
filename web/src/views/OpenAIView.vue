@@ -13,7 +13,7 @@
           </svg>
           批量导入
         </button>
-        <button @click="showOAuthDialog = true" class="btn btn-secondary flex items-center gap-2">
+        <button @click="openOAuthDialog" class="btn btn-secondary flex items-center gap-2">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
           </svg>
@@ -99,7 +99,7 @@
               {{ exportingAccounts ? '正在导出所有最新数据...' : '一键导出所有最新数据' }}
             </button>
 
-            <!-- Search + Quota result filter + bulk delete -->
+            <!-- Search + Quota result filter + bulk select -->
             <input
               v-model="searchQuery"
               class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 w-40 transition-colors focus:outline-none focus:border-blue-500 placeholder-gray-600"
@@ -120,14 +120,33 @@
 
             <button
               v-if="filteredOAuthAccounts.length > 0"
+              @click="toggleSelectAllOAuth"
+              :disabled="bulkDeleting"
+              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
+              :title="allFilteredOAuthSelected ? `取消全选当前筛选结果（${filteredOAuthAccounts.length}）` : `全选当前筛选结果（${filteredOAuthAccounts.length}）`"
+            >
+              {{ allFilteredOAuthSelected ? '取消全选' : `全选(${filteredOAuthAccounts.length})` }}
+            </button>
+            <button
+              v-if="selectedOAuthIds.length > 0"
+              @click="clearOAuthSelection"
+              :disabled="bulkDeleting"
+              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
+              title="清空当前已选 OAuth 账号"
+            >
+              清空已选
+            </button>
+            <div v-if="filteredOAuthAccounts.length > 0" class="text-xs text-gray-400 px-1">
+              已选 {{ selectedOAuthIds.length }} 个
+            </div>
+            <button
+              v-if="selectedOAuthIds.length > 0"
               @click="openBulkDeleteConfirm"
               :disabled="bulkDeleting"
               class="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-600/40 text-red-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-              :title="quotaFilter === 'all'
-                ? `批量删除所有 OAuth 账号（${filteredOAuthAccounts.length}）`
-                : `批量删除筛选结果（${filteredOAuthAccounts.length}）`"
+              :title="`批量删除已选 OAuth 账号（${selectedOAuthIds.length}）`"
             >
-              {{ bulkDeleting ? '删除中...' : `批量删除(${filteredOAuthAccounts.length})` }}
+              {{ bulkDeleting ? '删除中...' : `批量删除(${selectedOAuthIds.length})` }}
             </button>
           </div>
         </div>
@@ -136,10 +155,21 @@
             v-for="account in paginatedOAuth"
             :key="account.id"
             class="account-card-compact"
-            :class="account.is_codex_active ? 'ring-1 ring-blue-500/60' : ''"
+            :class="[
+              account.is_codex_active ? 'ring-1 ring-blue-500/60' : '',
+              isOAuthSelected(account.id) ? 'account-card-compact--selected' : '',
+            ]"
           >
             <!-- Row 1: email + Codex badge -->
             <div class="flex items-center gap-2 min-w-0 mb-2">
+              <label class="selection-checkbox shrink-0" :title="isOAuthSelected(account.id) ? '取消选择' : '选择该账号'">
+                <input
+                  type="checkbox"
+                  :checked="isOAuthSelected(account.id)"
+                  @change="toggleOAuthSelection(account.id)"
+                />
+                <span></span>
+              </label>
               <span class="inline-block w-2 h-2 rounded-full shrink-0" :class="account.proxy_enabled ? 'bg-green-400' : 'bg-gray-500'"></span>
               <span class="text-sm font-medium text-white truncate flex-1" :title="account.email">{{ account.email }}</span>
               <span v-if="account.is_codex_active" class="shrink-0 text-[10px] font-bold text-blue-300 bg-blue-600/30 px-1.5 py-0.5 rounded">Codex</span>
@@ -184,42 +214,44 @@
               </div>
 
               <!-- 5h quota bar -->
-              <template v-if="!account.quota_is_forbidden && account.quota_5h_used_percent != null">
+              <template v-if="!account.quota_is_forbidden && hasWindowQuotaData(account)">
                 <div class="flex items-center gap-2">
                   <span class="shrink-0 text-[9px] text-gray-500 w-6">5h</span>
                   <div class="flex-1 bg-gray-700 rounded-full h-1.5 overflow-hidden">
                     <div
                       class="h-1.5 rounded-full transition-all duration-500"
-                      :class="pctBarClass(100 - account.quota_5h_used_percent)"
-                      :style="{ width: (100 - account.quota_5h_used_percent) + '%' }"
+                      :class="account.quota_5h_used_percent != null ? pctBarClass(100 - account.quota_5h_used_percent) : 'bg-gray-600/60'"
+                      :style="{ width: account.quota_5h_used_percent != null ? (100 - account.quota_5h_used_percent) + '%' : '100%' }"
                     ></div>
                   </div>
-                  <span class="shrink-0 text-[10px] font-semibold tabular-nums w-8 text-right" :class="pctColor(100 - account.quota_5h_used_percent)">
-                    {{ Math.round(100 - account.quota_5h_used_percent) }}%
+                  <span class="shrink-0 text-[10px] font-semibold tabular-nums w-12 text-right" :class="account.quota_5h_used_percent != null ? pctColor(100 - account.quota_5h_used_percent) : 'text-gray-500'">
+                    {{ account.quota_5h_used_percent != null ? `${Math.round(100 - account.quota_5h_used_percent)}%` : '未返回' }}
                   </span>
                 </div>
-                <div v-if="account.quota_5h_reset_seconds" class="flex items-center justify-between text-[9px] pl-8">
-                  <span class="text-gray-600">重置: {{ formatResetTime(account.quota_5h_reset_seconds) }}</span>
+                <div class="flex items-center justify-between text-[9px] pl-8">
+                  <span v-if="account.quota_5h_reset_seconds" class="text-gray-600">重置: {{ formatResetTime(account.quota_5h_reset_seconds) }}</span>
+                  <span v-else class="text-gray-600">窗口未返回</span>
                 </div>
               </template>
 
               <!-- 7d quota bar -->
-              <template v-if="!account.quota_is_forbidden && account.quota_7d_used_percent != null">
+              <template v-if="!account.quota_is_forbidden && hasWindowQuotaData(account)">
                 <div class="flex items-center gap-2">
                   <span class="shrink-0 text-[9px] text-gray-500 w-6">7d</span>
                   <div class="flex-1 bg-gray-700 rounded-full h-1.5 overflow-hidden">
                     <div
                       class="h-1.5 rounded-full transition-all duration-500"
-                      :class="pctBarClass(100 - account.quota_7d_used_percent)"
-                      :style="{ width: (100 - account.quota_7d_used_percent) + '%' }"
+                      :class="account.quota_7d_used_percent != null ? pctBarClass(100 - account.quota_7d_used_percent) : 'bg-gray-600/60'"
+                      :style="{ width: account.quota_7d_used_percent != null ? (100 - account.quota_7d_used_percent) + '%' : '100%' }"
                     ></div>
                   </div>
-                  <span class="shrink-0 text-[10px] font-semibold tabular-nums w-8 text-right" :class="pctColor(100 - account.quota_7d_used_percent)">
-                    {{ Math.round(100 - account.quota_7d_used_percent) }}%
+                  <span class="shrink-0 text-[10px] font-semibold tabular-nums w-12 text-right" :class="account.quota_7d_used_percent != null ? pctColor(100 - account.quota_7d_used_percent) : 'text-gray-500'">
+                    {{ account.quota_7d_used_percent != null ? `${Math.round(100 - account.quota_7d_used_percent)}%` : '未返回' }}
                   </span>
                 </div>
-                <div v-if="account.quota_7d_reset_seconds" class="flex items-center justify-between text-[9px] pl-8">
-                  <span class="text-gray-600">重置: {{ formatResetTime(account.quota_7d_reset_seconds) }}</span>
+                <div class="flex items-center justify-between text-[9px] pl-8">
+                  <span v-if="account.quota_7d_reset_seconds" class="text-gray-600">重置: {{ formatResetTime(account.quota_7d_reset_seconds) }}</span>
+                  <span v-else class="text-gray-600">窗口未返回</span>
                 </div>
               </template>
 
@@ -306,14 +338,54 @@
         <p class="text-sm">点击"添加 API 账号"配置自定义 API 端点</p>
       </div>
       <template v-else>
+        <div class="flex items-center justify-end gap-2 flex-wrap mb-3">
+          <button
+            @click="toggleSelectAllAPI"
+            :disabled="bulkDeleting"
+            class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
+            :title="allAPISelected ? `取消全选全部 API 账号（${apiAccounts.length}）` : `全选全部 API 账号（${apiAccounts.length}）`"
+          >
+            {{ allAPISelected ? '取消全选' : `全选(${apiAccounts.length})` }}
+          </button>
+          <button
+            v-if="selectedAPIIds.length > 0"
+            @click="clearAPISelection"
+            :disabled="bulkDeleting"
+            class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
+            title="清空当前已选 API 账号"
+          >
+            清空已选
+          </button>
+          <div class="text-xs text-gray-400 px-1">
+            已选 {{ selectedAPIIds.length }} 个
+          </div>
+          <button
+            v-if="selectedAPIIds.length > 0"
+            @click="openBulkDeleteConfirm"
+            :disabled="bulkDeleting"
+            class="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-600/40 text-red-300 rounded-lg text-xs transition-colors disabled:opacity-40"
+            :title="`批量删除已选 API 账号（${selectedAPIIds.length}）`"
+          >
+            {{ bulkDeleting ? '删除中...' : `批量删除(${selectedAPIIds.length})` }}
+          </button>
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
           <div
             v-for="account in paginatedAPI"
             :key="account.id"
             class="account-card-compact account-card-compact--api"
+            :class="isAPISelected(account.id) ? 'account-card-compact--selected' : ''"
           >
             <!-- Row 1: provider -->
             <div class="flex items-center gap-2 min-w-0 mb-2">
+              <label class="selection-checkbox shrink-0" :title="isAPISelected(account.id) ? '取消选择' : '选择该账号'">
+                <input
+                  type="checkbox"
+                  :checked="isAPISelected(account.id)"
+                  @change="toggleAPISelection(account.id)"
+                />
+                <span></span>
+              </label>
               <span class="text-sm font-medium text-white truncate flex-1" :title="account.model_provider">{{ account.model_provider || 'API' }}</span>
               <span v-if="account.model" class="shrink-0 text-[10px] font-mono text-emerald-300 bg-emerald-600/20 px-1.5 py-0.5 rounded truncate max-w-[100px]">{{ account.model }}</span>
             </div>
@@ -398,11 +470,13 @@
         </div>
         <div class="p-6 space-y-3">
           <div class="text-sm text-gray-200">
-            将永久删除筛选结果中的 <span class="text-white font-semibold">{{ bulkDeleteIds.length }}</span> 个 OAuth 账号
-            <span class="text-gray-400">（筛选：{{ quotaFilterLabel }}）</span>，此操作不可恢复。
+            将永久删除已选中的 <span class="text-white font-semibold">{{ bulkDeleteIds.length }}</span> 个 {{ bulkDeleteAccountLabel }}，此操作不可恢复。
           </div>
-          <div v-if="quotaFilter === 'all'" class="text-xs text-red-300 bg-red-600/10 border border-red-600/30 rounded-lg px-3 py-2">
-            警告：你选择的是「全部」，将删除所有 OAuth 账号。
+          <div v-if="bulkDeleteScopeLabel" class="text-xs text-gray-400">
+            选择范围：{{ bulkDeleteScopeLabel }}
+          </div>
+          <div v-if="bulkDeleteAllSelected" class="text-xs text-red-300 bg-red-600/10 border border-red-600/30 rounded-lg px-3 py-2">
+            警告：你当前已全选 {{ bulkDeleteAccountLabel }}。
           </div>
           <div class="text-xs text-gray-500">
             提示：仅删除 EasyLLM 内的账号记录，不会删除你本地浏览器/客户端已存在的 token 文件。
@@ -454,8 +528,8 @@
             <div class="bg-green-900/20 border border-green-700/40 rounded-lg p-3 text-xs text-green-300 mb-3">
               <div class="flex items-start justify-between gap-2">
                 <div>
-                  ⚡ 直接解析 token JSON 文件（无需调用 OpenAI API，速度最快）<br/>
-                  支持 <code class="text-green-200">token_*.json</code> 格式，文件中需含 id_token / access_token / refresh_token / email 等字段
+                  ⚡ 直接解析 token 文件（无需调用 OpenAI API，速度最快）<br/>
+                  支持单对象 JSON、数组 JSON、每行一个对象的 NDJSON，适合 <code class="text-green-200">token_*.json</code> 和 <code class="text-green-200">codex_tokens_*.json</code>
                 </div>
                 <button @click="downloadExample('token-files')" class="shrink-0 px-2 py-1 bg-green-800/60 hover:bg-green-700/80 text-green-200 rounded text-xs transition-colors whitespace-nowrap">
                   下载示例
@@ -476,7 +550,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                 </svg>
                 <p class="text-gray-400 text-sm">点击或拖拽文件到此处</p>
-                <p class="text-xs text-gray-600 mt-1">支持多个 token_*.json 文件</p>
+                <p class="text-xs text-gray-600 mt-1">支持多文件上传，也支持单个文件内包含多个账号</p>
               </div>
             </div>
             <div v-else>
@@ -498,7 +572,7 @@
               <div class="flex items-start justify-between gap-2">
                 <div>
                   🗂 扫描服务器本地目录，自动导入所有 JSON 文件（适合大批量，默认扫 <code>./auth</code>）<br/>
-                  <span class="text-blue-400/70">目录内每个 JSON 文件格式与模式一相同</span>
+                  <span class="text-blue-400/70">目录内每个 JSON 文件都支持单对象、数组和 NDJSON 多账号格式</span>
                 </div>
                 <button @click="downloadExample('scan-dir')" class="shrink-0 px-2 py-1 bg-blue-800/60 hover:bg-blue-700/80 text-blue-200 rounded text-xs transition-colors whitespace-nowrap">
                   下载示例
@@ -670,7 +744,7 @@
       <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
         <div class="flex items-center justify-between p-6 border-b border-gray-700">
           <h2 class="text-lg font-semibold text-white">OpenAI OAuth 登录</h2>
-          <button @click="showOAuthDialog = false" class="text-gray-400 hover:text-white">
+          <button @click="closeOAuthDialog" class="text-gray-400 hover:text-white">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
             </svg>
@@ -678,29 +752,46 @@
         </div>
         <div class="p-6 space-y-4">
           <div v-if="!oauthState.authUrl">
-            <p class="text-gray-400 text-sm mb-4">点击下方按钮生成授权链接，在浏览器中完成 OpenAI 登录后，将返回的 code 粘贴到下方。</p>
+            <p class="text-gray-400 text-sm mb-4">点击下方按钮后会自动打开浏览器，并等待本机回调自动完成登录；如果自动回调不可用，也可以手动粘贴完整回调地址或 `code`。</p>
             <button @click="generateOAuthUrl" :disabled="oauthState.loading" class="btn btn-primary w-full">
-              {{ oauthState.loading ? '生成中...' : '生成授权链接' }}
+              {{ oauthState.loading ? '准备中...' : '生成授权链接并打开浏览器' }}
             </button>
           </div>
           <div v-else class="space-y-4">
+            <div v-if="oauthState.autoCallbackEnabled" class="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+              授权页已准备好。完成 OpenAI 登录后，这里会自动继续，无需手动复制 `code`。
+            </div>
+            <div v-else class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              当前未启用本地自动回调，请在授权后手动粘贴完整回调地址或 `authorization_code`。
+            </div>
+            <div v-if="oauthState.autoCallbackError" class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              {{ oauthState.autoCallbackError }}
+            </div>
+            <div v-if="oauthState.status === 'callback_received' && oauthState.loading" class="rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-100">
+              已收到本地回调，正在完成登录...
+            </div>
             <div>
               <label class="block text-xs text-gray-400 mb-1">授权链接（在浏览器中打开）</label>
               <div class="flex gap-2">
                 <input readonly :value="oauthState.authUrl" class="input flex-1 text-xs font-mono"/>
+                <button @click="openOAuthInBrowser" class="btn btn-secondary text-xs px-3">打开</button>
                 <button @click="copyAuthUrl" class="btn btn-secondary text-xs px-3">复制</button>
               </div>
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">在浏览器登录后，粘贴返回的 authorization_code</label>
-              <input v-model="oauthState.code" class="input w-full" placeholder="粘贴 code..."/>
+              <label class="block text-xs text-gray-400 mb-1">如果没有自动返回，粘贴完整回调地址或 `authorization_code`</label>
+              <input
+                v-model="oauthState.manualInput"
+                class="input w-full"
+                placeholder="例如：http://localhost:1455/auth/callback?code=...&state=... 或直接粘贴 code"
+              />
             </div>
             <button
               @click="exchangeOAuthCode"
-              :disabled="!oauthState.code || oauthState.loading"
+              :disabled="!oauthState.sessionId || oauthState.loading"
               class="btn btn-primary w-full"
             >
-              {{ oauthState.loading ? '验证中...' : '完成登录' }}
+              {{ oauthState.loading ? '验证中...' : '我已授权，继续登录' }}
             </button>
           </div>
           <p v-if="oauthState.error" class="text-red-400 text-sm">{{ oauthState.error }}</p>
@@ -950,7 +1041,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, inject } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, inject, watch } from 'vue'
 import api, { longApi, openaiAPI } from '@/api/index.js'
 
 // State
@@ -983,6 +1074,12 @@ const bulkDeleting = ref(false)
 const showBulkDeleteConfirm = ref(false)
 const bulkDeleteIds = ref([])
 const bulkDeletePreview = ref([])
+const bulkDeleteSelectionType = ref('oauth')
+const bulkDeleteAccountLabel = ref('OAuth 账号')
+const bulkDeleteScopeLabel = ref('')
+const bulkDeleteAllSelected = ref(false)
+const selectedOAuthIds = ref([])
+const selectedAPIIds = ref([])
 
 const quotaFilterLabel = computed(() => {
   if (quotaFilter.value === '429') return '429（限流）'
@@ -1017,7 +1114,9 @@ const importModes = [
 
 // OAuth dialog
 const showOAuthDialog = ref(false)
-const oauthState = ref({ authUrl: '', sessionId: '', code: '', loading: false, error: '' })
+const OAUTH_POLL_INTERVAL_MS = 1500
+let oauthPollTimer = null
+const oauthState = ref(createEmptyOAuthState())
 
 // API account dialog
 const showAddAPIDialog = ref(false)
@@ -1046,8 +1145,7 @@ const serviceConfig = ref({
   total_requests: 0,
   total_logs: 0,
   api_key_set: false,
-  api_key_masked: '',
-  api_key: ''
+  api_key_masked: ''
 })
 const strategies = [
   { id: 'round_robin', label: '轮询' },
@@ -1093,6 +1191,14 @@ const filteredOAuthAccounts = computed(() => {
     return false
   })
 })
+const allFilteredOAuthSelected = computed(() => (
+  filteredOAuthAccounts.value.length > 0 &&
+  filteredOAuthAccounts.value.every(a => selectedOAuthIds.value.includes(accountId(a.id)))
+))
+const allAPISelected = computed(() => (
+  apiAccounts.value.length > 0 &&
+  apiAccounts.value.every(a => selectedAPIIds.value.includes(accountId(a.id)))
+))
 
 // Pagination
 const PAGE_SIZE = 20
@@ -1121,6 +1227,7 @@ async function loadAccounts() {
     // api interceptor returns response.data directly, so res IS the array
     const res = await api.get('/openai/accounts')
     accounts.value = Array.isArray(res) ? res : (res || [])
+    pruneSelectedAccountIds()
   } catch (e) {
     showToast('加载账号失败: ' + e.message, 'error')
   } finally {
@@ -1208,9 +1315,7 @@ async function deleteAccount(id) {
     return
   }
   deleteTargetId.value = id
-  deleteTargetLabel.value = target.account_type === 'api'
-      ? `${target.model_provider || 'API'}${target.model ? ` / ${target.model}` : ''}`
-      : (target.email || target.chatgpt_account_id || String(id))
+  deleteTargetLabel.value = accountDisplayLabel(target)
   showDeleteConfirm.value = true
 }
 
@@ -1582,14 +1687,87 @@ function closeImportDialog() {
 }
 
 // ---- OAuth ----
+function createEmptyOAuthState() {
+  return {
+    authUrl: '',
+    sessionId: '',
+    manualInput: '',
+    loading: false,
+    error: '',
+    autoCallbackEnabled: false,
+    autoCallbackError: '',
+    status: 'idle'
+  }
+}
+
+function resetOAuthState() {
+  stopOAuthPolling()
+  oauthState.value = createEmptyOAuthState()
+}
+
+function stopOAuthPolling() {
+  if (oauthPollTimer) {
+    clearTimeout(oauthPollTimer)
+    oauthPollTimer = null
+  }
+}
+
+async function cancelOAuthSession(sessionId) {
+  if (!sessionId) return
+  try {
+    await openaiAPI.cancelOAuthSession(sessionId)
+  } catch {
+    // best effort cleanup
+  }
+}
+
+function openOAuthDialog() {
+  showOAuthDialog.value = true
+  resetOAuthState()
+  generateOAuthUrl()
+}
+
+async function closeOAuthDialog() {
+  const sessionId = oauthState.value.sessionId
+  showOAuthDialog.value = false
+  resetOAuthState()
+  await cancelOAuthSession(sessionId)
+}
+
 async function generateOAuthUrl() {
+  const previousSessionId = oauthState.value.sessionId
+  stopOAuthPolling()
   oauthState.value.loading = true
   oauthState.value.error = ''
+  oauthState.value.autoCallbackError = ''
+
+  const popup = window.open('', '_blank', 'noopener,noreferrer')
   try {
-    const res = await api.post('/openai/oauth/generate-url')
+    if (previousSessionId) {
+      await cancelOAuthSession(previousSessionId)
+    }
+    const res = await openaiAPI.generateOAuthUrl()
     oauthState.value.authUrl = res.auth_url
     oauthState.value.sessionId = res.session_id
+    oauthState.value.manualInput = ''
+    oauthState.value.autoCallbackEnabled = !!res.auto_callback_enabled
+    oauthState.value.autoCallbackError = res.auto_callback_error || ''
+    oauthState.value.status = res.auto_callback_enabled ? 'pending' : 'manual'
+
+    if (popup) {
+      popup.location = res.auth_url
+    } else {
+      const opened = window.open(res.auth_url, '_blank', 'noopener,noreferrer')
+      if (!opened && !oauthState.value.autoCallbackError) {
+        oauthState.value.autoCallbackError = '浏览器未能自动打开，请点击“打开”按钮或复制链接。'
+      }
+    }
+
+    if (res.auto_callback_enabled) {
+      scheduleOAuthPoll()
+    }
   } catch (e) {
+    popup?.close?.()
     oauthState.value.error = '生成失败: ' + e.message
   } finally {
     oauthState.value.loading = false
@@ -1601,17 +1779,67 @@ function copyAuthUrl() {
   showToast('链接已复制', 'success')
 }
 
+function openOAuthInBrowser() {
+  if (!oauthState.value.authUrl) return
+  const opened = window.open(oauthState.value.authUrl, '_blank', 'noopener,noreferrer')
+  if (!opened) {
+    showToast('浏览器未能自动打开，已复制授权链接', 'success')
+    copyAuthUrl()
+  }
+}
+
+function scheduleOAuthPoll() {
+  stopOAuthPolling()
+  oauthPollTimer = window.setTimeout(pollOAuthSession, OAUTH_POLL_INTERVAL_MS)
+}
+
+async function pollOAuthSession() {
+  if (!showOAuthDialog.value || !oauthState.value.sessionId || !oauthState.value.autoCallbackEnabled) return
+
+  try {
+    const res = await openaiAPI.getOAuthSession(oauthState.value.sessionId)
+    oauthState.value.status = res.status || 'pending'
+
+    if (res.status === 'error') {
+      stopOAuthPolling()
+      oauthState.value.error = res.error || 'OAuth 授权失败'
+      return
+    }
+
+    if (res.status === 'callback_received') {
+      stopOAuthPolling()
+      await exchangeOAuthCode()
+      return
+    }
+  } catch (e) {
+    stopOAuthPolling()
+    oauthState.value.error = /expired/i.test(e.message)
+      ? '授权会话已过期，请重新发起登录'
+      : `授权状态检查失败: ${e.message}`
+    return
+  }
+
+  scheduleOAuthPoll()
+}
+
 async function exchangeOAuthCode() {
+  stopOAuthPolling()
   oauthState.value.loading = true
   oauthState.value.error = ''
   try {
-    await api.post('/openai/oauth/exchange-code', {
-      session_id: oauthState.value.sessionId,
-      code: oauthState.value.code.trim()
-    })
+    const manualInput = oauthState.value.manualInput.trim()
+    const payload = { session_id: oauthState.value.sessionId }
+    if (manualInput) {
+      if (manualInput.includes('://') || manualInput.startsWith('/') || manualInput.startsWith('?') || manualInput.includes('code=')) {
+        payload.callback_url = manualInput
+      } else {
+        payload.code = manualInput
+      }
+    }
+    await openaiAPI.exchangeOAuthCode(payload)
     await loadAccounts()
     showOAuthDialog.value = false
-    oauthState.value = { authUrl: '', sessionId: '', code: '', loading: false, error: '' }
+    resetOAuthState()
     showToast('OAuth 登录成功', 'success')
   } catch (e) {
     oauthState.value.error = e.message
@@ -1674,8 +1902,7 @@ async function loadServiceConfig() {
   try {
     const res = await api.get('/openai/service-config')
     Object.assign(serviceConfig.value, res)
-    // If the backend returns api_key, use it. Otherwise use masked.
-    serviceApiKeyInput.value = res.api_key || ''
+    serviceApiKeyInput.value = ''
   } catch (e) {
     console.error('Failed to load service config:', e)
   }
@@ -1930,15 +2157,26 @@ async function fetchAllQuotas() {
 }
 
 function openBulkDeleteConfirm() {
-  const list = filteredOAuthAccounts.value
-  if (!list.length) {
+  const selectionType = activeTab.value === 'api' ? 'api' : 'oauth'
+  const ids = [...getSelectedIds(selectionType)]
+  if (!ids.length) {
     showToast('没有可删除的账号', 'error')
     return
   }
-  bulkDeleteIds.value = list.map(a => a.id)
+  const selectedSet = new Set(ids)
+  const list = (selectionType === 'api' ? apiAccounts.value : oauthAccounts.value)
+    .filter(a => selectedSet.has(accountId(a.id)))
+
+  bulkDeleteIds.value = ids
+  bulkDeleteSelectionType.value = selectionType
+  bulkDeleteAccountLabel.value = selectionType === 'api' ? 'API 账号' : 'OAuth 账号'
+  bulkDeleteScopeLabel.value = selectionType === 'api'
+    ? (allAPISelected.value ? '全部 API 账号' : '手动勾选')
+    : (allFilteredOAuthSelected.value ? `当前筛选结果（${quotaFilterLabel.value}）` : '手动勾选')
+  bulkDeleteAllSelected.value = selectionType === 'api' ? allAPISelected.value : allFilteredOAuthSelected.value
   bulkDeletePreview.value = list
     .slice(0, 12)
-    .map(a => a.email || a.chatgpt_account_id || a.id)
+    .map(accountDisplayLabel)
   showBulkDeleteConfirm.value = true
 }
 
@@ -1952,21 +2190,32 @@ function resetBulkDeleteConfirm() {
   showBulkDeleteConfirm.value = false
   bulkDeleteIds.value = []
   bulkDeletePreview.value = []
+  bulkDeleteSelectionType.value = 'oauth'
+  bulkDeleteAccountLabel.value = 'OAuth 账号'
+  bulkDeleteScopeLabel.value = ''
+  bulkDeleteAllSelected.value = false
 }
 
 async function confirmBulkDelete() {
   const ids = bulkDeleteIds.value
   if (!ids.length) return
   bulkDeleting.value = true
+  const deletingTab = bulkDeleteSelectionType.value === 'api' ? 'api' : 'oauth'
   try {
     await api.request({
       method: 'DELETE',
       url: '/openai/accounts',
       data: { ids },
     })
-    const idSet = new Set(ids)
-    accounts.value = accounts.value.filter(a => !idSet.has(a.id))
-    oauthPage.value = 1
+    const idSet = new Set(ids.map(accountId))
+    accounts.value = accounts.value.filter(a => !idSet.has(accountId(a.id)))
+    if (deletingTab === 'api') {
+      selectedAPIIds.value = selectedAPIIds.value.filter(id => !idSet.has(id))
+      apiPage.value = 1
+    } else {
+      selectedOAuthIds.value = selectedOAuthIds.value.filter(id => !idSet.has(id))
+      oauthPage.value = 1
+    }
     showToast(`已批量删除 ${ids.length} 个账号`, 'success')
     resetBulkDeleteConfirm()
     await loadAccounts()
@@ -1982,10 +2231,104 @@ function hasQuotaData(account) {
     (account.quota_total && account.quota_total > 0)
 }
 
+function hasWindowQuotaData(account) {
+  return account.quota_5h_used_percent != null || account.quota_7d_used_percent != null
+}
+
 function pctBarClass(remainPct) {
   if (remainPct <= 10) return 'bg-red-500'
   if (remainPct <= 30) return 'bg-yellow-500'
   return 'bg-green-500'
+}
+
+function accountId(id) {
+  return String(id)
+}
+
+function accountDisplayLabel(account) {
+  if (!account) return ''
+  if (account.account_type === 'api') {
+    const provider = account.model_provider || 'API'
+    const model = account.model ? ` / ${account.model}` : ''
+    const baseURL = account.base_url ? ` @ ${account.base_url}` : ''
+    return `${provider}${model}${baseURL}`
+  }
+  return account.email || account.chatgpt_account_id || String(account.id)
+}
+
+function getSelectedIds(type) {
+  return type === 'api' ? selectedAPIIds.value : selectedOAuthIds.value
+}
+
+function setSelectedIds(type, ids) {
+  const next = Array.from(new Set(ids.map(accountId)))
+  if (type === 'api') {
+    selectedAPIIds.value = next
+    return
+  }
+  selectedOAuthIds.value = next
+}
+
+function toggleAccountSelection(type, id) {
+  const targetId = accountId(id)
+  const current = getSelectedIds(type)
+  if (current.includes(targetId)) {
+    setSelectedIds(type, current.filter(item => item !== targetId))
+    return
+  }
+  setSelectedIds(type, [...current, targetId])
+}
+
+function toggleOAuthSelection(id) {
+  toggleAccountSelection('oauth', id)
+}
+
+function toggleAPISelection(id) {
+  toggleAccountSelection('api', id)
+}
+
+function isOAuthSelected(id) {
+  return selectedOAuthIds.value.includes(accountId(id))
+}
+
+function isAPISelected(id) {
+  return selectedAPIIds.value.includes(accountId(id))
+}
+
+function toggleSelectAllOAuth() {
+  const ids = filteredOAuthAccounts.value.map(a => accountId(a.id))
+  if (!ids.length) return
+  if (allFilteredOAuthSelected.value) {
+    const currentSet = new Set(ids)
+    setSelectedIds('oauth', selectedOAuthIds.value.filter(id => !currentSet.has(id)))
+    return
+  }
+  setSelectedIds('oauth', [...selectedOAuthIds.value, ...ids])
+}
+
+function toggleSelectAllAPI() {
+  const ids = apiAccounts.value.map(a => accountId(a.id))
+  if (!ids.length) return
+  if (allAPISelected.value) {
+    setSelectedIds('api', [])
+    return
+  }
+  setSelectedIds('api', ids)
+}
+
+function clearOAuthSelection() {
+  selectedOAuthIds.value = []
+}
+
+function clearAPISelection() {
+  selectedAPIIds.value = []
+}
+
+function pruneSelectedAccountIds() {
+  const oauthIdSet = new Set(oauthAccounts.value.map(a => accountId(a.id)))
+  const apiIdSet = new Set(apiAccounts.value.map(a => accountId(a.id)))
+  selectedOAuthIds.value = selectedOAuthIds.value.filter(id => oauthIdSet.has(id))
+  selectedAPIIds.value = selectedAPIIds.value.filter(id => apiIdSet.has(id))
 }
 
 function pctColor(remainPct) {
@@ -2104,7 +2447,22 @@ function showToast(message, type = 'success') {
   setTimeout(() => { toast.value.show = false }, 3500)
 }
 
+watch([filteredOAuthAccounts, apiAccounts], () => {
+  pruneSelectedAccountIds()
+  if (oauthPage.value > oauthTotalPages.value) {
+    oauthPage.value = oauthTotalPages.value
+  }
+  if (apiPage.value > apiTotalPages.value) {
+    apiPage.value = apiTotalPages.value
+  }
+})
+
 onMounted(loadAccounts)
+onBeforeUnmount(() => {
+  const sessionId = oauthState.value.sessionId
+  stopOAuthPolling()
+  cancelOAuthSession(sessionId)
+})
 </script>
 
 <style scoped>
@@ -2114,8 +2472,35 @@ onMounted(loadAccounts)
 .account-card-compact:hover {
   @apply border-blue-500/40 shadow-md shadow-blue-500/5;
 }
+.account-card-compact--selected {
+  @apply border-red-500/40 ring-1 ring-red-500/30;
+}
 .account-card-compact--api:hover {
   @apply border-emerald-500/40 shadow-emerald-500/5;
+}
+
+.selection-checkbox {
+  @apply relative inline-flex items-center justify-center cursor-pointer;
+}
+.selection-checkbox input {
+  @apply sr-only;
+}
+.selection-checkbox span {
+  @apply relative inline-block w-4 h-4 rounded border border-gray-500 bg-gray-900/80 transition-colors;
+}
+.selection-checkbox input:checked + span {
+  @apply bg-red-500 border-red-400;
+}
+.selection-checkbox input:checked + span::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 .card-btn {

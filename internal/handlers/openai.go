@@ -1,14 +1,20 @@
 package handlers
 
 import (
+	"bytes"
 	"easyllm/internal/models"
 	openaiplatform "easyllm/internal/platforms/openai"
 	"easyllm/internal/proxy"
 	"easyllm/internal/storage"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"html"
+	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,21 +25,40 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type OpenAIHandler struct {
-	storage       *storage.OpenAIStorage
-	codexStorage  *storage.CodexStorage
-	mu            sync.Mutex
-	oauthSessions map[string]*openaiOAuthSession
+	storage               *storage.OpenAIStorage
+	codexStorage          *storage.CodexStorage
+	mu                    sync.Mutex
+	oauthSessions         map[string]*openaiOAuthSession
+	oauthCallbackServer   *http.Server
+	oauthCallbackListener net.Listener
+	oauthCallbackStarted  bool
 }
 
 type openaiOAuthSession struct {
-	State        string
-	CodeVerifier string
-	RedirectURI  string
-	CreatedAt    time.Time
+	State              string
+	CodeVerifier       string
+	RedirectURI        string
+	CreatedAt          time.Time
+	AuthorizationCode  string
+	LastError          string
+	CallbackReceivedAt *time.Time
 }
+
+const (
+	openaiOAuthSessionTTL          = 10 * time.Minute
+	defaultOpenAIOAuthRedirectURI  = "http://localhost:1455/auth/callback"
+	defaultOpenAIOAuthCallbackBase = "http://localhost:1455"
+	defaultOpenAIOAuthCallbackAddr = "127.0.0.1:1455"
+)
+
+var (
+	errOpenAIOAuthSessionNotFound = errors.New("oauth session not found")
+	errOpenAIOAuthSessionExpired  = errors.New("oauth session expired")
+)
 
 func NewOpenAIHandler(s *storage.OpenAIStorage, cs *storage.CodexStorage) *OpenAIHandler {
 	h := &OpenAIHandler{
@@ -52,7 +77,7 @@ func (h *OpenAIHandler) cleanExpiredOAuthSessions() {
 	for range ticker.C {
 		h.mu.Lock()
 		for id, sess := range h.oauthSessions {
-			if time.Since(sess.CreatedAt) > 10*time.Minute {
+			if time.Since(sess.CreatedAt) > openaiOAuthSessionTTL {
 				delete(h.oauthSessions, id)
 			}
 		}
@@ -85,6 +110,8 @@ func (h *OpenAIHandler) RegisterRoutes(rg *gin.RouterGroup) {
 
 	// OAuth flow
 	g.POST("/oauth/generate-url", h.GenerateOAuthURL)
+	g.GET("/oauth/sessions/:id", h.GetOAuthSession)
+	g.DELETE("/oauth/sessions/:id", h.CancelOAuthSession)
 	g.POST("/oauth/exchange-code", h.ExchangeCode)
 
 	// API account management
@@ -133,6 +160,11 @@ func (h *OpenAIHandler) AddAccount(c *gin.Context) {
 	if account.AccountType == "" {
 		account.AccountType = models.OpenAIAccountTypeOAuth
 	}
+	account.Email = strings.TrimSpace(account.Email)
+	if account.Email == "" {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "email is required", Code: "INVALID_REQUEST"})
+		return
+	}
 	account.CreatedAt = time.Now()
 	account.UpdatedAt = time.Now()
 	if err := h.storage.Save(&account); err != nil {
@@ -144,12 +176,30 @@ func (h *OpenAIHandler) AddAccount(c *gin.Context) {
 
 func (h *OpenAIHandler) UpdateAccount(c *gin.Context) {
 	id := c.Param("id")
+	existing, err := h.storage.Get(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
+		return
+	}
 	var account models.OpenAIAccount
 	if err := c.ShouldBindJSON(&account); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
+	account.Email = strings.TrimSpace(account.Email)
+	if account.Email == "" {
+		account.Email = existing.Email
+	}
+	account = mergeOpenAIAccountUpdate(existing, account)
 	account.ID = id
+	account.AccountType = existing.AccountType
+	account.CreatedAt = existing.CreatedAt
 	account.UpdatedAt = time.Now()
 	if err := h.storage.Save(&account); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
@@ -160,18 +210,17 @@ func (h *OpenAIHandler) UpdateAccount(c *gin.Context) {
 
 func (h *OpenAIHandler) DeleteAccount(c *gin.Context) {
 	id := c.Param("id")
-	fmt.Printf("[OpenAI] Attempting to delete account ID: %s\n", id)
-
-	db := storage.GetDB()
-	res := db.Unscoped().Where("id = ?", id).Delete(&models.OpenAIAccount{})
-	if res.Error != nil {
-		fmt.Printf("[OpenAI] Delete error: %v\n", res.Error)
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: res.Error.Error(), Code: "STORAGE_ERROR"})
+	if err := h.storage.Delete(id); err != nil {
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
 		return
 	}
-
-	fmt.Printf("[OpenAI] Delete success. Rows affected: %d\n", res.RowsAffected)
-	c.JSON(http.StatusOK, gin.H{"success": true, "rows_affected": res.RowsAffected})
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func (h *OpenAIHandler) DeleteAccounts(c *gin.Context) {
@@ -182,15 +231,15 @@ func (h *OpenAIHandler) DeleteAccounts(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
-
-	db := storage.GetDB()
-	res := db.Unscoped().Where("id IN ?", req.IDs).Delete(&models.OpenAIAccount{})
+	if len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "ids cannot be empty", Code: "INVALID_REQUEST"})
+		return
+	}
+	res := storage.GetDB().Where("id IN ?", req.IDs).Delete(&models.OpenAIAccount{})
 	if res.Error != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: res.Error.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
-
-	fmt.Printf("[OpenAI] Bulk delete success. Rows affected: %d\n", res.RowsAffected)
 	c.JSON(http.StatusOK, gin.H{"success": true, "rows_affected": res.RowsAffected})
 }
 
@@ -227,8 +276,14 @@ func (h *OpenAIHandler) SwitchAccount(c *gin.Context) {
 
 	now := time.Now()
 	account.LastUsedAt = &now
-	h.storage.Save(account)
-	h.storage.SetCodexActive(account.ID) // mark this account as currently active in ~/.codex/auth.json
+	if err := h.storage.Save(account); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		return
+	}
+	if err := h.storage.SetCodexActive(account.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + account.Email})
 }
@@ -258,8 +313,14 @@ func (h *OpenAIHandler) SwitchAPIAccount(c *gin.Context) {
 
 	now := time.Now()
 	account.LastUsedAt = &now
-	h.storage.Save(account)
-	h.storage.SetCodexActive(account.ID) // mark as active
+	if err := h.storage.Save(account); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		return
+	}
+	if err := h.storage.SetCodexActive(account.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + account.Email})
 }
@@ -381,6 +442,50 @@ type tokenFileData struct {
 	Expired      string `json:"expired"`
 }
 
+type tokenImportResult struct {
+	Filename string `json:"filename"`
+	Success  bool   `json:"success"`
+	Email    string `json:"email,omitempty"`
+	Skipped  bool   `json:"skipped,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+func parseTokenFileEntries(raw []byte) ([]tokenFileData, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty token file")
+	}
+
+	if trimmed[0] == '[' {
+		var entries []tokenFileData
+		if err := json.Unmarshal(trimmed, &entries); err != nil {
+			return nil, err
+		}
+		if len(entries) == 0 {
+			return nil, fmt.Errorf("no token entries found")
+		}
+		return entries, nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	var entries []tokenFileData
+	for {
+		var entry tokenFileData
+		if err := dec.Decode(&entry); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no token entries found")
+	}
+	return entries, nil
+}
+
 // importTokenFileData converts a tokenFileData into an OpenAIAccount and saves it
 // Returns (account, skipped, error)
 func (h *OpenAIHandler) importSingleTokenFile(data *tokenFileData, existingAccounts *[]models.OpenAIAccount) (*models.OpenAIAccount, bool, error) {
@@ -454,16 +559,8 @@ func (h *OpenAIHandler) ImportByTokenFiles(c *gin.Context) {
 
 	existingMu := sync.Mutex{}
 	existingAccounts, _ := h.storage.List()
-
-	type result struct {
-		Filename string `json:"filename"`
-		Success  bool   `json:"success"`
-		Email    string `json:"email,omitempty"`
-		Skipped  bool   `json:"skipped,omitempty"`
-		Error    string `json:"error,omitempty"`
-	}
-
-	results := make([]result, len(files))
+	resultsMu := sync.Mutex{}
+	results := make([]tokenImportResult, 0, len(files))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 10) // Higher concurrency - no network calls needed
 
@@ -476,26 +573,46 @@ func (h *OpenAIHandler) ImportByTokenFiles(c *gin.Context) {
 
 			f, err := fileHeader.Open()
 			if err != nil {
-				results[idx] = result{Filename: fileHeader.Filename, Success: false, Error: "open error: " + err.Error()}
+				resultsMu.Lock()
+				results = append(results, tokenImportResult{Filename: fileHeader.Filename, Success: false, Error: "open error: " + err.Error()})
+				resultsMu.Unlock()
 				return
 			}
 			defer f.Close()
 
-			var data tokenFileData
-			if err := json.NewDecoder(f).Decode(&data); err != nil {
-				results[idx] = result{Filename: fileHeader.Filename, Success: false, Error: "parse error: " + err.Error()}
+			raw, err := io.ReadAll(f)
+			if err != nil {
+				resultsMu.Lock()
+				results = append(results, tokenImportResult{Filename: fileHeader.Filename, Success: false, Error: "read error: " + err.Error()})
+				resultsMu.Unlock()
 				return
 			}
 
-			existingMu.Lock()
-			account, skipped, err := h.importSingleTokenFile(&data, &existingAccounts)
-			existingMu.Unlock()
-
+			entries, err := parseTokenFileEntries(raw)
 			if err != nil {
-				results[idx] = result{Filename: fileHeader.Filename, Success: false, Skipped: skipped, Error: err.Error(), Email: data.Email}
-			} else {
-				results[idx] = result{Filename: fileHeader.Filename, Success: true, Email: account.Email}
+				resultsMu.Lock()
+				results = append(results, tokenImportResult{Filename: fileHeader.Filename, Success: false, Error: "parse error: " + err.Error()})
+				resultsMu.Unlock()
+				return
 			}
+
+			fileResults := make([]tokenImportResult, 0, len(entries))
+			for _, data := range entries {
+				entry := data
+				existingMu.Lock()
+				account, skipped, err := h.importSingleTokenFile(&entry, &existingAccounts)
+				existingMu.Unlock()
+
+				if err != nil {
+					fileResults = append(fileResults, tokenImportResult{Filename: fileHeader.Filename, Success: false, Skipped: skipped, Error: err.Error(), Email: entry.Email})
+					continue
+				}
+				fileResults = append(fileResults, tokenImportResult{Filename: fileHeader.Filename, Success: true, Email: account.Email})
+			}
+
+			resultsMu.Lock()
+			results = append(results, fileResults...)
+			resultsMu.Unlock()
 		}(i, fh)
 	}
 
@@ -512,10 +629,10 @@ func (h *OpenAIHandler) ImportByTokenFiles(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"total":   len(files),
+		"total":   len(results),
 		"success": successCount,
 		"skipped": skippedCount,
-		"failed":  len(files) - successCount - skippedCount,
+		"failed":  len(results) - successCount - skippedCount,
 		"results": results,
 	})
 }
@@ -573,16 +690,8 @@ func (h *OpenAIHandler) ImportByScanDir(c *gin.Context) {
 
 	existingMu := sync.Mutex{}
 	existingAccounts, _ := h.storage.List()
-
-	type result struct {
-		Filename string `json:"filename"`
-		Success  bool   `json:"success"`
-		Email    string `json:"email,omitempty"`
-		Skipped  bool   `json:"skipped,omitempty"`
-		Error    string `json:"error,omitempty"`
-	}
-
-	results := make([]result, len(jsonFiles))
+	resultsMu := sync.Mutex{}
+	results := make([]tokenImportResult, 0, len(jsonFiles))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 20) // High concurrency - pure file I/O, no network
 
@@ -596,25 +705,37 @@ func (h *OpenAIHandler) ImportByScanDir(c *gin.Context) {
 			fname := filepath.Base(filePath)
 			raw, err := os.ReadFile(filePath)
 			if err != nil {
-				results[idx] = result{Filename: fname, Success: false, Error: err.Error()}
+				resultsMu.Lock()
+				results = append(results, tokenImportResult{Filename: fname, Success: false, Error: err.Error()})
+				resultsMu.Unlock()
 				return
 			}
 
-			var data tokenFileData
-			if err := json.Unmarshal(raw, &data); err != nil {
-				results[idx] = result{Filename: fname, Success: false, Error: "parse error: " + err.Error()}
-				return
-			}
-
-			existingMu.Lock()
-			account, skipped, err := h.importSingleTokenFile(&data, &existingAccounts)
-			existingMu.Unlock()
-
+			entries, err := parseTokenFileEntries(raw)
 			if err != nil {
-				results[idx] = result{Filename: fname, Success: false, Skipped: skipped, Error: err.Error(), Email: data.Email}
-			} else {
-				results[idx] = result{Filename: fname, Success: true, Email: account.Email}
+				resultsMu.Lock()
+				results = append(results, tokenImportResult{Filename: fname, Success: false, Error: "parse error: " + err.Error()})
+				resultsMu.Unlock()
+				return
 			}
+
+			fileResults := make([]tokenImportResult, 0, len(entries))
+			for _, data := range entries {
+				entry := data
+				existingMu.Lock()
+				account, skipped, err := h.importSingleTokenFile(&entry, &existingAccounts)
+				existingMu.Unlock()
+
+				if err != nil {
+					fileResults = append(fileResults, tokenImportResult{Filename: fname, Success: false, Skipped: skipped, Error: err.Error(), Email: entry.Email})
+					continue
+				}
+				fileResults = append(fileResults, tokenImportResult{Filename: fname, Success: true, Email: account.Email})
+			}
+
+			resultsMu.Lock()
+			results = append(results, fileResults...)
+			resultsMu.Unlock()
 		}(i, fpath)
 	}
 
@@ -631,10 +752,10 @@ func (h *OpenAIHandler) ImportByScanDir(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"total":   len(jsonFiles),
+		"total":   len(results),
 		"success": successCount,
 		"skipped": skippedCount,
-		"failed":  len(jsonFiles) - successCount - skippedCount,
+		"failed":  len(results) - successCount - skippedCount,
 		"results": results,
 	})
 }
@@ -979,6 +1100,69 @@ func (h *OpenAIHandler) ImportByRefreshTokens(c *gin.Context) {
 	})
 }
 
+// ImportOAuthAccountByRefreshToken 用单个 refresh_token 向 OpenAI 换票并 upsert 一条 OAuth 账号（供 CLI / 脚本）.
+func (h *OpenAIHandler) ImportOAuthAccountByRefreshToken(refreshToken string) (*models.OpenAIAccount, error) {
+	rt := strings.TrimSpace(refreshToken)
+	if rt == "" {
+		return nil, fmt.Errorf("empty refresh_token")
+	}
+	tokenResp, err := openaiplatform.RefreshToken(rt)
+	if err != nil {
+		return nil, err
+	}
+	var email string
+	var chatgptAccountID, chatgptUserID, orgID *string
+	var openaiAuthJSON string
+	if tokenResp.IDToken != "" {
+		if userInfo := openaiplatform.ParseIDToken(tokenResp.IDToken); userInfo != nil {
+			if userInfo.Email != nil {
+				email = strings.TrimSpace(*userInfo.Email)
+			}
+			chatgptAccountID = userInfo.ChatGPTAccountID
+			chatgptUserID = userInfo.ChatGPTUserID
+			orgID = userInfo.OrganizationID
+		}
+		openaiAuthJSON = openaiplatform.ExtractOpenAIAuthJSON(tokenResp.IDToken)
+	}
+	if email == "" {
+		return nil, fmt.Errorf("failed to get email from id_token")
+	}
+	now := time.Now()
+	var expiresAt *time.Time
+	if tokenResp.ExpiresIn > 0 {
+		t := now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+		expiresAt = &t
+	}
+	refreshValue := rt
+	if tokenResp.RefreshToken != "" {
+		refreshValue = tokenResp.RefreshToken
+	}
+	account := &models.OpenAIAccount{
+		Email:            email,
+		AccountType:      models.OpenAIAccountTypeOAuth,
+		AccessToken:      sPtr(tokenResp.AccessToken),
+		RefreshToken:     sPtr(refreshValue),
+		ExpiresAt:        expiresAt,
+		ChatGPTAccountID: chatgptAccountID,
+		ChatGPTUserID:    chatgptUserID,
+		OrganizationID:   orgID,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	if tokenResp.IDToken != "" {
+		account.IDToken = sPtr(tokenResp.IDToken)
+	}
+	if openaiAuthJSON != "" {
+		account.OpenAIAuthJSON = sPtr(openaiAuthJSON)
+	}
+	existingAccounts, err := h.storage.List()
+	if err != nil {
+		return nil, err
+	}
+	out, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts)
+	return out, err
+}
+
 // GenerateOAuthURL generates an OpenAI OAuth authorization URL
 func (h *OpenAIHandler) GenerateOAuthURL(c *gin.Context) {
 	var req struct {
@@ -986,7 +1170,7 @@ func (h *OpenAIHandler) GenerateOAuthURL(c *gin.Context) {
 	}
 	c.ShouldBindJSON(&req)
 
-	redirectURI := "http://localhost:1455/auth/callback"
+	redirectURI := defaultOpenAIOAuthRedirectURI
 	if req.RedirectURI != nil && *req.RedirectURI != "" {
 		redirectURI = *req.RedirectURI
 	}
@@ -1006,10 +1190,71 @@ func (h *OpenAIHandler) GenerateOAuthURL(c *gin.Context) {
 	}
 	h.mu.Unlock()
 
+	autoCallbackEnabled := false
+	autoCallbackError := ""
+	if supportsAutoOpenAIOAuthCallback(redirectURI) {
+		if err := h.ensureOAuthCallbackServer(); err != nil {
+			autoCallbackError = fmt.Sprintf("自动回调不可用: %v", err)
+		} else {
+			autoCallbackEnabled = true
+		}
+	}
+
+	payload := gin.H{
+		"auth_url":              authURL,
+		"session_id":            sessionID,
+		"auto_callback_enabled": autoCallbackEnabled,
+	}
+	if autoCallbackError != "" {
+		payload["auto_callback_error"] = autoCallbackError
+	}
+	c.JSON(http.StatusOK, payload)
+}
+
+func (h *OpenAIHandler) GetOAuthSession(c *gin.Context) {
+	sessionID := c.Param("id")
+	session, err := h.getOAuthSession(sessionID)
+	if err != nil {
+		status := http.StatusNotFound
+		code := "SESSION_NOT_FOUND"
+		message := "Session not found or expired"
+		if errors.Is(err, errOpenAIOAuthSessionExpired) {
+			status = http.StatusGone
+			code = "SESSION_EXPIRED"
+			message = "Session expired"
+		}
+		c.JSON(status, models.APIError{Error: message, Code: code})
+		return
+	}
+
+	status := "pending"
+	if session.LastError != "" {
+		status = "error"
+	} else if session.AuthorizationCode != "" {
+		status = "callback_received"
+	}
+
+	expiresIn := int64(time.Until(session.CreatedAt.Add(openaiOAuthSessionTTL)).Seconds())
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"auth_url":   authURL,
-		"session_id": sessionID,
+		"session_id":                sessionID,
+		"status":                    status,
+		"authorization_code_ready":  session.AuthorizationCode != "",
+		"expires_in_seconds":        expiresIn,
+		"error":                     session.LastError,
+		"callback_received_at_unix": timePtrUnix(session.CallbackReceivedAt),
 	})
+}
+
+func (h *OpenAIHandler) CancelOAuthSession(c *gin.Context) {
+	if !h.deleteOAuthSession(c.Param("id")) {
+		c.JSON(http.StatusNotFound, models.APIError{Error: "Session not found or expired", Code: "SESSION_NOT_FOUND"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // ExchangeCode completes OAuth login with the authorization code
@@ -1017,6 +1262,7 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 	var req struct {
 		SessionID   string  `json:"session_id"`
 		Code        string  `json:"code"`
+		CallbackURL string  `json:"callback_url"`
 		RedirectURI *string `json:"redirect_uri"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1024,15 +1270,17 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 		return
 	}
 
-	h.mu.Lock()
-	session, ok := h.oauthSessions[req.SessionID]
-	if ok {
-		delete(h.oauthSessions, req.SessionID)
-	}
-	h.mu.Unlock()
-
-	if !ok {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "Session not found or expired", Code: "SESSION_NOT_FOUND"})
+	session, err := h.getOAuthSession(req.SessionID)
+	if err != nil {
+		status := http.StatusBadRequest
+		code := "SESSION_NOT_FOUND"
+		message := "Session not found or expired"
+		if errors.Is(err, errOpenAIOAuthSessionExpired) {
+			status = http.StatusGone
+			code = "SESSION_EXPIRED"
+			message = "Session expired"
+		}
+		c.JSON(status, models.APIError{Error: message, Code: code})
 		return
 	}
 
@@ -1041,7 +1289,13 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 		redirectURI = *req.RedirectURI
 	}
 
-	tokenResp, err := openaiplatform.ExchangeCode(req.Code, session.CodeVerifier, redirectURI)
+	code, err := resolveOpenAIOAuthCode(session, req.Code, req.CallbackURL)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+
+	tokenResp, err := openaiplatform.ExchangeCode(code, session.CodeVerifier, redirectURI)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "EXCHANGE_ERROR"})
 		return
@@ -1073,6 +1327,7 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 		if strings.EqualFold(existing.Email, email) &&
 			(chatgptAccountID == nil || existing.ChatGPTAccountID == nil ||
 				*chatgptAccountID == *existing.ChatGPTAccountID) {
+			h.deleteOAuthSession(req.SessionID)
 			c.JSON(http.StatusConflict, models.APIError{Error: "该账号已存在", Code: "DUPLICATE"})
 			return
 		}
@@ -1107,7 +1362,254 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
+	h.deleteOAuthSession(req.SessionID)
 	c.JSON(http.StatusOK, account)
+}
+
+func supportsAutoOpenAIOAuthCallback(redirectURI string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(redirectURI))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return false
+	}
+	if parsed.Port() != "1455" {
+		return false
+	}
+	return parsed.Path == "/auth/callback"
+}
+
+func (h *OpenAIHandler) ensureOAuthCallbackServer() error {
+	h.mu.Lock()
+	if h.oauthCallbackStarted {
+		h.mu.Unlock()
+		return nil
+	}
+
+	listener, err := net.Listen("tcp", defaultOpenAIOAuthCallbackAddr)
+	if err != nil {
+		h.mu.Unlock()
+		return err
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/auth/callback", h.handleOAuthCallback)
+	mux.HandleFunc("/cancel", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("cancelled"))
+	})
+
+	server := &http.Server{Handler: mux}
+	h.oauthCallbackListener = listener
+	h.oauthCallbackServer = server
+	h.oauthCallbackStarted = true
+	h.mu.Unlock()
+
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			h.mu.Lock()
+			h.oauthCallbackStarted = false
+			h.oauthCallbackServer = nil
+			h.oauthCallbackListener = nil
+			h.mu.Unlock()
+		}
+	}()
+
+	return nil
+}
+
+func (h *OpenAIHandler) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	oauthErr := strings.TrimSpace(r.URL.Query().Get("error"))
+	oauthErrDescription := strings.TrimSpace(r.URL.Query().Get("error_description"))
+
+	if state == "" {
+		writeOpenAIOAuthCallbackHTML(w, http.StatusBadRequest, "OAuth failed", "Missing state in callback.")
+		return
+	}
+
+	if err := h.recordOAuthCallback(state, code, oauthErr, oauthErrDescription); err != nil {
+		status := http.StatusBadRequest
+		title := "OAuth failed"
+		message := err.Error()
+		if errors.Is(err, errOpenAIOAuthSessionExpired) {
+			status = http.StatusGone
+			message = "This authorization session has expired. Please retry from EasyLLM."
+		} else if errors.Is(err, errOpenAIOAuthSessionNotFound) {
+			message = "This authorization session was not found. Please retry from EasyLLM."
+		}
+		writeOpenAIOAuthCallbackHTML(w, status, title, message)
+		return
+	}
+
+	if oauthErr != "" {
+		writeOpenAIOAuthCallbackHTML(w, http.StatusBadRequest, "OAuth cancelled", formatOpenAIOAuthError(oauthErr, oauthErrDescription))
+		return
+	}
+
+	writeOpenAIOAuthCallbackHTML(w, http.StatusOK, "Authorization complete", "You can close this tab and return to EasyLLM.")
+}
+
+func writeOpenAIOAuthCallbackHTML(w http.ResponseWriter, status int, title, message string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>%s</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { width: min(92vw, 520px); background: rgba(15, 23, 42, 0.96); border: 1px solid #334155; border-radius: 20px; padding: 32px; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.35); }
+    h1 { margin: 0 0 12px; font-size: 28px; }
+    p { margin: 0; line-height: 1.6; color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>%s</h1>
+    <p>%s</p>
+  </div>
+</body>
+</html>`, html.EscapeString(title), html.EscapeString(title), html.EscapeString(message))
+}
+
+func (h *OpenAIHandler) recordOAuthCallback(state, code, oauthErr, oauthErrDescription string) error {
+	now := time.Now()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for id, session := range h.oauthSessions {
+		if session.State != state {
+			continue
+		}
+		if now.Sub(session.CreatedAt) > openaiOAuthSessionTTL {
+			delete(h.oauthSessions, id)
+			return errOpenAIOAuthSessionExpired
+		}
+		session.CallbackReceivedAt = &now
+		if oauthErr != "" {
+			session.AuthorizationCode = ""
+			session.LastError = formatOpenAIOAuthError(oauthErr, oauthErrDescription)
+			return nil
+		}
+		if code == "" {
+			return fmt.Errorf("missing authorization code")
+		}
+		session.AuthorizationCode = code
+		session.LastError = ""
+		return nil
+	}
+
+	return errOpenAIOAuthSessionNotFound
+}
+
+func (h *OpenAIHandler) getOAuthSession(sessionID string) (openaiOAuthSession, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	session, ok := h.oauthSessions[sessionID]
+	if !ok {
+		return openaiOAuthSession{}, errOpenAIOAuthSessionNotFound
+	}
+	if time.Since(session.CreatedAt) > openaiOAuthSessionTTL {
+		delete(h.oauthSessions, sessionID)
+		return openaiOAuthSession{}, errOpenAIOAuthSessionExpired
+	}
+
+	return *session, nil
+}
+
+func (h *OpenAIHandler) deleteOAuthSession(sessionID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if _, ok := h.oauthSessions[sessionID]; !ok {
+		return false
+	}
+	delete(h.oauthSessions, sessionID)
+	return true
+}
+
+func resolveOpenAIOAuthCode(session openaiOAuthSession, rawCode, rawCallbackURL string) (string, error) {
+	if code := strings.TrimSpace(rawCode); code != "" {
+		return code, nil
+	}
+	if callbackURL := strings.TrimSpace(rawCallbackURL); callbackURL != "" {
+		return extractOpenAIOAuthCodeFromCallbackURL(session.State, callbackURL)
+	}
+	if session.LastError != "" {
+		return "", errors.New(session.LastError)
+	}
+	if code := strings.TrimSpace(session.AuthorizationCode); code != "" {
+		return code, nil
+	}
+	return "", fmt.Errorf("authorization not completed yet")
+}
+
+func extractOpenAIOAuthCodeFromCallbackURL(expectedState, raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("callback URL is required")
+	}
+	if !strings.Contains(trimmed, "=") && !strings.Contains(trimmed, "://") && !strings.HasPrefix(trimmed, "/") && !strings.HasPrefix(trimmed, "?") {
+		return trimmed, nil
+	}
+
+	var parsed *url.URL
+	var err error
+	switch {
+	case strings.HasPrefix(trimmed, "http://"), strings.HasPrefix(trimmed, "https://"):
+		parsed, err = url.Parse(trimmed)
+	case strings.HasPrefix(trimmed, "/"):
+		parsed, err = url.Parse(defaultOpenAIOAuthCallbackBase + trimmed)
+	default:
+		parsed, err = url.Parse(defaultOpenAIOAuthRedirectURI + "?" + strings.TrimLeft(trimmed, "?"))
+	}
+	if err != nil {
+		return "", fmt.Errorf("invalid callback URL: %w", err)
+	}
+
+	query := parsed.Query()
+	if state := strings.TrimSpace(query.Get("state")); expectedState != "" && state != "" && state != expectedState {
+		return "", fmt.Errorf("callback state mismatch")
+	}
+	if oauthErr := strings.TrimSpace(query.Get("error")); oauthErr != "" {
+		return "", errors.New(formatOpenAIOAuthError(oauthErr, strings.TrimSpace(query.Get("error_description"))))
+	}
+
+	code := strings.TrimSpace(query.Get("code"))
+	if code == "" {
+		return "", fmt.Errorf("authorization code not found in callback URL")
+	}
+	return code, nil
+}
+
+func formatOpenAIOAuthError(code, description string) string {
+	if description != "" {
+		return fmt.Sprintf("%s: %s", code, description)
+	}
+	if code == "" {
+		return "oauth failed"
+	}
+	return code
+}
+
+func timePtrUnix(v *time.Time) any {
+	if v == nil {
+		return nil
+	}
+	return v.Unix()
 }
 
 // AddAPIAccount adds an API key-based Codex configuration
@@ -1122,6 +1624,14 @@ func (h *OpenAIHandler) AddAPIAccount(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	req.ModelProvider = strings.TrimSpace(req.ModelProvider)
+	req.Model = strings.TrimSpace(req.Model)
+	req.BaseURL = strings.TrimSpace(req.BaseURL)
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	if req.ModelProvider == "" || req.Model == "" || req.BaseURL == "" || req.APIKey == "" {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "model_provider, model, base_url and api_key are required", Code: "INVALID_REQUEST"})
 		return
 	}
 
@@ -1177,6 +1687,14 @@ func (h *OpenAIHandler) UpdateAPIAccount(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
+	req.ModelProvider = strings.TrimSpace(req.ModelProvider)
+	req.Model = strings.TrimSpace(req.Model)
+	req.BaseURL = strings.TrimSpace(req.BaseURL)
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	if req.ModelProvider == "" || req.Model == "" || req.BaseURL == "" {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "model_provider, model and base_url are required", Code: "INVALID_REQUEST"})
+		return
+	}
 
 	existing.Email = req.ModelProvider
 	if existing.Email == "" {
@@ -1185,7 +1703,9 @@ func (h *OpenAIHandler) UpdateAPIAccount(c *gin.Context) {
 	existing.ModelProvider = sPtr(req.ModelProvider)
 	existing.Model = sPtr(req.Model)
 	existing.ModelReasoningEffort = req.ModelReasoningEffort
-	existing.WireAPI = req.WireAPI
+	if req.WireAPI != nil && strings.TrimSpace(*req.WireAPI) != "" {
+		existing.WireAPI = sPtr(strings.TrimSpace(*req.WireAPI))
+	}
 	existing.BaseURL = sPtr(req.BaseURL)
 	if req.APIKey != "" {
 		existing.APIKey = sPtr(req.APIKey)
@@ -1219,6 +1739,12 @@ func (h *OpenAIHandler) AddCodexAccount(c *gin.Context) {
 	if account.ID == "" {
 		account.ID = uuid.New().String()
 	}
+	account.Email = strings.TrimSpace(account.Email)
+	account.AccessToken = strings.TrimSpace(account.AccessToken)
+	if account.Email == "" || account.AccessToken == "" {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "email and access_token are required", Code: "INVALID_REQUEST"})
+		return
+	}
 	account.CreatedAt = time.Now()
 	account.UpdatedAt = time.Now()
 	account.Enabled = true
@@ -1231,19 +1757,49 @@ func (h *OpenAIHandler) AddCodexAccount(c *gin.Context) {
 
 func (h *OpenAIHandler) UpdateCodexAccount(c *gin.Context) {
 	id := c.Param("id")
+	existing, err := h.codexStorage.GetAccount(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
+		return
+	}
 	var account models.CodexAccount
 	if err := c.ShouldBindJSON(&account); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
+	account.Email = strings.TrimSpace(account.Email)
+	account.AccessToken = strings.TrimSpace(account.AccessToken)
+	if account.Email == "" || account.AccessToken == "" {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "email and access_token are required", Code: "INVALID_REQUEST"})
+		return
+	}
 	account.ID = id
-	h.codexStorage.SaveAccount(&account)
+	account.CreatedAt = existing.CreatedAt
+	account.RequestCount = existing.RequestCount
+	account.LastUsedAt = existing.LastUsedAt
+	account.UpdatedAt = time.Now()
+	if err := h.codexStorage.SaveAccount(&account); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		return
+	}
 	c.JSON(http.StatusOK, account)
 }
 
 func (h *OpenAIHandler) DeleteCodexAccount(c *gin.Context) {
 	if err := h.codexStorage.DeleteAccount(c.Param("id")); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
@@ -1251,16 +1807,23 @@ func (h *OpenAIHandler) DeleteCodexAccount(c *gin.Context) {
 
 func (h *OpenAIHandler) ToggleCodexAccount(c *gin.Context) {
 	id := c.Param("id")
-	accounts, _ := h.codexStorage.LoadAllAccounts()
-	for _, a := range accounts {
-		if a.ID == id {
-			a.Enabled = !a.Enabled
-			h.codexStorage.SaveAccount(a)
-			c.JSON(http.StatusOK, gin.H{"enabled": a.Enabled})
-			return
+	account, err := h.codexStorage.GetAccount(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
 		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
+		return
 	}
-	c.JSON(http.StatusNotFound, models.APIError{Error: "Account not found", Code: "NOT_FOUND"})
+	account.Enabled = !account.Enabled
+	if err := h.codexStorage.SaveAccount(account); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"enabled": account.Enabled})
 }
 
 func (h *OpenAIHandler) GetCodexPoolStatus(c *gin.Context) {
@@ -1373,15 +1936,50 @@ func (h *OpenAIHandler) ToggleProxyAll(c *gin.Context) {
 
 // ---- Quota ----
 
-// exportedOAuthAccount 是导出文件中 oauth_accounts 数组里每条记录的格式
+// exportedOAuthAccount 是导出文件中 oauth_accounts 每条记录的格式。
+// 导出时与 Codex / 常见 token JSON 一致（account_id、expired、disabled、last_refresh、type）；
+// 导入仍兼容旧字段 chatgpt_account_id、expires_at。
 type exportedOAuthAccount struct {
-	Email            string `json:"email"`
-	RefreshToken     string `json:"refresh_token"`
 	AccessToken      string `json:"access_token"`
+	AccountID        string `json:"account_id,omitempty"`
+	Disabled         bool   `json:"disabled"`
+	Email            string `json:"email"`
+	Expired          string `json:"expired,omitempty"`
 	IDToken          string `json:"id_token"`
-	ChatGPTAccountID string `json:"chatgpt_account_id"`
-	ExpiresAt        string `json:"expires_at"`
+	LastRefresh      string `json:"last_refresh,omitempty"`
+	RefreshToken     string `json:"refresh_token"`
+	Type             string `json:"type"`
+	ChatGPTAccountID string `json:"chatgpt_account_id,omitempty"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
 	Status           string `json:"status,omitempty"`
+}
+
+func exportedOAuthExpiresSource(a exportedOAuthAccount) string {
+	if strings.TrimSpace(a.Expired) != "" {
+		return strings.TrimSpace(a.Expired)
+	}
+	return strings.TrimSpace(a.ExpiresAt)
+}
+
+func exportedOAuthChatGPTAccountID(a exportedOAuthAccount) string {
+	if strings.TrimSpace(a.ChatGPTAccountID) != "" {
+		return strings.TrimSpace(a.ChatGPTAccountID)
+	}
+	return strings.TrimSpace(a.AccountID)
+}
+
+func parseExportedOAuthTime(s string) (*time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, false
+	}
+	layouts := []string{time.RFC3339, time.RFC3339Nano}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return &t, true
+		}
+	}
+	return nil, false
 }
 
 // exportedAPIAccount 是导出文件中 api_accounts 数组里每条记录的格式
@@ -1412,7 +2010,7 @@ func (h *OpenAIHandler) ExportAccounts(c *gin.Context) {
 		APIAccounts   []exportedAPIAccount   `json:"api_accounts"`
 	}{
 		ExportedAt: time.Now().UTC().Format(time.RFC3339),
-		Usage:      "恢复时：在\"批量导入 → 从备份导入\"中上传此文件即可一键恢复所有账号，无需任何 API 调用。请妥善保管此文件。",
+		Usage:      "恢复时：在「批量导入 → 从备份导入」中上传此文件即可一键恢复所有账号，无需任何 API 调用。oauth_accounts 每条为 Codex 风格字段（account_id、expired、disabled、last_refresh、type 等）。仍兼容旧版 chatgpt_account_id / expires_at。请妥善保管此文件。",
 	}
 
 	for _, a := range accounts {
@@ -1429,19 +2027,23 @@ func (h *OpenAIHandler) ExportAccounts(c *gin.Context) {
 			continue
 		}
 
-		expiresAt := ""
+		var expiredStr, lastRefreshStr string
 		if a.ExpiresAt != nil {
-			expiresAt = a.ExpiresAt.UTC().Format(time.RFC3339)
+			expiredStr = a.ExpiresAt.In(time.Local).Format(time.RFC3339)
 		}
+		lastRefreshStr = a.UpdatedAt.In(time.Local).Format(time.RFC3339)
 
 		resp.OAuthAccounts = append(resp.OAuthAccounts, exportedOAuthAccount{
-			Email:            a.Email,
-			RefreshToken:     derefStr(a.RefreshToken),
-			AccessToken:      derefStr(a.AccessToken),
-			IDToken:          derefStr(a.IDToken),
-			ChatGPTAccountID: derefStr(a.ChatGPTAccountID),
-			ExpiresAt:        expiresAt,
-			Status:           a.Status,
+			AccessToken:  derefStr(a.AccessToken),
+			AccountID:    derefStr(a.ChatGPTAccountID),
+			Disabled:     a.Status != "" && a.Status != "active",
+			Email:        a.Email,
+			Expired:      expiredStr,
+			IDToken:      derefStr(a.IDToken),
+			LastRefresh:  lastRefreshStr,
+			RefreshToken: derefStr(a.RefreshToken),
+			Type:         "codex",
+			Status:       a.Status,
 		})
 	}
 
@@ -1490,16 +2092,23 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 		}
 
 		var expiresAt *time.Time
-		if a.ExpiresAt != "" {
-			if t, err := time.Parse(time.RFC3339, a.ExpiresAt); err == nil {
-				expiresAt = &t
+		if t, ok := parseExportedOAuthTime(exportedOAuthExpiresSource(a)); ok {
+			expiresAt = t
+		}
+
+		status := strings.TrimSpace(a.Status)
+		if status == "" {
+			if a.Disabled {
+				status = "inactive"
+			} else {
+				status = "active"
 			}
 		}
 
 		account := &models.OpenAIAccount{
 			Email:        a.Email,
 			AccountType:  models.OpenAIAccountTypeOAuth,
-			Status:       a.Status,
+			Status:       status,
 			AccessToken:  sPtr(a.AccessToken),
 			RefreshToken: sPtr(a.RefreshToken),
 			ExpiresAt:    expiresAt,
@@ -1517,8 +2126,8 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 				account.OpenAIAuthJSON = sPtr(j)
 			}
 		}
-		if a.ChatGPTAccountID != "" && account.ChatGPTAccountID == nil {
-			account.ChatGPTAccountID = sPtr(a.ChatGPTAccountID)
+		if cid := exportedOAuthChatGPTAccountID(a); cid != "" && account.ChatGPTAccountID == nil {
+			account.ChatGPTAccountID = sPtr(cid)
 		}
 
 		if _, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts); err != nil {
@@ -1582,29 +2191,181 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 	})
 }
 
+// flexSub2Unix unmarshals credentials.expires_at from int/float, numeric string, or RFC3339 time string.
+type flexSub2Unix struct{ Unix int64 }
+
+func (f *flexSub2Unix) UnmarshalJSON(b []byte) error {
+	f.Unix = 0
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return nil
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+			f.Unix = n
+			return nil
+		}
+		for _, layout := range []string{time.RFC3339, time.RFC3339Nano, "2006-01-02 15:04:05-07:00"} {
+			if t, err := time.Parse(layout, s); err == nil {
+				f.Unix = t.Unix()
+				return nil
+			}
+		}
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return nil
+	}
+	if v, err := n.Int64(); err == nil {
+		f.Unix = v
+		return nil
+	}
+	if fv, err := n.Float64(); err == nil {
+		f.Unix = int64(fv)
+	}
+	return nil
+}
+
+// flexSub2Int unmarshals JSON numbers that may be floats (e.g. 1.0 from JS) or numeric strings.
+type flexSub2Int int
+
+func (f *flexSub2Int) UnmarshalJSON(b []byte) error {
+	*f = 0
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return nil
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return nil
+		}
+		*f = flexSub2Int(n)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return nil
+	}
+	if v, err := n.Int64(); err == nil {
+		*f = flexSub2Int(v)
+		return nil
+	}
+	if fv, err := n.Float64(); err == nil {
+		*f = flexSub2Int(fv)
+	}
+	return nil
+}
+
+// flexSub2Float unmarshals rate_multiplier from number or numeric string.
+type flexSub2Float float64
+
+func (f *flexSub2Float) UnmarshalJSON(b []byte) error {
+	*f = 0
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return nil
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil
+		}
+		*f = flexSub2Float(v)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return nil
+	}
+	v, err := n.Float64()
+	if err != nil {
+		return nil
+	}
+	*f = flexSub2Float(v)
+	return nil
+}
+
+// flexSub2Bool accepts bool, 0/1 number, or "true"/"false" string (部分导出工具用数字表示布尔).
+type flexSub2Bool bool
+
+func (f *flexSub2Bool) UnmarshalJSON(b []byte) error {
+	*f = false
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	var v interface{}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return nil
+	}
+	switch x := v.(type) {
+	case bool:
+		*f = flexSub2Bool(x)
+	case float64:
+		*f = flexSub2Bool(x != 0)
+	case string:
+		s := strings.TrimSpace(strings.ToLower(x))
+		*f = flexSub2Bool(s == "true" || s == "1" || s == "yes")
+	default:
+		*f = false
+	}
+	return nil
+}
+
+// sub2apiCredentials matches Sub2API / 各工具导出的 credentials；字段类型尽量宽松避免 JSON 解析失败。
+type sub2apiCredentials struct {
+	AccessToken      string          `json:"access_token"`
+	IDToken          string          `json:"id_token"`
+	ChatgptAccountID string          `json:"chatgpt_account_id"`
+	ChatgptUserID    string          `json:"chatgpt_user_id"`
+	ClientID         string          `json:"client_id"`
+	ExpiresAt        flexSub2Unix    `json:"expires_at"`
+	ExpiresIn        flexSub2Int     `json:"expires_in"`
+	ModelMapping     json.RawMessage `json:"model_mapping"`
+	OrganizationID   string          `json:"organization_id"`
+	PlanType         string          `json:"plan_type"`
+	RefreshToken     string          `json:"refresh_token"`
+}
+
 // sub2api format structs
 type sub2apiAccount struct {
-	Name        string `json:"name"`
-	Platform    string `json:"platform"`
-	AccountType string `json:"type"` // "oauth"
-	Credentials struct {
-		AccessToken      string            `json:"access_token"`
-		ChatgptAccountID string            `json:"chatgpt_account_id"`
-		ChatgptUserID    string            `json:"chatgpt_user_id"`
-		ClientID         string            `json:"client_id"`
-		ExpiresAt        int64             `json:"expires_at"`
-		ExpiresIn        int               `json:"expires_in"`
-		ModelMapping     map[string]string `json:"model_mapping"`
-		OrganizationID   string            `json:"organization_id"`
-		RefreshToken     string            `json:"refresh_token"`
-	} `json:"credentials"`
-	Extra struct {
+	Name        string             `json:"name"`
+	Platform    string             `json:"platform"`
+	AccountType string             `json:"type"` // "oauth"
+	Credentials sub2apiCredentials `json:"credentials"`
+	Extra       struct {
 		Email string `json:"email"`
 	} `json:"extra"`
-	Concurrency        int     `json:"concurrency"`
-	Priority           int     `json:"priority"`
-	RateMultiplier     float64 `json:"rate_multiplier"`
-	AutoPauseOnExpired bool    `json:"auto_pause_on_expired"`
+	Concurrency        flexSub2Int   `json:"concurrency"`
+	Priority           flexSub2Int   `json:"priority"`
+	RateMultiplier     flexSub2Float `json:"rate_multiplier"`
+	AutoPauseOnExpired flexSub2Bool  `json:"auto_pause_on_expired"`
 }
 
 type sub2apiExport struct {
@@ -1613,17 +2374,14 @@ type sub2apiExport struct {
 	Accounts   []sub2apiAccount `json:"accounts"`
 }
 
-// ImportFromSub2API handles importing accounts from the sub2api JSON format.
-func (h *OpenAIHandler) ImportFromSub2API(c *gin.Context) {
+// ImportSub2APIBytes parses Sub2API JSON and upserts OAuth accounts (与 HTTP 导入逻辑一致，供 CLI 使用).
+func (h *OpenAIHandler) ImportSub2APIBytes(data []byte) (gin.H, error) {
 	var payload sub2apiExport
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "无效的请求体: " + err.Error(), Code: "INVALID_REQUEST"})
-		return
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
 	}
-
 	if len(payload.Accounts) == 0 {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "文件中没有账号数据", Code: "EMPTY_INPUT"})
-		return
+		return nil, fmt.Errorf("文件中没有账号数据")
 	}
 
 	existingAccounts, _ := h.storage.List()
@@ -1637,18 +2395,26 @@ func (h *OpenAIHandler) ImportFromSub2API(c *gin.Context) {
 	now := time.Now()
 
 	for _, a := range payload.Accounts {
-		email := a.Extra.Email
+		email := strings.TrimSpace(a.Extra.Email)
 		if email == "" {
-			email = a.Name
+			email = strings.TrimSpace(a.Name)
+		}
+		if email == "" && strings.TrimSpace(a.Credentials.IDToken) != "" {
+			if userInfo := openaiplatform.ParseIDToken(strings.TrimSpace(a.Credentials.IDToken)); userInfo != nil && userInfo.Email != nil {
+				email = strings.TrimSpace(*userInfo.Email)
+			}
 		}
 		if email == "" {
-			results = append(results, result{Email: "(unknown)", Success: false, Error: "缺少 email 或 name 字段"})
+			results = append(results, result{Email: "(unknown)", Success: false, Error: "缺少 email、name 或可从 id_token 解析的邮箱"})
 			continue
 		}
 
 		var expiresAt *time.Time
-		if a.Credentials.ExpiresAt > 0 {
-			t := time.Unix(a.Credentials.ExpiresAt, 0)
+		if a.Credentials.ExpiresAt.Unix > 0 {
+			t := time.Unix(a.Credentials.ExpiresAt.Unix, 0)
+			expiresAt = &t
+		} else if int(a.Credentials.ExpiresIn) > 0 {
+			t := now.Add(time.Duration(int(a.Credentials.ExpiresIn)) * time.Second)
 			expiresAt = &t
 		}
 
@@ -1663,6 +2429,26 @@ func (h *OpenAIHandler) ImportFromSub2API(c *gin.Context) {
 			OrganizationID:   sPtr(a.Credentials.OrganizationID),
 			CreatedAt:        now,
 			UpdatedAt:        now,
+		}
+		if a.Credentials.PlanType != "" {
+			account.Plan = sPtr(a.Credentials.PlanType)
+		}
+		if a.Credentials.IDToken != "" {
+			account.IDToken = sPtr(a.Credentials.IDToken)
+			if userInfo := openaiplatform.ParseIDToken(a.Credentials.IDToken); userInfo != nil {
+				if account.ChatGPTAccountID == nil || *account.ChatGPTAccountID == "" {
+					account.ChatGPTAccountID = userInfo.ChatGPTAccountID
+				}
+				if account.ChatGPTUserID == nil || *account.ChatGPTUserID == "" {
+					account.ChatGPTUserID = userInfo.ChatGPTUserID
+				}
+				if account.OrganizationID == nil || *account.OrganizationID == "" {
+					account.OrganizationID = userInfo.OrganizationID
+				}
+			}
+			if j := openaiplatform.ExtractOpenAIAuthJSON(a.Credentials.IDToken); j != "" {
+				account.OpenAIAuthJSON = sPtr(j)
+			}
 		}
 
 		if _, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts); err != nil {
@@ -1683,13 +2469,32 @@ func (h *OpenAIHandler) ImportFromSub2API(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	return gin.H{
 		"total":   len(results),
 		"success": success,
 		"skipped": skipped,
 		"failed":  failed,
 		"results": results,
-	})
+	}, nil
+}
+
+// ImportFromSub2API handles importing accounts from the sub2api JSON format.
+func (h *OpenAIHandler) ImportFromSub2API(c *gin.Context) {
+	data, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "读取请求体失败: " + err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	out, err := h.ImportSub2APIBytes(data)
+	if err != nil {
+		if err.Error() == "文件中没有账号数据" {
+			c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "EMPTY_INPUT"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "无效的请求体: " + err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // FetchQuotas checks the quota for OAuth accounts by calling the ChatGPT
@@ -1900,7 +2705,7 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 
 // ---- Service Config ----
 
-// GetServiceConfig returns proxy pool status, API key (masked), strategy, and request stats.
+// GetServiceConfig returns proxy pool status, masked API key state, strategy, and request stats.
 func (h *OpenAIHandler) GetServiceConfig(c *gin.Context) {
 	p := proxy.GetProxy()
 	enabled := false
@@ -1941,7 +2746,6 @@ func (h *OpenAIHandler) GetServiceConfig(c *gin.Context) {
 		"total_logs":          logTotal,
 		"api_key_set":         apiKey != "",
 		"api_key_masked":      maskedKey,
-		"api_key":             apiKey,
 	})
 }
 
@@ -1965,13 +2769,15 @@ func (h *OpenAIHandler) UpdateServiceConfig(c *gin.Context) {
 	}
 	if req.Strategy != nil && p != nil {
 		valid := map[string]bool{"round_robin": true, "random": true, "least_used": true}
-		if valid[*req.Strategy] {
-			p.SetStrategy(*req.Strategy)
-			storage.SaveSetting("proxy_strategy", *req.Strategy)
+		if !valid[*req.Strategy] {
+			c.JSON(http.StatusBadRequest, models.APIError{Error: "invalid strategy", Code: "INVALID_REQUEST"})
+			return
 		}
+		p.SetStrategy(*req.Strategy)
+		storage.SaveSetting("proxy_strategy", *req.Strategy)
 	}
 	if req.APIKey != nil {
-		storage.SaveSetting("proxy_api_key", *req.APIKey)
+		storage.SaveSetting("proxy_api_key", strings.TrimSpace(*req.APIKey))
 	}
 
 	h.GetServiceConfig(c)
@@ -2121,4 +2927,25 @@ func isRefreshTokenReusedError(err error) bool {
 
 func isReauthRequiredError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "需要重新 OAuth 登录或重新导入最新账号")
+}
+
+func mergeOpenAIAccountUpdate(existing *models.OpenAIAccount, incoming models.OpenAIAccount) models.OpenAIAccount {
+	incoming.LastUsedAt = existing.LastUsedAt
+	incoming.IsCodexActive = existing.IsCodexActive
+	incoming.ProxyEnabled = existing.ProxyEnabled
+	incoming.QuotaUsed = existing.QuotaUsed
+	incoming.QuotaTotal = existing.QuotaTotal
+	incoming.QuotaResetAt = existing.QuotaResetAt
+	incoming.QuotaUpdatedAt = existing.QuotaUpdatedAt
+	incoming.Quota5hUsedPercent = existing.Quota5hUsedPercent
+	incoming.Quota5hResetSeconds = existing.Quota5hResetSeconds
+	incoming.Quota5hWindowMinutes = existing.Quota5hWindowMinutes
+	incoming.Quota7dUsedPercent = existing.Quota7dUsedPercent
+	incoming.Quota7dResetSeconds = existing.Quota7dResetSeconds
+	incoming.Quota7dWindowMinutes = existing.Quota7dWindowMinutes
+	incoming.QuotaIsForbidden = existing.QuotaIsForbidden
+	incoming.QuotaHTTPStatus = existing.QuotaHTTPStatus
+	incoming.QuotaError = existing.QuotaError
+	incoming.QuotaVerified = existing.QuotaVerified
+	return incoming
 }

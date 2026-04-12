@@ -58,15 +58,15 @@ func InitDB(cfg *config.Config) error {
 // AutoMigrate runs database migrations for all models
 func AutoMigrate() error {
 	return DB.AutoMigrate(
-		&models.AugmentToken{},
 		&models.OpenAIAccount{},
 		&models.OpenAIAPIKey{},
 		&models.CodexAccount{},
 		&models.CodexLog{},
 		&models.CursorAccount{},
-		&models.WindsurfAccount{},
 		&models.AntigravityAccount{},
-		&models.ClaudeAccount{},
+		&models.PlatformAccount{},
+		&models.PlatformInstance{},
+		&models.WakeupTask{},
 		&models.AppSettings{},
 	)
 }

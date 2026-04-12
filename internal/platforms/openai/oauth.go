@@ -20,6 +20,7 @@ const (
 	tokenURL           = "https://auth.openai.com/oauth/token"
 	defaultRedirectURI = "http://localhost:1455/auth/callback"
 	defaultScopes      = "openid profile email offline_access"
+	defaultOriginator  = "codex_vscode"
 )
 
 // TokenResponse is the OpenAI OAuth token response
@@ -88,6 +89,7 @@ func BuildAuthorizationURL(state, codeChallenge, redirectURI string) string {
 	params.Set("response_type", "code")
 	params.Set("scope", defaultScopes)
 	params.Set("state", state)
+	params.Set("originator", defaultOriginator)
 	return authorizeURL + "?" + params.Encode()
 }
 

@@ -53,32 +53,15 @@ export const authAPI = {
   changePassword: (old_password, new_password) => api.post('/auth/change-password', { old_password, new_password }),
 }
 
-// Augment API
-export const augmentAPI = {
-  list: () => api.get('/augment/tokens'),
-  add: (data) => api.post('/augment/tokens', data),
-  update: (id, data) => api.put(`/augment/tokens/${id}`, data),
-  delete: (id) => api.delete(`/augment/tokens/${id}`),
-  deleteMany: (ids) => api.delete('/augment/tokens', { data: { ids } }),
-  checkStatus: (id) => api.post(`/augment/tokens/${id}/check`),
-  checkAll: () => api.post('/augment/tokens/check-all'),
-  getCreditInfo: (id) => api.post(`/augment/tokens/${id}/credit`),
-  refreshSession: (id) => api.post(`/augment/tokens/${id}/refresh-session`),
-  batchRefreshSessions: (ids) => api.post('/augment/tokens/batch-refresh-sessions', { ids }),
-  startOAuth: () => api.post('/augment/oauth/start'),
-  completeOAuth: (code) => api.post('/augment/oauth/complete', { code }),
-  importSession: (session, detailed = true) => api.post('/augment/import/session', { session, detailed_response: detailed }),
-  importSessions: (sessions, detailed = true) => api.post('/augment/import/sessions', { sessions, detailed_response: detailed }),
-  exportJSON: () => api.get('/augment/export'),
-  importJSON: (tokens) => api.post('/augment/import/json', tokens),
-  sync: (req) => api.post('/augment/sync', req),
-}
-
 // OpenAI API
 export const openaiAPI = {
   list: () => api.get('/openai/accounts'),
   exportJSON: () => api.get('/openai/export'),
   refreshAll: () => api.post('/openai/accounts/refresh-all'),
+  generateOAuthUrl: (data) => api.post('/openai/oauth/generate-url', data),
+  getOAuthSession: (id) => api.get(`/openai/oauth/sessions/${id}`),
+  cancelOAuthSession: (id) => api.delete(`/openai/oauth/sessions/${id}`),
+  exchangeOAuthCode: (data) => api.post('/openai/oauth/exchange-code', data),
   add: (data) => api.post('/openai/accounts', data),
   update: (id, data) => api.put(`/openai/accounts/${id}`, data),
   delete: (id) => api.delete(`/openai/accounts/${id}`),
@@ -108,16 +91,6 @@ export const cursorAPI = {
   import: (accounts) => api.post('/cursor/import', accounts),
 }
 
-// Windsurf API
-export const windsurfAPI = {
-  list: () => api.get('/windsurf/accounts'),
-  add: (data) => api.post('/windsurf/accounts', data),
-  update: (id, data) => api.put(`/windsurf/accounts/${id}`, data),
-  delete: (id) => api.delete(`/windsurf/accounts/${id}`),
-  deleteMany: (ids) => api.delete('/windsurf/accounts', { data: { ids } }),
-  activate: (id) => api.post(`/windsurf/accounts/${id}/activate`),
-}
-
 // Antigravity API
 export const antigravityAPI = {
   list: () => api.get('/antigravity/accounts'),
@@ -126,15 +99,6 @@ export const antigravityAPI = {
   delete: (id) => api.delete(`/antigravity/accounts/${id}`),
   deleteMany: (ids) => api.delete('/antigravity/accounts', { data: { ids } }),
   activate: (id) => api.post(`/antigravity/accounts/${id}/activate`),
-}
-
-// Claude API
-export const claudeAPI = {
-  list: () => api.get('/claude/accounts'),
-  add: (data) => api.post('/claude/accounts', data),
-  update: (id, data) => api.put(`/claude/accounts/${id}`, data),
-  delete: (id) => api.delete(`/claude/accounts/${id}`),
-  deleteMany: (ids) => api.delete('/claude/accounts', { data: { ids } }),
 }
 
 // Settings API
@@ -152,6 +116,37 @@ export const settingsAPI = {
   health: () => api.get('/health'),
   systemInfo: () => api.get('/system/info'),
   apiServerStatus: () => api.get('/api-server/status'),
+}
+
+export const cockpitAPI = {
+  listAllAccounts: () => api.get('/cockpit/accounts'),
+  definitions: () => api.get('/cockpit/definitions'),
+  overview: () => api.get('/cockpit/overview'),
+  listPlatformAccounts: (platform) => api.get(`/cockpit/platforms/${platform}/accounts`),
+  importPlatformAccounts: (platform, data) => api.post(`/cockpit/platforms/${platform}/accounts/import`, data),
+  exportPlatformAccounts: (platform) => api.get(`/cockpit/platforms/${platform}/accounts/export`),
+  addPlatformAccount: (platform, data) => api.post(`/cockpit/platforms/${platform}/accounts`, data),
+  updatePlatformAccount: (platform, id, data) => api.put(`/cockpit/platforms/${platform}/accounts/${id}`, data),
+  deletePlatformAccount: (platform, id) => api.delete(`/cockpit/platforms/${platform}/accounts/${id}`),
+  deleteManyPlatformAccounts: (platform, ids) =>
+    api.delete(`/cockpit/platforms/${platform}/accounts`, { data: { ids } }),
+  activatePlatformAccount: (platform, id) => api.post(`/cockpit/platforms/${platform}/accounts/${id}/activate`),
+  listAllInstances: () => api.get('/cockpit/instances'),
+  listPlatformInstances: (platform) => api.get(`/cockpit/platforms/${platform}/instances`),
+  exportPlatformInstances: (platform) => api.get(`/cockpit/platforms/${platform}/instances/export`),
+  addPlatformInstance: (platform, data) => api.post(`/cockpit/platforms/${platform}/instances`, data),
+  updatePlatformInstance: (platform, id, data) => api.put(`/cockpit/platforms/${platform}/instances/${id}`, data),
+  deletePlatformInstance: (platform, id) => api.delete(`/cockpit/platforms/${platform}/instances/${id}`),
+  updatePlatformInstanceState: (platform, id, state) =>
+    api.post(`/cockpit/platforms/${platform}/instances/${id}/state`, { state }),
+  listWakeupTasks: (platform) =>
+    api.get('/cockpit/wakeup/tasks', { params: platform ? { platform } : {} }),
+  addWakeupTask: (data) => api.post('/cockpit/wakeup/tasks', data),
+  updateWakeupTask: (id, data) => api.put(`/cockpit/wakeup/tasks/${id}`, data),
+  deleteWakeupTask: (id) => api.delete(`/cockpit/wakeup/tasks/${id}`),
+  toggleWakeupTask: (id) => api.post(`/cockpit/wakeup/tasks/${id}/toggle`),
+  getGeneralSettings: () => api.get('/cockpit/settings/general'),
+  updateGeneralSettings: (data) => api.put('/cockpit/settings/general', data),
 }
 
 export { longApi }

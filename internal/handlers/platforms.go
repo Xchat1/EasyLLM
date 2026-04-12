@@ -3,11 +3,14 @@ package handlers
 import (
 	"easyllm/internal/models"
 	"easyllm/internal/storage"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // CursorHandler manages Cursor accounts
@@ -44,6 +47,12 @@ func (h *CursorHandler) Add(c *gin.Context) {
 	if a.ID == "" {
 		a.ID = uuid.New().String()
 	}
+	a = normalizeCursorAccountInput(a)
+	if err := validateCursorAccountInput(a); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	a.Active = false
 	a.CreatedAt = time.Now()
 	a.UpdatedAt = time.Now()
 	if err := h.storage.Save(&a); err != nil {
@@ -54,12 +63,31 @@ func (h *CursorHandler) Add(c *gin.Context) {
 }
 
 func (h *CursorHandler) Update(c *gin.Context) {
+	existing, err := h.storage.Get(c.Param("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
+		return
+	}
 	var a models.CursorAccount
 	if err := c.ShouldBindJSON(&a); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
+	a = normalizeCursorAccountInput(a)
+	if err := validateCursorAccountInput(a); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	a = mergeCursorAccountUpdate(existing, a)
 	a.ID = c.Param("id")
+	a.CreatedAt = existing.CreatedAt
+	a.UpdatedAt = time.Now()
 	if err := h.storage.Save(&a); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
@@ -69,7 +97,13 @@ func (h *CursorHandler) Update(c *gin.Context) {
 
 func (h *CursorHandler) Delete(c *gin.Context) {
 	if err := h.storage.Delete(c.Param("id")); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
@@ -92,7 +126,13 @@ func (h *CursorHandler) DeleteMany(c *gin.Context) {
 
 func (h *CursorHandler) Activate(c *gin.Context) {
 	if err := h.storage.SetActive(c.Param("id")); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
@@ -116,94 +156,6 @@ func (h *CursorHandler) Import(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"imported": imported})
-}
-
-// WindsurfHandler manages Windsurf accounts
-type WindsurfHandler struct{ storage *storage.WindsurfStorage }
-
-func NewWindsurfHandler(s *storage.WindsurfStorage) *WindsurfHandler {
-	return &WindsurfHandler{storage: s}
-}
-
-func (h *WindsurfHandler) RegisterRoutes(rg *gin.RouterGroup) {
-	g := rg.Group("/windsurf")
-	g.GET("/accounts", h.List)
-	g.POST("/accounts", h.Add)
-	g.PUT("/accounts/:id", h.Update)
-	g.DELETE("/accounts/:id", h.Delete)
-	g.DELETE("/accounts", h.DeleteMany)
-	g.POST("/accounts/:id/activate", h.Activate)
-}
-
-func (h *WindsurfHandler) List(c *gin.Context) {
-	list, err := h.storage.List()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, list)
-}
-
-func (h *WindsurfHandler) Add(c *gin.Context) {
-	var a models.WindsurfAccount
-	if err := c.ShouldBindJSON(&a); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
-		return
-	}
-	if a.ID == "" {
-		a.ID = uuid.New().String()
-	}
-	a.CreatedAt = time.Now()
-	if err := h.storage.Save(&a); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, a)
-}
-
-func (h *WindsurfHandler) Update(c *gin.Context) {
-	var a models.WindsurfAccount
-	if err := c.ShouldBindJSON(&a); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
-		return
-	}
-	a.ID = c.Param("id")
-	if err := h.storage.Save(&a); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, a)
-}
-
-func (h *WindsurfHandler) Delete(c *gin.Context) {
-	if err := h.storage.Delete(c.Param("id")); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
-}
-
-func (h *WindsurfHandler) DeleteMany(c *gin.Context) {
-	var req struct {
-		IDs []string `json:"ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
-		return
-	}
-	if err := h.storage.DeleteMany(req.IDs); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
-}
-
-func (h *WindsurfHandler) Activate(c *gin.Context) {
-	if err := h.storage.SetActive(c.Param("id")); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // AntigravityHandler manages Antigravity accounts
@@ -241,7 +193,14 @@ func (h *AntigravityHandler) Add(c *gin.Context) {
 	if a.ID == "" {
 		a.ID = uuid.New().String()
 	}
+	a = normalizeAntigravityAccountInput(a)
+	if err := validateAntigravityAccountInput(a); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	a.Active = false
 	a.CreatedAt = time.Now()
+	a.UpdatedAt = time.Now()
 	if err := h.storage.Save(&a); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
@@ -250,12 +209,31 @@ func (h *AntigravityHandler) Add(c *gin.Context) {
 }
 
 func (h *AntigravityHandler) Update(c *gin.Context) {
+	existing, err := h.storage.Get(c.Param("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
+		return
+	}
 	var a models.AntigravityAccount
 	if err := c.ShouldBindJSON(&a); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
+	a = normalizeAntigravityAccountInput(a)
+	if err := validateAntigravityAccountInput(a); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	a = mergeAntigravityAccountUpdate(existing, a)
 	a.ID = c.Param("id")
+	a.CreatedAt = existing.CreatedAt
+	a.UpdatedAt = time.Now()
 	if err := h.storage.Save(&a); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
@@ -265,7 +243,13 @@ func (h *AntigravityHandler) Update(c *gin.Context) {
 
 func (h *AntigravityHandler) Delete(c *gin.Context) {
 	if err := h.storage.Delete(c.Param("id")); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
@@ -288,85 +272,93 @@ func (h *AntigravityHandler) DeleteMany(c *gin.Context) {
 
 func (h *AntigravityHandler) Activate(c *gin.Context) {
 	if err := h.storage.SetActive(c.Param("id")); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+		status := http.StatusInternalServerError
+		code := "STORAGE_ERROR"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			code = "NOT_FOUND"
+		}
+		c.JSON(status, models.APIError{Error: err.Error(), Code: code})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-// ClaudeHandler manages Claude accounts
-type ClaudeHandler struct{ storage *storage.ClaudeStorage }
-
-func NewClaudeHandler(s *storage.ClaudeStorage) *ClaudeHandler { return &ClaudeHandler{storage: s} }
-
-func (h *ClaudeHandler) RegisterRoutes(rg *gin.RouterGroup) {
-	g := rg.Group("/claude")
-	g.GET("/accounts", h.List)
-	g.POST("/accounts", h.Add)
-	g.PUT("/accounts/:id", h.Update)
-	g.DELETE("/accounts/:id", h.Delete)
-	g.DELETE("/accounts", h.DeleteMany)
+func normalizeCursorAccountInput(a models.CursorAccount) models.CursorAccount {
+	a.Email = strings.TrimSpace(a.Email)
+	a.AccessToken = strings.TrimSpace(a.AccessToken)
+	if a.Name != nil {
+		trimmed := strings.TrimSpace(*a.Name)
+		if trimmed == "" {
+			a.Name = nil
+		} else {
+			a.Name = &trimmed
+		}
+	}
+	if a.TagName != nil {
+		trimmed := strings.TrimSpace(*a.TagName)
+		if trimmed == "" {
+			a.TagName = nil
+		} else {
+			a.TagName = &trimmed
+		}
+	}
+	return a
 }
 
-func (h *ClaudeHandler) List(c *gin.Context) {
-	list, err := h.storage.List()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
+func validateCursorAccountInput(a models.CursorAccount) error {
+	if a.Email == "" {
+		return errors.New("email is required")
 	}
-	c.JSON(http.StatusOK, list)
+	if a.AccessToken == "" {
+		return errors.New("access_token is required")
+	}
+	return nil
 }
 
-func (h *ClaudeHandler) Add(c *gin.Context) {
-	var a models.ClaudeAccount
-	if err := c.ShouldBindJSON(&a); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
-		return
-	}
-	if a.ID == "" {
-		a.ID = uuid.New().String()
-	}
-	a.CreatedAt = time.Now()
-	if err := h.storage.Save(&a); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, a)
+func mergeCursorAccountUpdate(existing *models.CursorAccount, incoming models.CursorAccount) models.CursorAccount {
+	incoming.CookieToken = existing.CookieToken
+	incoming.Plan = existing.Plan
+	incoming.Active = existing.Active
+	return incoming
 }
 
-func (h *ClaudeHandler) Update(c *gin.Context) {
-	var a models.ClaudeAccount
-	if err := c.ShouldBindJSON(&a); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
-		return
+func normalizeAntigravityAccountInput(a models.AntigravityAccount) models.AntigravityAccount {
+	a.Email = strings.TrimSpace(a.Email)
+	a.AccessToken = strings.TrimSpace(a.AccessToken)
+	if a.Name != nil {
+		trimmed := strings.TrimSpace(*a.Name)
+		if trimmed == "" {
+			a.Name = nil
+		} else {
+			a.Name = &trimmed
+		}
 	}
-	a.ID = c.Param("id")
-	if err := h.storage.Save(&a); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
+	if a.TagName != nil {
+		trimmed := strings.TrimSpace(*a.TagName)
+		if trimmed == "" {
+			a.TagName = nil
+		} else {
+			a.TagName = &trimmed
+		}
 	}
-	c.JSON(http.StatusOK, a)
+	return a
 }
 
-func (h *ClaudeHandler) Delete(c *gin.Context) {
-	if err := h.storage.Delete(c.Param("id")); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
+func validateAntigravityAccountInput(a models.AntigravityAccount) error {
+	if a.Email == "" {
+		return errors.New("email is required")
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
+	if a.AccessToken == "" {
+		return errors.New("access_token is required")
+	}
+	return nil
 }
 
-func (h *ClaudeHandler) DeleteMany(c *gin.Context) {
-	var req struct {
-		IDs []string `json:"ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
-		return
-	}
-	if err := h.storage.DeleteMany(req.IDs); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
+func mergeAntigravityAccountUpdate(existing *models.AntigravityAccount, incoming models.AntigravityAccount) models.AntigravityAccount {
+	incoming.Active = existing.Active
+	incoming.Plan = existing.Plan
+	incoming.Quota = existing.Quota
+	incoming.UsedQuota = existing.UsedQuota
+	return incoming
 }

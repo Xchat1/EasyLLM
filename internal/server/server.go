@@ -7,9 +7,10 @@ import (
 	"easyllm/internal/models"
 	"easyllm/internal/proxy"
 	"easyllm/internal/storage"
-	"io"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,13 +27,11 @@ import (
 type App struct {
 	cfg            *config.Config
 	auth           *handlers.AuthHandler
-	augment        *handlers.AugmentHandler
 	openai         *handlers.OpenAIHandler
 	cursor         *handlers.CursorHandler
-	windsurf       *handlers.WindsurfHandler
 	antigravity    *handlers.AntigravityHandler
-	claude         *handlers.ClaudeHandler
 	settings       *handlers.SettingsHandler
+	cockpit        *handlers.CockpitHandler
 	codexProxy     *proxy.CodexProxy
 	sessionScanner *proxy.SessionScanner
 	openaiStore    *storage.OpenAIStorage
@@ -52,13 +51,14 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Initialize storages
-	augmentStore := storage.NewAugmentStorage(db, dataDir)
 	openaiStore := storage.NewOpenAIStorage(db)
 	codexStore := storage.NewCodexStorage(db)
 	cursorStore := storage.NewCursorStorage(db)
-	windsurfStore := storage.NewWindsurfStorage(db)
 	antigravityStore := storage.NewAntigravityStorage(db)
-	claudeStore := storage.NewClaudeStorage(db)
+	cockpitStore := storage.NewCockpitStorage(db)
+	if err := cockpitStore.MigrateLegacyPlatformAccounts(); err != nil {
+		return nil, fmt.Errorf("failed to migrate cockpit platform data: %w", err)
+	}
 	// Load persisted settings into config
 	loadPersistedSettings(cfg)
 
@@ -79,13 +79,11 @@ func New(cfg *config.Config) (*App, error) {
 	app := &App{
 		cfg:            cfg,
 		auth:           handlers.NewAuthHandler(),
-		augment:        handlers.NewAugmentHandler(augmentStore),
 		openai:         handlers.NewOpenAIHandler(openaiStore, codexStore),
 		cursor:         handlers.NewCursorHandler(cursorStore),
-		windsurf:       handlers.NewWindsurfHandler(windsurfStore),
 		antigravity:    handlers.NewAntigravityHandler(antigravityStore),
-		claude:         handlers.NewClaudeHandler(claudeStore),
 		settings:       handlers.NewSettingsHandler(),
+		cockpit:        handlers.NewCockpitHandler(cockpitStore, openaiStore, codexStore),
 		codexProxy:     codexProxy,
 		sessionScanner: sessionScanner,
 		openaiStore:    openaiStore,
@@ -141,13 +139,11 @@ func (a *App) setupRouter() {
 	protected.Use(handlers.AuthMiddleware())
 
 	a.auth.RegisterProtectedRoutes(protected)
-	a.augment.RegisterRoutes(protected)
 	a.openai.RegisterRoutes(protected)
 	a.cursor.RegisterRoutes(protected)
-	a.windsurf.RegisterRoutes(protected)
 	a.antigravity.RegisterRoutes(protected)
-	a.claude.RegisterRoutes(protected)
 	a.settings.RegisterRoutes(protected)
+	a.cockpit.RegisterRoutes(protected)
 
 	// Legacy API endpoint (compatible with original ATM API)
 	legacy := r.Group("/api")
@@ -158,8 +154,6 @@ func (a *App) setupRouter() {
 			Port:    a.cfg.Server.Port,
 		})
 	})
-	legacy.POST("/import/session", a.augment.ImportSession)
-	legacy.POST("/import/sessions", a.augment.ImportSessions)
 
 	// Legacy pool status endpoint (compatible with original ATM API)
 	r.GET("/pool/status", func(c *gin.Context) {
@@ -203,6 +197,10 @@ func (a *App) proxyCodexRequest(c *gin.Context) {
 		return
 	}
 
+	if !allowLocalProxyFallback(c) {
+		return
+	}
+
 	// API key authentication: if proxy_api_key is set, require it.
 	// Exception: skip the check if the request token matches a managed account
 	// (passthrough mode for local Codex CLI routing through the proxy).
@@ -225,6 +223,10 @@ func (a *App) proxyCodexRequest(c *gin.Context) {
 }
 
 func (a *App) proxyV1Request(c *gin.Context) {
+	if !allowLocalProxyFallback(c) {
+		return
+	}
+
 	// API key authentication: if proxy_api_key is set, require it (same as codex proxy).
 	if requiredKey, ok := storage.GetSetting("proxy_api_key"); ok && requiredKey != "" {
 		token := extractBearerToken(c.GetHeader("Authorization"))
@@ -366,6 +368,31 @@ func isWebSocketUpgrade(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+func allowLocalProxyFallback(c *gin.Context) bool {
+	if requiredKey, ok := storage.GetSetting("proxy_api_key"); ok && strings.TrimSpace(requiredKey) != "" {
+		return true
+	}
+	if isLoopbackRemoteAddr(c.Request.RemoteAddr) {
+		return true
+	}
+	c.JSON(http.StatusUnauthorized, gin.H{
+		"error": gin.H{
+			"message": "Non-local proxy access requires proxy_api_key to be configured.",
+			"type":    "proxy_api_key_required",
+		},
+	})
+	return false
+}
+
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
 }
 
 // Run starts the HTTP server with graceful shutdown

@@ -137,10 +137,21 @@ function edit(a) {
 
 async function save() {
   try {
+    const payload = {
+      email: typeof form.value.email === 'string' ? form.value.email.trim() : '',
+      [props.tokenField]: typeof form.value[props.tokenField] === 'string' ? form.value[props.tokenField].trim() : '',
+      name: typeof form.value.name === 'string' ? form.value.name.trim() || null : null,
+      tag_name: typeof form.value.tag_name === 'string' ? form.value.tag_name.trim() || null : null,
+      tag_color: typeof form.value.tag_color === 'string' ? form.value.tag_color.trim() || null : null,
+    }
+    if (!payload.email || !payload[props.tokenField]) {
+      notify('请先填写邮箱和令牌', 'error')
+      return
+    }
     if (editing.value) {
-      await props.api.update(editing.value.id, form.value)
+      await props.api.update(editing.value.id, payload)
     } else {
-      await props.api.add(form.value)
+      await props.api.add(payload)
     }
     closeModal()
     notify('保存成功', 'success')

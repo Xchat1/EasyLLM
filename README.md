@@ -8,11 +8,8 @@
 
 **多平台账号管理**
 - **OpenAI / Codex** — OAuth 账号管理、API Key 配置、Token 刷新、配额查询、Codex CLI 一键切换
-- **Augment** — OAuth 登录、Session 批量导入、状态检测、额度查询、Session 刷新
 - **Cursor** — 多账号管理，一键切换活跃账号
-- **Windsurf** — 账号导入与激活切换
 - **Antigravity** — 账号管理与激活
-- **Claude** — Session Key 管理
 
 **Codex 代理池**
 - OpenAI 兼容 API（`/v1/responses`），多账号自动负载均衡
@@ -29,6 +26,11 @@
 - 内置使用文档
 
 ## 快速开始
+
+更多维护说明见：
+
+- [开发说明](./docs/DEVELOPMENT.md)
+- [项目结构](./docs/PROJECT_STRUCTURE.md)
 
 ### 方式一：直接运行
 
@@ -91,6 +93,8 @@ scripts\start.bat --build
 scripts\start.bat --prod
 ```
 
+兼容旧入口：根目录 `./start.sh` 仍可用，但内部已统一转发到 `./scripts/start.sh`。
+
 **若提示「端口被 ghost socket 占用」**（常见于 Mac 上 LVSecurityAgent 等代理曾占用 8022）：
 - **不重启**：执行一次 `sudo ./scripts/setup-pf-8022-redirect.sh`，将 8022 转发到 8026；然后 `SERVER_PORT=8026 ./scripts/start.sh` 启动，访问 http://localhost:8022 即可。
 - **重启 Mac**：内核会释放 ghost socket，之后直接 `./scripts/start.sh` 使用 8022。
@@ -113,6 +117,18 @@ scripts\start.bat --prod
 | `PROXY_HOST` | - | 代理主机 |
 | `PROXY_PORT` | - | 代理端口 |
 | `LOG_ENABLED` | `true` | 请求日志开关 |
+
+## Git 推送前隐私保护
+
+仓库内置了版本化 `pre-push` 钩子，用来拦截常见敏感文件和疑似密钥内容，避免把 `.env`、token JSON、私钥或真实 API Key 推到远端。
+
+首次在本地启用：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+已默认忽略的高风险本地文件包括 `.env`、`auth/*.json`、`cred.json`、`big_token.json`。如果某个敏感文件已经被 Git 跟踪，还需要执行 `git rm --cached <file>`，否则历史提交里仍可能包含它。
 
 ## Codex CLI 接入
 
@@ -156,10 +172,8 @@ GET  /api/v1/openai/accounts              — OpenAI 账号列表
 POST /api/v1/openai/import/refresh-tokens — 批量导入 refresh_token
 POST /api/v1/openai/import/scan-dir       — 扫描目录导入 token 文件
 POST /api/v1/openai/accounts/fetch-quotas — 批量查询配额
-GET  /api/v1/augment/tokens               — Augment Token 列表
-POST /api/import/session                  — 导入 Augment Session
-POST /api/import/sessions                 — 批量导入 Augment Sessions
-GET  /api/v1/health                       — 健康检查
+GET  /api/v1/health                       — 健康检查（鉴权路由）
+GET  /api/health                          — 兼容健康检查（Docker healthcheck）
 GET  /api/v1/system/info                  — 系统信息
 ```
 
@@ -174,8 +188,10 @@ GET  /api/v1/system/info                  — 系统信息
 
 ## 项目结构
 
-```
+```text
 EasyLLM/
+├── cmd/                        # 辅助命令
+├── docs/                       # 维护文档
 ├── main.go                     # 入口
 ├── config/                     # 配置加载
 ├── internal/
@@ -183,7 +199,6 @@ EasyLLM/
 │   ├── storage/                # 数据存储层
 │   ├── handlers/               # HTTP 路由处理
 │   ├── platforms/              # 平台业务逻辑
-│   │   ├── augment/            # Augment OAuth & API
 │   │   └── openai/             # OpenAI OAuth & 配额
 │   ├── proxy/                  # Codex 代理 & WebSocket
 │   └── server/                 # HTTP 服务器
@@ -193,10 +208,13 @@ EasyLLM/
 │   │   ├── api/                # API 封装
 │   │   └── router/             # 路由
 │   └── dist/                   # 构建产物
-├── scripts/build.sh            # 构建脚本
+├── scripts/                    # 启动/构建/系统脚本
+├── start.sh                    # 兼容入口（转发到 scripts/start.sh）
 ├── Dockerfile
 └── .env.example
 ```
+
+更完整说明见 [docs/PROJECT_STRUCTURE.md](./docs/PROJECT_STRUCTURE.md)。
 
 ## License
 

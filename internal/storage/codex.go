@@ -30,6 +30,14 @@ func (s *CodexStorage) LoadAllAccounts() ([]*models.CodexAccount, error) {
 	return accounts, err
 }
 
+func (s *CodexStorage) GetAccount(id string) (*models.CodexAccount, error) {
+	var account models.CodexAccount
+	if err := s.db.Where("id = ?", id).First(&account).Error; err != nil {
+		return nil, err
+	}
+	return &account, nil
+}
+
 // SaveAccount upserts a Codex account
 func (s *CodexStorage) SaveAccount(account *models.CodexAccount) error {
 	account.UpdatedAt = time.Now()
@@ -59,7 +67,14 @@ func (s *CodexStorage) IncrementRequestCount(id string) error {
 
 // DeleteAccount removes a Codex account
 func (s *CodexStorage) DeleteAccount(id string) error {
-	return s.db.Where("id = ?", id).Delete(&models.CodexAccount{}).Error
+	res := s.db.Where("id = ?", id).Delete(&models.CodexAccount{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // SaveLog records a Codex request log
