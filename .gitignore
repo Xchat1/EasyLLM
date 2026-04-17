@@ -35,6 +35,7 @@ web/dist/
 *.bak
 *.tmp
 *.tmp2
+easyllm.log
 *_new.vue
 OpenAI账号显示优化说明.md
 功能对齐报告.md
