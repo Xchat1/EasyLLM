@@ -3,7 +3,7 @@
     <section class="rounded-3xl border border-gray-800 bg-gradient-to-br from-slate-200/10 via-gray-200/5 to-gray-950 p-6">
       <h1 class="text-3xl font-semibold text-white">设置中心</h1>
       <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">
-        这里把 cockpit-tools 风格的通用设置、自动刷新、启动路径和运行状态统一收口，同时保留 EasyLLM 本身的代理、数据库和安全配置。
+        集中管理通用设置、自动刷新、启动路径和运行状态，同时保留代理、数据库和安全配置能力。
       </p>
     </section>
 
@@ -16,7 +16,7 @@
     <section v-if="activeTab === 'experience'" class="card p-5 space-y-5">
       <div>
         <h2 class="text-lg font-semibold text-white">通用体验</h2>
-        <p class="mt-1 text-sm text-gray-500">对齐 cockpit-tools 的语言、主题、关闭行为与联动开关。</p>
+        <p class="mt-1 text-sm text-gray-500">统一配置语言、主题、关闭行为与切号联动策略。</p>
       </div>
 
       <div class="grid gap-4 md:grid-cols-3">
@@ -58,7 +58,7 @@
         <label class="flex items-center justify-between rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
           <div>
             <div class="text-sm font-medium text-white">切换 Codex 时自动拉起</div>
-            <div class="mt-1 text-xs text-gray-500">延续 cockpit-tools 的切号联动体验。</div>
+            <div class="mt-1 text-xs text-gray-500">切号时自动拉起对应的客户端。</div>
           </div>
           <input v-model="general.integrations.codex_launch_on_switch" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
         </label>
@@ -122,7 +122,7 @@
     <section v-else-if="activeTab === 'paths'" class="card p-5 space-y-5">
       <div>
         <h2 class="text-lg font-semibold text-white">启动路径</h2>
-        <p class="mt-1 text-sm text-gray-500">与 cockpit-tools 一样，把各客户端可执行文件路径集中管理。</p>
+        <p class="mt-1 text-sm text-gray-500">集中管理各客户端的可执行文件路径，用于环境联动拉起。</p>
       </div>
 
       <div class="grid gap-4 md:grid-cols-2">

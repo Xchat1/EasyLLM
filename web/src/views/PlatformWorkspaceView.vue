@@ -89,7 +89,7 @@
         <div class="flex flex-col gap-4 border-b border-gray-800 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 class="text-lg font-semibold text-white">账号管理</h2>
-            <p class="mt-1 text-sm text-gray-500">对齐 cockpit-tools 的“账号 + 配额 + 激活账号”工作流。</p>
+            <p class="mt-1 text-sm text-gray-500">标准化的“账号 + 配额 + 激活账号”工作流。</p>
           </div>
           <div class="flex flex-col gap-2 sm:flex-row">
             <input

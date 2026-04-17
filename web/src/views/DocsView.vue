@@ -177,7 +177,7 @@ print(response.output_text)</pre>
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">📊</span> 配额查询
         </h2>
-        <p class="text-sm text-gray-400 mb-4">查看 5 小时和 7 天配额使用情况（与 cockpit-tools 逻辑一致）。</p>
+        <p class="text-sm text-gray-400 mb-4">查看 5 小时和 7 天配额使用情况（支持图表与趋势分析）。</p>
 
         <div class="grid md:grid-cols-2 gap-4 mb-4">
           <div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">

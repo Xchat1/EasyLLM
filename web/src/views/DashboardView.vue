@@ -10,7 +10,7 @@
           <div>
             <h1 class="text-3xl font-semibold text-white">多平台驾驶舱总览</h1>
             <p class="mt-2 text-sm leading-6 text-gray-300">
-              对齐 cockpit-tools 的信息组织方式，把账号、实例、唤醒任务和运行状态集中到同一块看板里。
+              一站式总览，集中管理多平台账号、运行实例和自动化任务状态，提供全局视角。
             </p>
           </div>
         </div>

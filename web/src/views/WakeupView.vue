@@ -5,7 +5,7 @@
         <div>
           <h1 class="text-3xl font-semibold text-white">唤醒任务中心</h1>
           <p class="mt-2 text-sm leading-6 text-gray-300">
-            按 cockpit-tools 的任务台账方式统一管理唤醒计划、绑定账号和调度表达。
+            统一管理唤醒计划、绑定账号和调度表达，保障平台活跃度。
           </p>
         </div>
         <div class="flex gap-2">

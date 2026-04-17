@@ -5,7 +5,7 @@
         <div>
           <h1 class="text-3xl font-semibold text-white">全局实例中心</h1>
           <p class="mt-2 text-sm leading-6 text-gray-300">
-            统一查看和维护各个平台的多开实例，沿用 cockpit-tools 的实例编排思路。
+            统一查看和维护各个平台的多开实例，轻松管理进程状态与启动配置。
           </p>
         </div>
         <div class="flex gap-2">

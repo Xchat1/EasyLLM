@@ -85,7 +85,7 @@ var cockpitPlatformDefinitions = []PlatformDefinition{
 		ID:             "kiro",
 		Label:          "Kiro",
 		Icon:           "🪐",
-		Description:    "对齐 cockpit-tools 的账号、实例与刷新策略配置。",
+		Description:    "统一账号、实例与刷新策略配置。",
 		Category:       "ide",
 		ManagementMode: "generic",
 		Supports: PlatformSupport{
@@ -190,7 +190,7 @@ var cockpitPlatformDefinitions = []PlatformDefinition{
 		ID:             "zed",
 		Label:          "Zed",
 		Icon:           "⚡",
-		Description:    "对齐 cockpit-tools 的 Zed 账号台账、路径和额度预警配置。",
+		Description:    "统一账号台账、路径和额度预警配置。",
 		Category:       "editor",
 		ManagementMode: "generic",
 		Supports: PlatformSupport{
@@ -205,7 +205,7 @@ var cockpitPlatformDefinitions = []PlatformDefinition{
 		ID:             "workbuddy",
 		Label:          "Workbuddy",
 		Icon:           "🧠",
-		Description:    "预留与 cockpit-tools 一致的平台布局与账号视图。",
+		Description:    "通用的平台布局与账号视图。",
 		Category:       "ide",
 		ManagementMode: "generic",
 		Supports: PlatformSupport{
