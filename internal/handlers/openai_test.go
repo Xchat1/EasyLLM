@@ -259,6 +259,65 @@ func TestImportByTokenFilesSupportsBundledNDJSON(t *testing.T) {
 	}
 }
 
+func TestUpsertImportedOAuthAccountCanEnableProxyForExistingAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	existing := models.OpenAIAccount{
+		ID:               "existing-id",
+		Email:            "oauth@example.com",
+		AccountType:      models.OpenAIAccountTypeOAuth,
+		AccessToken:      sPtr("old-access"),
+		RefreshToken:     sPtr("old-refresh"),
+		ChatGPTAccountID: sPtr("acct-1"),
+		ProxyEnabled:     false,
+		CreatedAt:        time.Now().Add(-time.Hour),
+		UpdatedAt:        time.Now().Add(-time.Hour),
+	}
+	if err := handler.storage.Save(&existing); err != nil {
+		t.Fatalf("seed existing account: %v", err)
+	}
+
+	existingAccounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list existing accounts: %v", err)
+	}
+
+	incoming := &models.OpenAIAccount{
+		Email:            "oauth@example.com",
+		AccountType:      models.OpenAIAccountTypeOAuth,
+		AccessToken:      sPtr("new-access"),
+		RefreshToken:     sPtr("new-refresh"),
+		ChatGPTAccountID: sPtr("acct-1"),
+		ProxyEnabled:     true,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	}
+
+	account, _, err := handler.upsertImportedOAuthAccount(incoming, &existingAccounts)
+	if err != nil {
+		t.Fatalf("upsert incoming oauth account: %v", err)
+	}
+	if account.ID != existing.ID {
+		t.Fatalf("expected existing account to be updated, got id=%s", account.ID)
+	}
+	if !account.ProxyEnabled {
+		t.Fatalf("expected proxy_enabled to be turned on for re-authorized account")
+	}
+	if account.AccessToken == nil || *account.AccessToken != "new-access" {
+		t.Fatalf("expected access token to be refreshed, got %#v", account.AccessToken)
+	}
+
+	stored, err := handler.storage.Get(existing.ID)
+	if err != nil {
+		t.Fatalf("reload stored account: %v", err)
+	}
+	if !stored.ProxyEnabled {
+		t.Fatalf("expected stored account to persist proxy_enabled=true")
+	}
+}
+
 func floatPtr(v float64) *float64 { return &v }
 
 func int64Ptr(v int64) *int64 { return &v }

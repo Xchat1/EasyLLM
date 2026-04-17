@@ -1836,11 +1836,16 @@ async function exchangeOAuthCode() {
         payload.code = manualInput
       }
     }
-    await openaiAPI.exchangeOAuthCode(payload)
+    const res = await openaiAPI.exchangeOAuthCode(payload)
     await loadAccounts()
     showOAuthDialog.value = false
     resetOAuthState()
-    showToast('OAuth 登录成功', 'success')
+    const email = res?.account?.email || ''
+    if (res?.auto_joined_proxy) {
+      showToast(email ? `${email} 已登录并自动加入代理池` : 'OAuth 登录成功，账号已自动加入代理池', 'success')
+    } else {
+      showToast(email ? `${email} 已登录` : 'OAuth 登录成功', 'success')
+    }
   } catch (e) {
     oauthState.value.error = e.message
   } finally {

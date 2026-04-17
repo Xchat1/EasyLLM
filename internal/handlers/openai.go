@@ -865,6 +865,9 @@ func (h *OpenAIHandler) upsertImportedOAuthAccount(incoming *models.OpenAIAccoun
 		if incoming.OpenAIAuthJSON != nil && *incoming.OpenAIAuthJSON != "" {
 			existing.OpenAIAuthJSON = incoming.OpenAIAuthJSON
 		}
+		if incoming.ProxyEnabled {
+			existing.ProxyEnabled = true
+		}
 		existing.UpdatedAt = now
 		if err := h.storage.Save(existing); err != nil {
 			return nil, false, err
@@ -1322,17 +1325,6 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 		return
 	}
 
-	existingAccounts, _ := h.storage.List()
-	for _, existing := range existingAccounts {
-		if strings.EqualFold(existing.Email, email) &&
-			(chatgptAccountID == nil || existing.ChatGPTAccountID == nil ||
-				*chatgptAccountID == *existing.ChatGPTAccountID) {
-			h.deleteOAuthSession(req.SessionID)
-			c.JSON(http.StatusConflict, models.APIError{Error: "该账号已存在", Code: "DUPLICATE"})
-			return
-		}
-	}
-
 	now := time.Now()
 	var expiresAt *time.Time
 	if tokenResp.ExpiresIn > 0 {
@@ -1351,6 +1343,7 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 		ChatGPTAccountID: chatgptAccountID,
 		ChatGPTUserID:    chatgptUserID,
 		OrganizationID:   orgID,
+		ProxyEnabled:     true,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
@@ -1358,12 +1351,24 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 		account.OpenAIAuthJSON = sPtr(openaiAuthJSON)
 	}
 
-	if err := h.storage.Save(account); err != nil {
+	existingAccounts, _ := h.storage.List()
+	account, _, err = h.upsertImportedOAuthAccount(account, &existingAccounts)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
+
+	if p := proxy.GetProxy(); p != nil {
+		p.Refresh()
+	}
+
 	h.deleteOAuthSession(req.SessionID)
-	c.JSON(http.StatusOK, account)
+	c.JSON(http.StatusOK, gin.H{
+		"account":            account,
+		"proxy_enabled":      account.ProxyEnabled,
+		"auto_joined_proxy":  account.ProxyEnabled,
+		"authorization_mode": "auto",
+	})
 }
 
 func supportsAutoOpenAIOAuthCallback(redirectURI string) bool {
