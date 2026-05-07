@@ -10,7 +10,7 @@
             <span>{{ platform.icon }}</span>
             <span>{{ platform.category }}</span>
             <span class="text-gray-500">/</span>
-            <span>{{ platform.managementMode === 'legacy' ? 'legacy flow' : 'cockpit flow' }}</span>
+            <span>{{ platform.managementMode === 'legacy' ? 'legacy flow' : '通用流程' }}</span>
           </div>
           <div>
             <h1 class="text-3xl font-semibold text-white">{{ platform.label }}</h1>
@@ -261,7 +261,7 @@
         <div class="flex flex-col gap-4 rounded-2xl border border-gray-800 bg-gray-900/70 p-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 class="text-lg font-semibold text-white">唤醒任务</h2>
-            <p class="mt-1 text-sm text-gray-500">先对齐调度台账与配置结构，后续可以继续接入真实执行器。</p>
+            <p class="mt-1 text-sm text-gray-500">先保存调度台账与运行参数，后续可以继续接入真实执行器。</p>
           </div>
           <button class="btn btn-primary" @click="openWakeupModal()">新增任务</button>
         </div>

@@ -92,6 +92,13 @@ func (s *CodexStorage) GetLogs(limit, offset int) ([]models.CodexLog, int64, err
 	return logs, total, err
 }
 
+// GetLogsSince returns all logs created after since.
+func (s *CodexStorage) GetLogsSince(since time.Time) ([]models.CodexLog, error) {
+	var logs []models.CodexLog
+	err := s.db.Where("created_at >= ?", since).Order("created_at desc").Find(&logs).Error
+	return logs, err
+}
+
 // BackfillPlatform sets platform for all logs that have an empty platform field.
 func (s *CodexStorage) BackfillPlatform(platform string) int64 {
 	r := s.db.Model(&models.CodexLog{}).Where("platform = '' OR platform IS NULL").Update("platform", platform)

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// Use wham/usage endpoint (same as cockpit-tools/Quotio)
+// Use wham/usage endpoint with the same response pattern as Quotio.
 const usageURL = "https://chatgpt.com/backend-api/wham/usage"
 const codexResponsesQuotaURL = "https://chatgpt.com/backend-api/codex/responses?client_version=0.98.0"
 
@@ -37,7 +37,7 @@ type QuotaInfo struct {
 	IsForbidden bool // 402/403 response
 }
 
-// JSON response structs matching cockpit-tools
+// JSON response structs matching the usage payload
 type windowInfo struct {
 	UsedPercent        *int   `json:"used_percent,omitempty"`
 	LimitWindowSeconds *int64 `json:"limit_window_seconds,omitempty"`

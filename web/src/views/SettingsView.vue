@@ -174,7 +174,7 @@
 
         <article class="card p-5">
           <div>
-            <h2 class="text-lg font-semibold text-white">驾驶舱摘要</h2>
+            <h2 class="text-lg font-semibold text-white">总览摘要</h2>
             <p class="mt-1 text-sm text-gray-500">从统一平台总览接口拉取的实时摘要。</p>
           </div>
           <div class="mt-5 grid grid-cols-2 gap-3">

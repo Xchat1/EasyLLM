@@ -103,9 +103,64 @@
             <input
               v-model="searchQuery"
               class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 w-40 transition-colors focus:outline-none focus:border-blue-500 placeholder-gray-600"
-              placeholder="搜索账号 (email)"
-              title="按 email 搜索账号"
+              placeholder="搜索账号 / ID"
+              title="按账号标识或账号 ID 搜索"
             />
+            <select
+              v-model="activeGroupFilter"
+              @change="persistActiveGroupFilter"
+              class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 transition-colors focus:outline-none focus:border-blue-500"
+              title="按账号分组过滤"
+            >
+              <option value="all">全部分组</option>
+              <option v-for="group in accountGroups" :key="group.id" :value="group.id">{{ group.name }}（{{ group.account_ids.length }}）</option>
+            </select>
+            <button
+              @click="showGroupManager = true"
+              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors"
+              title="管理账号分组"
+            >
+              分组
+            </button>
+            <button
+              @click="openCustomSortDialog"
+              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors"
+              title="调整自定义账号顺序"
+            >
+              自定义排序
+            </button>
+            <button
+              @click="toggleAccountLayout"
+              class="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors"
+              :class="accountLayout === 'dense' ? 'bg-blue-600/20 hover:bg-blue-600/30 border-blue-500/40 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
+              :title="accountLayout === 'dense' ? '当前为紧凑布局：点击切换标准布局' : '当前为标准布局：点击切换紧凑布局'"
+              aria-label="切换账号列表布局"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z"/>
+              </svg>
+              {{ accountLayout === 'dense' ? '紧凑' : '标准' }}
+            </button>
+            <label class="flex items-center gap-1.5 px-2 py-1.5 text-xs text-gray-400">
+              <input v-model="groupByTag" @change="persistGroupByTag" type="checkbox" class="h-3.5 w-3.5 rounded border-gray-600 bg-gray-900 text-blue-500" />
+              标签分组
+            </label>
+            <button
+              @click="toggleAccountPrivacy"
+              class="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors"
+              :class="hideAccountEmails ? 'bg-sky-600/20 hover:bg-sky-600/30 border-sky-500/40 text-sky-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
+              :title="hideAccountEmails ? '隐私模式已开启：点击显示邮箱' : '隐私模式：点击隐藏账号邮箱'"
+              aria-label="切换账号邮箱隐私显示"
+            >
+              <svg v-if="hideAccountEmails" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+              </svg>
+              <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+              </svg>
+              {{ hideAccountEmails ? '隐私已开' : '隐私' }}
+            </button>
             <select
               v-model="quotaFilter"
               class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 transition-colors focus:outline-none focus:border-blue-500"
@@ -117,6 +172,22 @@
               <option value="403">403（地区受限/禁止）</option>
               <option value="429">429（限流）</option>
             </select>
+            <select
+              :value="oauthSortBy"
+              @change="setOAuthSortBy($event.target.value)"
+              class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 transition-colors focus:outline-none focus:border-blue-500"
+              title="账号排序维度"
+            >
+              <option v-for="option in oauthSortOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
+            </select>
+            <button
+              @click="toggleOAuthSortDirection"
+              class="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors"
+              :title="oauthSortDirection === 'desc' ? '当前：降序，点击切换为升序' : '当前：升序，点击切换为降序'"
+              aria-label="切换 OAuth 账号排序方向"
+            >
+              {{ oauthSortDirection === 'desc' ? '↓' : '↑' }}
+            </button>
 
             <button
               v-if="filteredOAuthAccounts.length > 0"
@@ -150,7 +221,7 @@
             </button>
           </div>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+        <div class="grid" :class="accountGridClass">
           <div
             v-for="account in paginatedOAuth"
             :key="account.id"
@@ -158,9 +229,10 @@
             :class="[
               account.is_codex_active ? 'ring-1 ring-blue-500/60' : '',
               isOAuthSelected(account.id) ? 'account-card-compact--selected' : '',
+              accountLayout === 'dense' ? 'account-card-compact--dense' : '',
             ]"
           >
-            <!-- Row 1: email + Codex badge -->
+            <!-- Row 1: account identity + Codex badge -->
             <div class="flex items-center gap-2 min-w-0 mb-2">
               <label class="selection-checkbox shrink-0" :title="isOAuthSelected(account.id) ? '取消选择' : '选择该账号'">
                 <input
@@ -171,13 +243,27 @@
                 <span></span>
               </label>
               <span class="inline-block w-2 h-2 rounded-full shrink-0" :class="account.proxy_enabled ? 'bg-green-400' : 'bg-gray-500'"></span>
-              <span class="text-sm font-medium text-white truncate flex-1" :title="account.email">{{ account.email }}</span>
+              <span class="text-sm font-medium text-white truncate flex-1" :title="accountDisplayTitle(account)">
+                {{ accountDisplayLabel(account) }}
+              </span>
               <span v-if="account.is_codex_active" class="shrink-0 text-[10px] font-bold text-blue-300 bg-blue-600/30 px-1.5 py-0.5 rounded">Codex</span>
               <span v-if="account.status === 'reauth_required'" class="shrink-0 text-[10px] font-bold text-red-300 bg-red-600/20 px-1.5 py-0.5 rounded">重登</span>
               <span v-if="account._quota_http_status && account._quota_http_status !== 200" class="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded" :class="account._quota_http_status === 403 ? 'text-red-300 bg-red-600/20' : account._quota_http_status === 401 ? 'text-orange-300 bg-orange-600/20' : 'text-yellow-300 bg-yellow-600/20'">{{ account._quota_http_status }}</span>
             </div>
+            <div v-if="accountLayout !== 'dense' && (accountGroupNames(account).length || account.tag_name)" class="flex flex-wrap gap-1 mb-2">
+              <span v-for="name in accountGroupNames(account)" :key="name" class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-200">
+                {{ name }}
+              </span>
+              <span
+                v-if="account.tag_name"
+                class="text-[10px] px-1.5 py-0.5 rounded text-white"
+                :style="{ backgroundColor: account.tag_color || '#4B5563' }"
+              >
+                {{ account.tag_name }}
+              </span>
+            </div>
             <!-- Row 2: info + quota -->
-            <div class="flex items-center gap-3 text-[11px] text-gray-500 mb-1.5 min-w-0">
+            <div class="flex items-center gap-3 text-[11px] text-gray-500 min-w-0" :class="accountLayout === 'dense' ? 'mb-1' : 'mb-1.5'">
               <span v-if="account.expires_at" class="truncate"
                 :class="isExpired(account.expires_at) ? 'text-red-400' : isExpiringSoon(account.expires_at) ? 'text-yellow-400' : ''">
                 {{ formatDate(account.expires_at) }}
@@ -186,7 +272,7 @@
               <span v-if="account.chatgpt_account_id" class="truncate font-mono">{{ account.chatgpt_account_id.slice(0, 12) }}</span>
             </div>
             <!-- Row 2.5: plan badge + quota bars -->
-            <div class="mb-2 space-y-1">
+            <div v-if="accountLayout !== 'dense'" class="mb-2 space-y-1">
               <!-- Plan type from JWT -->
               <div class="flex items-center gap-2">
                 <span
@@ -288,6 +374,14 @@
                 <span v-else>点击卡片「配额」或上方「查询配额」获取</span>
               </div>
             </div>
+            <div v-else class="dense-account-meta">
+              <span v-if="planBadge(account)" class="dense-pill" :class="planBadge(account).cls">{{ planBadge(account).text }}</span>
+              <span v-if="account.quota_is_forbidden" class="dense-pill bg-red-500/15 text-red-300">禁用</span>
+              <span v-else-if="account.quota_5h_used_percent != null" class="dense-pill" :class="pctColor(100 - account.quota_5h_used_percent)">5h {{ Math.round(100 - account.quota_5h_used_percent) }}%</span>
+              <span v-if="account.quota_7d_used_percent != null" class="dense-pill" :class="pctColor(100 - account.quota_7d_used_percent)">7d {{ Math.round(100 - account.quota_7d_used_percent) }}%</span>
+              <span v-if="isRegionRestricted(account)" class="dense-pill bg-amber-500/15 text-amber-300">地区</span>
+              <span v-if="!planBadge(account) && !hasQuotaData(account) && !account.quota_is_forbidden" class="text-gray-600 truncate">未查配额</span>
+            </div>
             <!-- Row 3: all action buttons in one row -->
             <div class="flex items-center gap-1.5">
               <button
@@ -325,7 +419,7 @@
         <!-- Pagination -->
         <div v-if="oauthTotalPages > 1" class="flex items-center justify-center gap-2 mt-4 text-sm">
           <button @click="oauthPage = Math.max(1, oauthPage - 1)" :disabled="oauthPage <= 1" class="btn btn-sm btn-secondary">上一页</button>
-          <span class="text-gray-400">{{ oauthPage }} / {{ oauthTotalPages }}<span class="text-gray-600 ml-2">(共 {{ oauthAccounts.length }})</span></span>
+          <span class="text-gray-400">{{ oauthPage }} / {{ oauthTotalPages }}<span class="text-gray-600 ml-2">(显示 {{ filteredOAuthAccounts.length }} / {{ oauthAccounts.length }})</span></span>
           <button @click="oauthPage = Math.min(oauthTotalPages, oauthPage + 1)" :disabled="oauthPage >= oauthTotalPages" class="btn btn-sm btn-secondary">下一页</button>
         </div>
       </template>
@@ -339,13 +433,48 @@
       </div>
       <template v-else>
         <div class="flex items-center justify-end gap-2 flex-wrap mb-3">
+          <input
+            v-model="apiSearchQuery"
+            class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 w-44 transition-colors focus:outline-none focus:border-blue-500 placeholder-gray-600"
+            placeholder="搜索 API 账号"
+            title="按 provider、model、base URL 搜索 API 账号"
+          />
+          <select
+            :value="apiSortBy"
+            @change="setAPISortBy($event.target.value)"
+            class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 transition-colors focus:outline-none focus:border-blue-500"
+            title="API 账号排序维度"
+          >
+            <option v-for="option in apiSortOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
+          </select>
           <button
+            @click="toggleAPISortDirection"
+            class="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors"
+            :title="apiSortDirection === 'desc' ? '当前：降序，点击切换为升序' : '当前：升序，点击切换为降序'"
+            aria-label="切换 API 账号排序方向"
+          >
+            {{ apiSortDirection === 'desc' ? '↓' : '↑' }}
+          </button>
+          <button
+            @click="toggleAccountLayout"
+            class="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors"
+            :class="accountLayout === 'dense' ? 'bg-blue-600/20 hover:bg-blue-600/30 border-blue-500/40 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
+            :title="accountLayout === 'dense' ? '当前为紧凑布局：点击切换标准布局' : '当前为标准布局：点击切换紧凑布局'"
+            aria-label="切换账号列表布局"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z"/>
+            </svg>
+            {{ accountLayout === 'dense' ? '紧凑' : '标准' }}
+          </button>
+          <button
+            v-if="filteredAPIAccounts.length > 0"
             @click="toggleSelectAllAPI"
             :disabled="bulkDeleting"
             class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-            :title="allAPISelected ? `取消全选全部 API 账号（${apiAccounts.length}）` : `全选全部 API 账号（${apiAccounts.length}）`"
+            :title="allAPISelected ? `取消全选当前 API 筛选结果（${filteredAPIAccounts.length}）` : `全选当前 API 筛选结果（${filteredAPIAccounts.length}）`"
           >
-            {{ allAPISelected ? '取消全选' : `全选(${apiAccounts.length})` }}
+            {{ allAPISelected ? '取消全选' : `全选(${filteredAPIAccounts.length})` }}
           </button>
           <button
             v-if="selectedAPIIds.length > 0"
@@ -369,12 +498,12 @@
             {{ bulkDeleting ? '删除中...' : `批量删除(${selectedAPIIds.length})` }}
           </button>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+        <div class="grid" :class="accountGridClass">
           <div
             v-for="account in paginatedAPI"
             :key="account.id"
             class="account-card-compact account-card-compact--api"
-            :class="isAPISelected(account.id) ? 'account-card-compact--selected' : ''"
+            :class="[isAPISelected(account.id) ? 'account-card-compact--selected' : '', accountLayout === 'dense' ? 'account-card-compact--dense' : '']"
           >
             <!-- Row 1: provider -->
             <div class="flex items-center gap-2 min-w-0 mb-2">
@@ -387,6 +516,7 @@
                 <span></span>
               </label>
               <span class="text-sm font-medium text-white truncate flex-1" :title="account.model_provider">{{ account.model_provider || 'API' }}</span>
+              <span v-if="account.is_codex_active" class="shrink-0 text-[10px] font-bold text-blue-300 bg-blue-600/30 px-1.5 py-0.5 rounded">Codex</span>
               <span v-if="account.model" class="shrink-0 text-[10px] font-mono text-emerald-300 bg-emerald-600/20 px-1.5 py-0.5 rounded truncate max-w-[100px]">{{ account.model }}</span>
             </div>
             <!-- Row 2: info -->
@@ -415,7 +545,7 @@
         <!-- Pagination -->
         <div v-if="apiTotalPages > 1" class="flex items-center justify-center gap-2 mt-4 text-sm">
           <button @click="apiPage = Math.max(1, apiPage - 1)" :disabled="apiPage <= 1" class="btn btn-sm btn-secondary">上一页</button>
-          <span class="text-gray-400">{{ apiPage }} / {{ apiTotalPages }}<span class="text-gray-600 ml-2">(共 {{ apiAccounts.length }})</span></span>
+          <span class="text-gray-400">{{ apiPage }} / {{ apiTotalPages }}<span class="text-gray-600 ml-2">(显示 {{ filteredAPIAccounts.length }} / {{ apiAccounts.length }})</span></span>
           <button @click="apiPage = Math.min(apiTotalPages, apiPage + 1)" :disabled="apiPage >= apiTotalPages" class="btn btn-sm btn-secondary">下一页</button>
         </div>
       </template>
@@ -499,9 +629,87 @@
       </div>
     </div>
 
+    <!-- Group Manager Dialog -->
+    <div v-if="showGroupManager" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="showGroupManager = false">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl shadow-2xl">
+        <div class="flex items-center justify-between p-6 border-b border-gray-700">
+          <h2 class="text-lg font-semibold text-white">账号分组</h2>
+          <button @click="showGroupManager = false" class="text-gray-400 hover:text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <div class="p-6 space-y-4">
+          <div class="grid sm:grid-cols-[1fr_auto] gap-2">
+            <input v-model="newGroupName" class="input" placeholder="新分组名称" />
+            <button @click="createAccountGroup" class="btn btn-primary">新建分组</button>
+          </div>
+          <div class="space-y-2 max-h-80 overflow-y-auto">
+            <div v-for="group in accountGroups" :key="group.id" class="rounded-xl border border-gray-700 bg-gray-800/60 p-3">
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="font-medium text-white truncate">{{ group.name }}</div>
+                  <div class="text-xs text-gray-500 mt-0.5">{{ group.account_ids.length }} 个账号</div>
+                </div>
+                <div class="flex gap-2 shrink-0">
+                  <button
+                    @click="addSelectedToGroup(group.id)"
+                    :disabled="selectedOAuthIds.length === 0"
+                    class="btn btn-xs btn-secondary"
+                    title="把当前勾选账号加入这个分组"
+                  >加入已选</button>
+                  <button
+                    @click="removeSelectedFromGroup(group.id)"
+                    :disabled="selectedOAuthIds.length === 0"
+                    class="btn btn-xs btn-secondary"
+                    title="把当前勾选账号从这个分组移除"
+                  >移出已选</button>
+                  <button @click="deleteAccountGroup(group.id)" class="btn btn-xs btn-danger">删除</button>
+                </div>
+              </div>
+            </div>
+            <div v-if="accountGroups.length === 0" class="text-sm text-gray-500 text-center py-8">还没有分组</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Custom Sort Dialog -->
+    <div v-if="showCustomSortDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="showCustomSortDialog = false">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl shadow-2xl">
+        <div class="flex items-center justify-between p-6 border-b border-gray-700">
+          <h2 class="text-lg font-semibold text-white">自定义账号排序</h2>
+          <button @click="showCustomSortDialog = false" class="text-gray-400 hover:text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <div class="p-6 space-y-3">
+          <div class="flex justify-between text-xs text-gray-500">
+            <span>使用上下按钮调整顺序，账号列表选择“自定义顺序”后生效。</span>
+            <button @click="resetCustomSortOrder" class="text-gray-400 hover:text-white">重置</button>
+          </div>
+          <div class="space-y-2 max-h-96 overflow-y-auto">
+            <div v-for="(account, index) in customSortAccounts" :key="account.id" class="flex items-center gap-3 rounded-lg border border-gray-700 bg-gray-800/60 px-3 py-2">
+              <div class="w-8 text-xs text-gray-500">{{ index + 1 }}</div>
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm text-white" :title="accountDisplayTitle(account)">{{ accountDisplayLabel(account) }}</div>
+                <div class="text-xs text-gray-500 truncate">{{ account.chatgpt_account_id || account.id }}</div>
+              </div>
+              <button @click="moveCustomSortAccount(account.id, -1)" :disabled="index === 0" class="btn btn-xs btn-secondary">上移</button>
+              <button @click="moveCustomSortAccount(account.id, 1)" :disabled="index === customSortAccounts.length - 1" class="btn btn-xs btn-secondary">下移</button>
+            </div>
+            <div v-if="customSortAccounts.length === 0" class="text-sm text-gray-500 text-center py-8">暂无 OAuth 账号</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Batch Import Dialog -->
     <div v-if="showImportDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-xl shadow-2xl">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl shadow-2xl">
         <div class="flex items-center justify-between p-6 border-b border-gray-700">
           <h2 class="text-lg font-semibold text-white">批量导入账号</h2>
           <button @click="closeImportDialog" class="text-gray-400 hover:text-white">
@@ -513,12 +721,12 @@
         <div class="p-6 space-y-4">
 
           <!-- Import mode tabs -->
-          <div class="flex gap-1 bg-gray-800 rounded-lg p-1">
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1 bg-gray-800 rounded-lg p-1">
             <button
               v-for="m in importModes"
               :key="m.id"
-              @click="importMode = m.id; importResults = null; importFiles = []; importTokens = []"
-              class="flex-1 py-1.5 rounded-md text-xs font-medium transition-colors"
+              @click="selectImportMode(m.id)"
+              class="min-w-0 px-2 py-1.5 rounded-md text-xs font-medium transition-colors truncate"
               :class="importMode === m.id ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'"
             >{{ m.label }}</button>
           </div>
@@ -661,6 +869,39 @@
             </div>
           </div>
 
+          <!-- Mode 6: Import cockpit-tools accounts exported by another desktop manager -->
+          <div v-if="importMode === 'cockpit-tools'">
+            <div class="bg-cyan-900/20 border border-cyan-700/40 rounded-lg p-3 text-xs text-cyan-300 mb-3">
+              🧭 直接导入 cockpit-tools 导出的账号 JSON，支持账号数组和账户迁移包结构，无需调用 OpenAI API。
+            </div>
+            <div v-if="!importCockpitToolsFile">
+              <input ref="importCockpitToolsFileInput" type="file" accept=".json" class="hidden" @change="handleCockpitToolsFileSelect"/>
+              <div
+                @click="$refs.importCockpitToolsFileInput.click()"
+                @dragover.prevent="dragging = true"
+                @dragleave.prevent="dragging = false"
+                @drop.prevent="handleDrop"
+                class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-cyan-500 hover:bg-cyan-900/10 transition-colors"
+                :class="{ 'border-cyan-500 bg-cyan-900/10': dragging }"
+              >
+                <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                </svg>
+                <p class="text-gray-400 text-sm">点击或拖拽 cockpit-tools 导出文件到此处</p>
+                <p class="text-xs text-gray-600 mt-1">支持单平台账号数组，也支持含 platforms.codex.exported_data 的迁移包</p>
+              </div>
+            </div>
+            <div v-else class="space-y-2">
+              <div class="flex items-center justify-between">
+                <div class="text-sm text-gray-300">
+                  已解析：
+                  <span class="text-white font-medium">{{ importCockpitToolsCount }}</span> 个账号
+                </div>
+                <button @click="importCockpitToolsFile = null; importCockpitToolsCount = 0; importResults = null" class="text-xs text-gray-500 hover:text-red-400">重新选择</button>
+              </div>
+            </div>
+          </div>
+
           <!-- Mode 4: Re-import from exported backup JSON -->
           <div v-if="importMode === 'from-export'">
             <div class="bg-purple-900/20 border border-purple-700/40 rounded-lg p-3 text-xs text-purple-300 mb-3">
@@ -689,6 +930,7 @@
                   已解析备份：
                   <span class="text-white font-medium">{{ importBackupFile.oauth_accounts?.length ?? 0 }}</span> 个 OAuth 账号，
                   <span class="text-white font-medium">{{ importBackupFile.api_accounts?.length ?? 0 }}</span> 个 API 账号
+                  <span v-if="importBackupFile.local_access" class="text-emerald-300">，包含本地 API 服务配置</span>
                 </div>
                 <button @click="importBackupFile = null; importResults = null" class="text-xs text-gray-500 hover:text-red-400">重新选择</button>
               </div>
@@ -718,14 +960,14 @@
                 <span class="shrink-0" :class="r.success ? 'text-green-400' : r.skipped ? 'text-yellow-400' : 'text-red-400'">
                   {{ r.success ? '✓' : r.skipped ? '↷' : '✗' }}
                 </span>
-                <span class="text-gray-300 truncate flex-1">{{ r.email || r.filename || r.token_preview }}</span>
+                <span class="text-gray-300 truncate flex-1">{{ importResultDisplayLabel(r) }}</span>
                 <span v-if="r.error && !r.skipped" class="text-red-400 shrink-0 truncate max-w-[160px]">{{ r.error }}</span>
               </div>
             </div>
           </div>
         </div>
 
-        <div class="flex justify-end gap-3 p-6 border-t border-gray-700">
+        <div class="flex flex-wrap justify-end gap-3 p-6 border-t border-gray-700">
           <button @click="closeImportDialog" class="btn btn-secondary" :disabled="importing">关闭</button>
           <button
             v-if="canRunImport && !importResults"
@@ -905,6 +1147,162 @@
             </div>
           </div>
 
+          <!-- Codex API Service -->
+          <div class="bg-gray-800 rounded-xl p-4 space-y-3">
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <div class="text-sm font-medium text-white">Codex API 服务</div>
+                  <span
+                    class="text-[10px] px-2 py-0.5 rounded-full font-medium"
+                    :class="serviceConfig.codex_api_service ? 'bg-green-500/20 text-green-300' : 'bg-gray-700 text-gray-500'"
+                  >
+                    {{ serviceConfig.codex_api_service ? '已注入' : '未注入' }}
+                  </span>
+                </div>
+                <div class="text-xs text-gray-400 mt-0.5">
+                  启动后自动写入本机 <code class="text-blue-300">~/.codex/auth.json</code> 和 <code class="text-blue-300">config.toml</code>，Codex 直接走 EasyLLM 本地服务。
+                </div>
+              </div>
+              <button
+                @click="activateCodexAPIService"
+                :disabled="savingServiceConfig || oauthAccounts.length === 0"
+                class="btn btn-sm btn-primary shrink-0"
+                :title="oauthAccounts.length === 0 ? '请先导入 OAuth 账号' : '开启代理池并注入本机 Codex 配置'"
+              >
+                {{ savingServiceConfig ? '处理中...' : '启动并注入 Codex' }}
+              </button>
+            </div>
+            <div class="grid md:grid-cols-2 gap-2 text-xs">
+              <div class="flex items-center justify-between bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
+                <span class="text-gray-500 shrink-0">Base URL</span>
+                <code class="text-blue-300 font-mono truncate mx-3">{{ serviceConfig.codex_api_base_url || (baseURL + '/v1') }}</code>
+                <button @click="copyText(serviceConfig.codex_api_base_url || (baseURL + '/v1'))" class="text-gray-500 hover:text-white shrink-0">复制</button>
+              </div>
+              <div class="flex items-center justify-between bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
+                <span class="text-gray-500 shrink-0">Wire API</span>
+                <code class="text-emerald-300 font-mono truncate mx-3">responses</code>
+                <span class="text-gray-600 shrink-0">model_provider=easyllm</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Codex local API service -->
+          <div class="bg-gray-800 rounded-xl p-4 space-y-4">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <div class="text-sm font-medium text-white">Codex 本地 API 服务</div>
+                <div class="text-xs text-gray-400 mt-0.5">
+                  管理注入到本机 Codex 的账号集合、端口、策略和调用统计。
+                </div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="text-[10px] px-2 py-0.5 rounded-full font-medium"
+                  :class="localAccess.running ? 'bg-green-500/20 text-green-300' : 'bg-gray-700 text-gray-500'">
+                  {{ localAccess.running ? '运行中' : '已停止' }}
+                </span>
+                <button @click="activateLocalAccess" :disabled="localAccessBusy || oauthAccounts.length === 0" class="btn btn-sm btn-primary">
+                  {{ localAccessBusy ? '处理中...' : '启动/注入' }}
+                </button>
+                <button @click="deactivateLocalAccess" :disabled="localAccessBusy || !localAccess.collection?.enabled" class="btn btn-sm btn-secondary">
+                  停止
+                </button>
+              </div>
+            </div>
+
+            <div class="grid md:grid-cols-3 gap-2 text-xs">
+              <div class="bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
+                <div class="text-gray-500">成员账号</div>
+                <div class="mt-1 text-lg font-semibold text-white">{{ localAccess.member_count || 0 }}</div>
+              </div>
+              <div class="bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
+                <div class="text-gray-500">API Key</div>
+                <code class="mt-1 block text-green-300 truncate">{{ localAccess.collection?.api_key_masked || '未设置' }}</code>
+              </div>
+              <div class="bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
+                <div class="text-gray-500">入口</div>
+                <div class="mt-1 flex items-center gap-2 min-w-0">
+                  <code class="text-blue-300 truncate">{{ localAccess.api_port_url || serviceConfig.codex_api_port_url || '' }}</code>
+                  <button @click="copyText(localAccess.api_port_url || serviceConfig.codex_api_port_url || '')" class="text-gray-500 hover:text-white shrink-0">复制</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid lg:grid-cols-[1fr_1fr] gap-4">
+              <div class="space-y-3">
+                <div class="grid sm:grid-cols-[1fr_auto] gap-2">
+                  <input v-model="localAccessPortInput" class="input text-xs" placeholder="端口，例如 8022" />
+                  <button @click="updateLocalAccessPort" :disabled="localAccessBusy" class="btn btn-sm btn-secondary">保存端口</button>
+                </div>
+                <div class="grid sm:grid-cols-[1fr_auto_auto] gap-2">
+                  <select
+                    :value="localAccess.collection?.routing_strategy || serviceConfig.strategy"
+                    @change="updateLocalAccessRouting($event.target.value)"
+                    class="input text-xs"
+                  >
+                    <option v-for="s in strategies" :key="s.id" :value="s.id">{{ s.label }}</option>
+                  </select>
+                  <button @click="rotateLocalAccessKey" :disabled="localAccessBusy" class="btn btn-sm btn-secondary">重置 Key</button>
+                  <button @click="clearLocalAccessStats" :disabled="localAccessBusy" class="btn btn-sm btn-secondary">清空统计</button>
+                </div>
+                <label class="flex items-center gap-2 text-xs text-gray-300">
+                  <input v-model="localAccessRestrictFree" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
+                  <span>保存集合时排除免费账号</span>
+                </label>
+              </div>
+
+              <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                  <div class="text-xs font-medium text-gray-300">API 服务账号集合</div>
+                  <button @click="saveLocalAccessAccounts" :disabled="localAccessBusy" class="btn btn-xs btn-primary">保存集合</button>
+                </div>
+                <div class="max-h-36 overflow-y-auto rounded-lg border border-gray-700 bg-gray-900/60 p-2 space-y-1">
+                  <label v-for="account in oauthAccounts" :key="account.id" class="flex items-center gap-2 rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-800">
+                    <input
+                      type="checkbox"
+                      :checked="localAccessSelectedIds.includes(accountId(account.id))"
+                      @change="toggleLocalAccessAccount(account.id)"
+                    />
+                    <span class="truncate flex-1" :title="accountDisplayTitle(account)">{{ accountDisplayLabel(account) }}</span>
+                    <span v-if="account.plan" class="text-gray-500">{{ account.plan }}</span>
+                  </label>
+                  <div v-if="oauthAccounts.length === 0" class="text-xs text-gray-500 px-2 py-3 text-center">暂无 OAuth 账号</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <div class="flex items-center justify-between">
+                <div class="flex gap-1 bg-gray-900/60 rounded-lg p-1">
+                  <button v-for="range in localAccessStatsRanges" :key="range.id"
+                    @click="localAccessStatsRange = range.id"
+                    class="px-3 py-1 rounded-md text-xs"
+                    :class="localAccessStatsRange === range.id ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'"
+                  >{{ range.label }}</button>
+                </div>
+                <div class="text-xs text-gray-500">按账号统计来自代理日志和 Codex session 扫描</div>
+              </div>
+              <div class="grid md:grid-cols-4 gap-2 text-xs">
+                <div class="bg-gray-900/60 rounded-lg px-3 py-2">
+                  <div class="text-gray-500">请求</div>
+                  <div class="mt-1 text-lg font-semibold text-white">{{ localAccessStatsTotals.request_count || 0 }}</div>
+                </div>
+                <div class="bg-gray-900/60 rounded-lg px-3 py-2">
+                  <div class="text-gray-500">成功 / 失败</div>
+                  <div class="mt-1 text-lg font-semibold text-white">{{ localAccessStatsTotals.success_count || 0 }} / {{ localAccessStatsTotals.failure_count || 0 }}</div>
+                </div>
+                <div class="bg-gray-900/60 rounded-lg px-3 py-2">
+                  <div class="text-gray-500">Token</div>
+                  <div class="mt-1 text-lg font-semibold text-white">{{ localAccessStatsTotals.total_tokens || 0 }}</div>
+                </div>
+                <div class="bg-gray-900/60 rounded-lg px-3 py-2">
+                  <div class="text-gray-500">平均延迟</div>
+                  <div class="mt-1 text-lg font-semibold text-white">{{ localAccessAverageLatency }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Proxy Pool Toggle -->
           <div class="flex items-center justify-between bg-gray-800 rounded-xl p-4">
             <div>
@@ -927,7 +1325,7 @@
             <div class="flex items-center justify-between">
               <div>
                 <div class="text-sm font-medium text-white">轮询代理池</div>
-                <div class="text-xs text-gray-400 mt-0.5"><code class="text-blue-300">/v1/chat/completions</code> 请求在已加入的账号间轮询</div>
+                <div class="text-xs text-gray-400 mt-0.5"><code class="text-blue-300">/v1/responses</code> 请求在已加入的账号间轮询</div>
               </div>
               <div class="flex items-center gap-3 shrink-0">
                 <span class="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -998,7 +1396,7 @@
           <div class="bg-gray-800 rounded-xl p-4 space-y-3">
             <div>
               <div class="text-sm font-medium text-white">对外 API Key</div>
-              <div class="text-xs text-gray-400 mt-0.5">设置后，外部调用 <code class="text-blue-300">/v1/chat/completions</code> 需在 Header 携带 <code class="text-blue-300">Authorization: Bearer &lt;key&gt;</code></div>
+              <div class="text-xs text-gray-400 mt-0.5">设置后，外部调用 <code class="text-blue-300">/v1/responses</code> 需在 Header 携带 <code class="text-blue-300">Authorization: Bearer &lt;key&gt;</code></div>
             </div>
             <div class="flex gap-2">
               <input
@@ -1020,7 +1418,7 @@
             <div class="flex items-center justify-between">
               <span v-if="serviceConfig.api_key_set" class="text-xs text-green-400 flex items-center gap-1.5">
                 当前已设置:
-                <code class="text-green-300 bg-green-500/10 px-1.5 py-0.5 rounded select-all cursor-pointer" :title="serviceConfig.api_key" @click="copyText(serviceConfig.api_key)">{{ serviceConfig.api_key }}</code>
+                <code class="text-green-300 bg-green-500/10 px-1.5 py-0.5 rounded">{{ serviceConfig.api_key_masked || '****' }}</code>
               </span>
               <span v-else class="text-xs text-yellow-400">
                 未设置（无需鉴权即可调用）
@@ -1052,7 +1450,8 @@ const activeTab = ref('oauth')
 // Proxy endpoints
 const baseURL = computed(() => `${window.location.protocol}//${window.location.hostname}:${window.location.port || 8022}`)
 const proxyEndpoints = [
-  { method: 'POST', path: '/v1/chat/completions', desc: '聊天补全（OpenAI 兼容）' },
+  { method: 'POST', path: '/v1/responses', desc: 'Codex Responses（推荐）' },
+  { method: 'POST', path: '/v1/chat/completions', desc: '聊天补全（兼容）' },
   { method: 'GET',  path: '/v1/models',           desc: '获取可用模型列表' },
   { method: 'GET',  path: '/pool/status',         desc: '查看代理账号池状态' },
 ]
@@ -1070,6 +1469,7 @@ const fetchingQuotaIds = ref([])
 const quotaLastFetched = ref('')
 const quotaFilter = ref('all') // all | 200 | 401 | 403 | 429
 const searchQuery = ref('') // search by email
+const apiSearchQuery = ref('')
 const bulkDeleting = ref(false)
 const showBulkDeleteConfirm = ref(false)
 const bulkDeleteIds = ref([])
@@ -1080,6 +1480,47 @@ const bulkDeleteScopeLabel = ref('')
 const bulkDeleteAllSelected = ref(false)
 const selectedOAuthIds = ref([])
 const selectedAPIIds = ref([])
+
+const sortDirections = ['asc', 'desc']
+const oauthSortOptions = [
+  { id: 'recommended', label: '智能排序' },
+  { id: 'created_at', label: '创建时间' },
+  { id: 'updated_at', label: '更新时间' },
+  { id: 'email', label: '邮箱' },
+  { id: 'plan', label: '订阅计划' },
+  { id: 'status', label: '状态' },
+  { id: 'proxy', label: '代理池' },
+  { id: 'quota_5h', label: '5小时剩余额度' },
+  { id: 'quota_7d', label: '周剩余额度' },
+  { id: 'quota_5h_reset', label: '5小时重置' },
+  { id: 'quota_7d_reset', label: '周重置' },
+  { id: 'expires_at', label: '订阅有效期' },
+  { id: 'custom', label: '自定义顺序' },
+]
+const apiSortOptions = [
+  { id: 'created_at', label: '创建时间' },
+  { id: 'updated_at', label: '更新时间' },
+  { id: 'provider', label: 'Provider' },
+  { id: 'model', label: 'Model' },
+  { id: 'base_url', label: 'Base URL' },
+  { id: 'wire_api', label: 'Wire API' },
+]
+const oauthSortBy = ref(readStoredOption('easyllm.openai.oauth.sortBy', 'quota_5h', oauthSortOptions.map(o => o.id)))
+const oauthSortDirection = ref(readStoredOption('easyllm.openai.oauth.sortDirection', 'desc', sortDirections))
+const apiSortBy = ref(readStoredOption('easyllm.openai.api.sortBy', 'created_at', apiSortOptions.map(o => o.id)))
+const apiSortDirection = ref(readStoredOption('easyllm.openai.api.sortDirection', 'desc', sortDirections))
+const hideAccountEmails = ref(readStoredBoolean('easyllm.openai.hideAccountEmails', false))
+const accountLayoutModes = ['standard', 'dense']
+const accountLayout = ref(readStoredOption('easyllm.openai.accountLayout', 'standard', accountLayoutModes))
+const storedAccountGroups = readStoredJSON('easyllm.openai.accountGroups', [])
+const accountGroups = ref(Array.isArray(storedAccountGroups) ? storedAccountGroups.map(normalizeAccountGroup).filter(Boolean) : [])
+const activeGroupFilter = ref(readStoredOption('easyllm.openai.activeGroupFilter', 'all', ['all', ...accountGroups.value.map(g => g.id)]))
+const groupByTag = ref(readStoredBoolean('easyllm.openai.groupByTag', false))
+const showGroupManager = ref(false)
+const newGroupName = ref('')
+const showCustomSortDialog = ref(false)
+const storedCustomSortOrder = readStoredJSON('easyllm.openai.customSortOrder', [])
+const customSortOrder = ref(Array.isArray(storedCustomSortOrder) ? storedCustomSortOrder.map(accountId) : [])
 
 const quotaFilterLabel = computed(() => {
   if (quotaFilter.value === '429') return '429（限流）'
@@ -1101,7 +1542,10 @@ const dragging = ref(false)
 const scanDir = ref('./auth')
 const importSub2APIFile = ref(null)
 const importSub2APIFileInput = ref(null)
-const importMode = ref('token-files') // 'token-files' | 'scan-dir' | 'refresh-tokens' | 'sub2api' | 'from-export'
+const importCockpitToolsFile = ref(null)
+const importCockpitToolsFileInput = ref(null)
+const importCockpitToolsCount = ref(0)
+const importMode = ref('token-files') // 'token-files' | 'scan-dir' | 'refresh-tokens' | 'sub2api' | 'cockpit-tools' | 'from-export'
 const importBackupFile = ref(null)  // 从备份导入用的解析后的 JSON 对象
 const importBackupFileInput = ref(null)
 const importModes = [
@@ -1109,6 +1553,7 @@ const importModes = [
   { id: 'scan-dir',     label: '🗂 扫描目录' },
   { id: 'refresh-tokens', label: '🔄 refresh_token' },
   { id: 'sub2api',      label: '🚀 Sub2API' },
+  { id: 'cockpit-tools', label: '🧭 cockpit-tools' },
   { id: 'from-export',  label: '📦 从备份导入' },
 ]
 
@@ -1145,9 +1590,48 @@ const serviceConfig = ref({
   total_requests: 0,
   total_logs: 0,
   api_key_set: false,
-  api_key_masked: ''
+  api_key_masked: '',
+  v1_proxy_mode: '',
+  codex_api_service: false,
+  codex_api_base_url: '',
+  codex_api_port_url: ''
 })
+const localAccess = ref({
+  collection: {
+    enabled: false,
+    port: 8022,
+    api_key_masked: '',
+    routing_strategy: 'auto',
+    restrict_free_accounts: true,
+    account_ids: []
+  },
+  running: false,
+  base_url: '',
+  api_port_url: '',
+  member_count: 0,
+  stats: {
+    daily: { totals: {}, accounts: [] },
+    weekly: { totals: {}, accounts: [] },
+    monthly: { totals: {}, accounts: [] }
+  }
+})
+const localAccessBusy = ref(false)
+const localAccessSelectedIds = ref([])
+const localAccessPortInput = ref('')
+const localAccessRestrictFree = ref(true)
+const localAccessStatsRange = ref('daily')
+const localAccessStatsRanges = [
+  { id: 'daily', label: '日' },
+  { id: 'weekly', label: '周' },
+  { id: 'monthly', label: '月' }
+]
 const strategies = [
+  { id: 'auto', label: '自动' },
+  { id: 'quota_high_first', label: '优先高配额' },
+  { id: 'quota_low_first', label: '优先低配额' },
+  { id: 'plan_high_first', label: '优先高订阅' },
+  { id: 'plan_low_first', label: '优先低订阅' },
+  { id: 'expiry_soon_first', label: '优先近到期' },
   { id: 'round_robin', label: '轮询' },
   { id: 'random', label: '随机' },
   { id: 'least_used', label: '最少使用' }
@@ -1171,8 +1655,28 @@ const formatExample = `[
 // Computed
 const oauthAccounts = computed(() => accounts.value.filter(a => !a.account_type || a.account_type === 'oauth'))
 const apiAccounts = computed(() => accounts.value.filter(a => a.account_type === 'api'))
-const proxyEnabledCount = computed(() => accounts.value.filter(a => a.proxy_enabled).length)
+const proxyEnabledCount = computed(() => oauthAccounts.value.filter(a => a.proxy_enabled).length)
 const proxyAllOn = computed(() => oauthAccounts.value.length > 0 && proxyEnabledCount.value === oauthAccounts.value.length)
+const activeGroup = computed(() => accountGroups.value.find(g => g.id === activeGroupFilter.value) || null)
+const activeGroupAccountIDs = computed(() => new Set(activeGroup.value?.account_ids || []))
+const customSortAccounts = computed(() => {
+  const index = new Map(customSortOrder.value.map((id, i) => [accountId(id), i]))
+  return [...oauthAccounts.value].sort((left, right) => {
+    const leftIndex = index.has(accountId(left.id)) ? index.get(accountId(left.id)) : Number.MAX_SAFE_INTEGER
+    const rightIndex = index.has(accountId(right.id)) ? index.get(accountId(right.id)) : Number.MAX_SAFE_INTEGER
+    if (leftIndex !== rightIndex) return leftIndex - rightIndex
+    return compareText(left.email || left.id, right.email || right.id, 'asc')
+  })
+})
+const localAccessStatsWindow = computed(() => localAccess.value?.stats?.[localAccessStatsRange.value] || { totals: {}, accounts: [] })
+const localAccessStatsTotals = computed(() => localAccessStatsWindow.value?.totals || {})
+const localAccessAverageLatency = computed(() => {
+  const totals = localAccessStatsTotals.value
+  const count = Number(totals.request_count || 0)
+  if (!count) return '--'
+  const avg = Number(totals.total_latency_ms || 0) / count
+  return avg >= 1000 ? `${(avg / 1000).toFixed(2)}s` : `${Math.round(avg)}ms`
+})
 
 const filteredOAuthAccounts = computed(() => {
   let list = oauthAccounts.value
@@ -1181,44 +1685,505 @@ const filteredOAuthAccounts = computed(() => {
   if (q) {
     list = list.filter(a => (a.email || '').toLowerCase().includes(q) || (a.chatgpt_account_id || '').toLowerCase().includes(q))
   }
+  if (activeGroup.value) {
+    list = list.filter(a => activeGroupAccountIDs.value.has(accountId(a.id)))
+  }
   // Quota status filter
   const f = quotaFilter.value
-  if (f === 'all') return list
-  const want = Number(f)
-  return list.filter(a => {
-    if (Number(a._quota_http_status) === want) return true
-    if (want === 401 && a.status === 'reauth_required') return true
-    return false
-  })
+  if (f !== 'all') {
+    const want = Number(f)
+    list = list.filter(a => {
+      if (Number(a._quota_http_status) === want) return true
+      if (want === 401 && a.status === 'reauth_required') return true
+      return false
+    })
+  }
+  return sortOAuthAccounts(list)
+})
+const filteredAPIAccounts = computed(() => {
+  let list = apiAccounts.value
+  const q = apiSearchQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter(a => [
+      a.email,
+      a.model_provider,
+      a.model,
+      a.base_url,
+      a.wire_api,
+    ].some(value => String(value || '').toLowerCase().includes(q)))
+  }
+  return sortAPIAccounts(list)
 })
 const allFilteredOAuthSelected = computed(() => (
   filteredOAuthAccounts.value.length > 0 &&
   filteredOAuthAccounts.value.every(a => selectedOAuthIds.value.includes(accountId(a.id)))
 ))
 const allAPISelected = computed(() => (
-  apiAccounts.value.length > 0 &&
-  apiAccounts.value.every(a => selectedAPIIds.value.includes(accountId(a.id)))
+  filteredAPIAccounts.value.length > 0 &&
+  filteredAPIAccounts.value.every(a => selectedAPIIds.value.includes(accountId(a.id)))
 ))
+const accountGridClass = computed(() => accountLayout.value === 'dense'
+  ? 'grid-cols-1 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8 gap-2'
+  : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3'
+)
 
 // Pagination
 const PAGE_SIZE = 20
+const DENSE_PAGE_SIZE = 48
+const currentPageSize = computed(() => accountLayout.value === 'dense' ? DENSE_PAGE_SIZE : PAGE_SIZE)
 const oauthPage = ref(1)
 const apiPage = ref(1)
-const oauthTotalPages = computed(() => Math.ceil(filteredOAuthAccounts.value.length / PAGE_SIZE) || 1)
-const apiTotalPages = computed(() => Math.ceil(apiAccounts.value.length / PAGE_SIZE) || 1)
+const oauthTotalPages = computed(() => Math.ceil(filteredOAuthAccounts.value.length / currentPageSize.value) || 1)
+const apiTotalPages = computed(() => Math.ceil(filteredAPIAccounts.value.length / currentPageSize.value) || 1)
 const paginatedOAuth = computed(() => {
-  const start = (oauthPage.value - 1) * PAGE_SIZE
-  return filteredOAuthAccounts.value.slice(start, start + PAGE_SIZE)
+  const start = (oauthPage.value - 1) * currentPageSize.value
+  return filteredOAuthAccounts.value.slice(start, start + currentPageSize.value)
 })
 const paginatedAPI = computed(() => {
-  const start = (apiPage.value - 1) * PAGE_SIZE
-  return apiAccounts.value.slice(start, start + PAGE_SIZE)
+  const start = (apiPage.value - 1) * currentPageSize.value
+  return filteredAPIAccounts.value.slice(start, start + currentPageSize.value)
 })
 
 const tabs = computed(() => [
   { id: 'oauth', label: 'OAuth 账号', count: oauthAccounts.value.length },
   { id: 'api', label: 'API 账号', count: apiAccounts.value.length }
 ])
+
+function readStoredOption(key, fallback, allowedValues) {
+  try {
+    const value = localStorage.getItem(key)
+    return allowedValues.includes(value) ? value : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeStoredOption(key, value) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {}
+}
+
+function readStoredBoolean(key, fallback = false) {
+  try {
+    const value = localStorage.getItem(key)
+    if (value === 'true') return true
+    if (value === 'false') return false
+    return fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeStoredBoolean(key, value) {
+  try {
+    localStorage.setItem(key, value ? 'true' : 'false')
+  } catch {}
+}
+
+function readStoredJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw)
+    return parsed == null ? fallback : parsed
+  } catch {
+    return fallback
+  }
+}
+
+function writeStoredJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {}
+}
+
+function toggleAccountPrivacy() {
+  hideAccountEmails.value = !hideAccountEmails.value
+  writeStoredBoolean('easyllm.openai.hideAccountEmails', hideAccountEmails.value)
+  showToast(hideAccountEmails.value ? '隐私模式已开启：账号邮箱已隐藏' : '隐私模式已关闭：账号邮箱已显示', 'success')
+}
+
+function toggleAccountLayout() {
+  accountLayout.value = accountLayout.value === 'dense' ? 'standard' : 'dense'
+  oauthPage.value = 1
+  apiPage.value = 1
+  writeStoredOption('easyllm.openai.accountLayout', accountLayout.value)
+  showToast(accountLayout.value === 'dense' ? '已切换为紧凑布局' : '已切换为标准布局', 'success')
+}
+
+function normalizeAccountGroup(group) {
+  if (!group || typeof group !== 'object') return null
+  const id = String(group.id || '').trim()
+  const name = String(group.name || '').trim()
+  if (!id || !name) return null
+  const ids = Array.isArray(group.account_ids) ? group.account_ids.map(accountId).filter(Boolean) : []
+  return {
+    id,
+    name,
+    account_ids: Array.from(new Set(ids))
+  }
+}
+
+function persistAccountGroups() {
+  accountGroups.value = accountGroups.value
+    .map(normalizeAccountGroup)
+    .filter(Boolean)
+  writeStoredJSON('easyllm.openai.accountGroups', accountGroups.value)
+  if (activeGroupFilter.value !== 'all' && !accountGroups.value.some(group => group.id === activeGroupFilter.value)) {
+    activeGroupFilter.value = 'all'
+    persistActiveGroupFilter()
+  }
+}
+
+function persistActiveGroupFilter() {
+  if (activeGroupFilter.value !== 'all' && !accountGroups.value.some(group => group.id === activeGroupFilter.value)) {
+    activeGroupFilter.value = 'all'
+  }
+  oauthPage.value = 1
+  writeStoredOption('easyllm.openai.activeGroupFilter', activeGroupFilter.value)
+}
+
+function persistGroupByTag() {
+  oauthPage.value = 1
+  writeStoredBoolean('easyllm.openai.groupByTag', groupByTag.value)
+}
+
+function accountGroupNames(account) {
+  const id = accountId(account?.id || '')
+  if (!id) return []
+  return accountGroups.value
+    .filter(group => Array.isArray(group.account_ids) && group.account_ids.map(accountId).includes(id))
+    .map(group => group.name)
+}
+
+function createAccountGroup() {
+  const name = newGroupName.value.trim()
+  if (!name) {
+    showToast('请输入分组名称', 'error')
+    return
+  }
+  const exists = accountGroups.value.some(group => group.name.toLowerCase() === name.toLowerCase())
+  if (exists) {
+    showToast('分组名称已存在', 'error')
+    return
+  }
+  const id = `group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  accountGroups.value = [
+    ...accountGroups.value,
+    { id, name, account_ids: [] }
+  ]
+  newGroupName.value = ''
+  persistAccountGroups()
+  showToast('分组已创建', 'success')
+}
+
+function addSelectedToGroup(groupId) {
+  if (selectedOAuthIds.value.length === 0) {
+    showToast('请先勾选账号', 'error')
+    return
+  }
+  const selected = new Set(selectedOAuthIds.value.map(accountId))
+  accountGroups.value = accountGroups.value.map(group => {
+    if (group.id !== groupId) return group
+    const nextIDs = Array.from(new Set([...(group.account_ids || []).map(accountId), ...selected]))
+    return { ...group, account_ids: nextIDs }
+  })
+  persistAccountGroups()
+  showToast(`已加入 ${selected.size} 个账号`, 'success')
+}
+
+function removeSelectedFromGroup(groupId) {
+  if (selectedOAuthIds.value.length === 0) {
+    showToast('请先勾选账号', 'error')
+    return
+  }
+  const selected = new Set(selectedOAuthIds.value.map(accountId))
+  accountGroups.value = accountGroups.value.map(group => {
+    if (group.id !== groupId) return group
+    return {
+      ...group,
+      account_ids: (group.account_ids || []).map(accountId).filter(id => !selected.has(id))
+    }
+  })
+  persistAccountGroups()
+  showToast(`已移出 ${selected.size} 个账号`, 'success')
+}
+
+function deleteAccountGroup(groupId) {
+  const group = accountGroups.value.find(item => item.id === groupId)
+  if (!group) return
+  if (!confirm(`确认删除分组「${group.name}」吗？账号本身不会被删除。`)) return
+  accountGroups.value = accountGroups.value.filter(item => item.id !== groupId)
+  persistAccountGroups()
+  showToast('分组已删除', 'success')
+}
+
+function syncAccountGroupsWithAccounts() {
+  const oauthIDSet = new Set(oauthAccounts.value.map(account => accountId(account.id)))
+  let changed = false
+  accountGroups.value = accountGroups.value
+    .map(normalizeAccountGroup)
+    .filter(Boolean)
+    .map(group => {
+      const nextIDs = group.account_ids.filter(id => oauthIDSet.has(id))
+      if (nextIDs.length !== group.account_ids.length) changed = true
+      return { ...group, account_ids: nextIDs }
+    })
+  if (changed) persistAccountGroups()
+}
+
+function normalizeCustomSortOrder() {
+  const oauthIDs = oauthAccounts.value.map(account => accountId(account.id))
+  const known = new Set(oauthIDs)
+  const next = []
+  const seen = new Set()
+  for (const id of customSortOrder.value.map(accountId)) {
+    if (!known.has(id) || seen.has(id)) continue
+    next.push(id)
+    seen.add(id)
+  }
+  for (const id of oauthIDs) {
+    if (!seen.has(id)) next.push(id)
+  }
+  return next
+}
+
+function persistCustomSortOrder() {
+  customSortOrder.value = normalizeCustomSortOrder()
+  writeStoredJSON('easyllm.openai.customSortOrder', customSortOrder.value)
+}
+
+function syncCustomSortOrder() {
+  const next = normalizeCustomSortOrder()
+  if (JSON.stringify(next) !== JSON.stringify(customSortOrder.value)) {
+    customSortOrder.value = next
+    writeStoredJSON('easyllm.openai.customSortOrder', customSortOrder.value)
+  }
+}
+
+function openCustomSortDialog() {
+  syncCustomSortOrder()
+  showCustomSortDialog.value = true
+}
+
+function resetCustomSortOrder() {
+  customSortOrder.value = oauthAccounts.value.map(account => accountId(account.id))
+  writeStoredJSON('easyllm.openai.customSortOrder', customSortOrder.value)
+  oauthSortBy.value = 'custom'
+  writeStoredOption('easyllm.openai.oauth.sortBy', oauthSortBy.value)
+  oauthPage.value = 1
+  showToast('自定义顺序已重置为当前列表顺序', 'success')
+}
+
+function moveCustomSortAccount(id, direction) {
+  const targetID = accountId(id)
+  if (!targetID) return
+  customSortOrder.value = normalizeCustomSortOrder()
+  const currentIndex = customSortOrder.value.indexOf(targetID)
+  if (currentIndex < 0) return
+  const nextIndex = currentIndex + direction
+  if (nextIndex < 0 || nextIndex >= customSortOrder.value.length) return
+  const nextOrder = [...customSortOrder.value]
+  const [item] = nextOrder.splice(currentIndex, 1)
+  nextOrder.splice(nextIndex, 0, item)
+  customSortOrder.value = nextOrder
+  persistCustomSortOrder()
+  oauthSortBy.value = 'custom'
+  writeStoredOption('easyllm.openai.oauth.sortBy', oauthSortBy.value)
+  oauthPage.value = 1
+}
+
+function dateSortValue(value) {
+  if (!value) return null
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function compareNullableNumber(left, right, direction = 'desc') {
+  if (left == null && right == null) return 0
+  if (left == null) return 1
+  if (right == null) return -1
+  return direction === 'desc' ? right - left : left - right
+}
+
+function compareText(left, right, direction = 'asc') {
+  const result = String(left || '').localeCompare(String(right || ''), 'zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+  return direction === 'desc' ? -result : result
+}
+
+function compareActiveAccountFirst(left, right) {
+  if (!!left?.is_codex_active === !!right?.is_codex_active) return 0
+  return left?.is_codex_active ? -1 : 1
+}
+
+function accountCreatedSortValue(account) {
+  return dateSortValue(account?.created_at) ?? 0
+}
+
+function accountUpdatedSortValue(account) {
+  return dateSortValue(account?.updated_at) ?? accountCreatedSortValue(account)
+}
+
+function oauthPlanRank(account) {
+  const plan = String(account?.plan || jwtPlanType(account) || '').toLowerCase()
+  const ranks = { enterprise: 6, business: 5, team: 4, pro: 3, plus: 2, free: 1 }
+  return ranks[plan] || 0
+}
+
+function oauthStatusRank(account) {
+  if (account?.status === 'active') return 4
+  if (account?._quota_http_status === 200) return 3
+  if (account?._quota_http_status === 429) return 2
+  if (account?._quota_http_status === 403) return 1
+  if (account?._quota_http_status === 401 || account?.status === 'reauth_required') return 0
+  return 2
+}
+
+function oauthRemainingQuota(account, windowKey) {
+  if (windowKey === '5h') {
+    return account?.quota_5h_used_percent == null ? null : 100 - Number(account.quota_5h_used_percent)
+  }
+  if (account?.quota_7d_used_percent != null) return 100 - Number(account.quota_7d_used_percent)
+  if (account?.quota_total && account.quota_total > 0) return quotaPct(account)
+  return null
+}
+
+function oauthResetSeconds(account, windowKey) {
+  const value = windowKey === '5h' ? account?.quota_5h_reset_seconds : account?.quota_7d_reset_seconds
+  return value == null ? null : Number(value)
+}
+
+function oauthExpiryValue(account) {
+  return dateSortValue(account?.expires_at)
+}
+
+function tagSortLabel(account) {
+  return String(account?.tag_name || '').trim()
+}
+
+function sortByTagGroup(list) {
+  if (!groupByTag.value) return list
+  return [...list].sort((left, right) => {
+    const leftTag = tagSortLabel(left)
+    const rightTag = tagSortLabel(right)
+    if (!leftTag && !rightTag) return 0
+    if (!leftTag) return 1
+    if (!rightTag) return -1
+    return compareText(leftTag, rightTag, 'asc')
+  })
+}
+
+function sortOAuthAccounts(list) {
+  const direction = oauthSortDirection.value
+  const sorted = [...list]
+  if (oauthSortBy.value === 'custom') {
+    const index = new Map(customSortOrder.value.map((id, i) => [accountId(id), i]))
+    sorted.sort((left, right) => {
+      const leftIndex = index.has(accountId(left.id)) ? index.get(accountId(left.id)) : Number.MAX_SAFE_INTEGER
+      const rightIndex = index.has(accountId(right.id)) ? index.get(accountId(right.id)) : Number.MAX_SAFE_INTEGER
+      if (leftIndex !== rightIndex) return leftIndex - rightIndex
+      return compareText(left?.email || left?.id, right?.email || right?.id, 'asc')
+    })
+    return sortByTagGroup(sorted)
+  }
+  sorted.sort((left, right) => {
+    if (groupByTag.value) {
+      const leftTag = tagSortLabel(left)
+      const rightTag = tagSortLabel(right)
+      if (!leftTag && rightTag) return 1
+      if (leftTag && !rightTag) return -1
+      const tagDiff = compareText(leftTag, rightTag, 'asc')
+      if (tagDiff !== 0) return tagDiff
+    }
+    const activeDiff = compareActiveAccountFirst(left, right)
+    if (activeDiff !== 0) return activeDiff
+
+    let diff = 0
+    if (oauthSortBy.value === 'recommended') {
+      diff = oauthAccountPriority(left) - oauthAccountPriority(right)
+      if (diff === 0) diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), 'desc')
+    } else if (oauthSortBy.value === 'created_at') {
+      diff = compareNullableNumber(accountCreatedSortValue(left), accountCreatedSortValue(right), direction)
+    } else if (oauthSortBy.value === 'updated_at') {
+      diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), direction)
+    } else if (oauthSortBy.value === 'email') {
+      diff = compareText(left?.email, right?.email, direction)
+    } else if (oauthSortBy.value === 'plan') {
+      diff = compareNullableNumber(oauthPlanRank(left), oauthPlanRank(right), direction)
+    } else if (oauthSortBy.value === 'status') {
+      diff = compareNullableNumber(oauthStatusRank(left), oauthStatusRank(right), direction)
+    } else if (oauthSortBy.value === 'proxy') {
+      diff = compareNullableNumber(left?.proxy_enabled ? 1 : 0, right?.proxy_enabled ? 1 : 0, direction)
+    } else if (oauthSortBy.value === 'quota_5h') {
+      diff = compareNullableNumber(oauthRemainingQuota(left, '5h'), oauthRemainingQuota(right, '5h'), direction)
+    } else if (oauthSortBy.value === 'quota_7d') {
+      diff = compareNullableNumber(oauthRemainingQuota(left, '7d'), oauthRemainingQuota(right, '7d'), direction)
+    } else if (oauthSortBy.value === 'quota_5h_reset') {
+      diff = compareNullableNumber(oauthResetSeconds(left, '5h'), oauthResetSeconds(right, '5h'), direction)
+    } else if (oauthSortBy.value === 'quota_7d_reset') {
+      diff = compareNullableNumber(oauthResetSeconds(left, '7d'), oauthResetSeconds(right, '7d'), direction)
+    } else if (oauthSortBy.value === 'expires_at') {
+      diff = compareNullableNumber(oauthExpiryValue(left), oauthExpiryValue(right), direction)
+    }
+    if (diff !== 0) return diff
+    return compareText(left?.email || left?.id, right?.email || right?.id, 'asc')
+  })
+  return sorted
+}
+
+function sortAPIAccounts(list) {
+  const direction = apiSortDirection.value
+  const sorted = [...list]
+  sorted.sort((left, right) => {
+    const activeDiff = compareActiveAccountFirst(left, right)
+    if (activeDiff !== 0) return activeDiff
+
+    let diff = 0
+    if (apiSortBy.value === 'created_at') {
+      diff = compareNullableNumber(accountCreatedSortValue(left), accountCreatedSortValue(right), direction)
+    } else if (apiSortBy.value === 'updated_at') {
+      diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), direction)
+    } else if (apiSortBy.value === 'provider') {
+      diff = compareText(left?.model_provider || left?.email, right?.model_provider || right?.email, direction)
+    } else if (apiSortBy.value === 'model') {
+      diff = compareText(left?.model, right?.model, direction)
+    } else if (apiSortBy.value === 'base_url') {
+      diff = compareText(left?.base_url, right?.base_url, direction)
+    } else if (apiSortBy.value === 'wire_api') {
+      diff = compareText(left?.wire_api, right?.wire_api, direction)
+    }
+    if (diff !== 0) return diff
+    return compareText(left?.model_provider || left?.email || left?.id, right?.model_provider || right?.email || right?.id, 'asc')
+  })
+  return sorted
+}
+
+function setOAuthSortBy(value) {
+  if (!oauthSortOptions.some(option => option.id === value)) return
+  oauthSortBy.value = value
+  oauthPage.value = 1
+  writeStoredOption('easyllm.openai.oauth.sortBy', value)
+}
+
+function toggleOAuthSortDirection() {
+  oauthSortDirection.value = oauthSortDirection.value === 'desc' ? 'asc' : 'desc'
+  oauthPage.value = 1
+  writeStoredOption('easyllm.openai.oauth.sortDirection', oauthSortDirection.value)
+}
+
+function setAPISortBy(value) {
+  if (!apiSortOptions.some(option => option.id === value)) return
+  apiSortBy.value = value
+  apiPage.value = 1
+  writeStoredOption('easyllm.openai.api.sortBy', value)
+}
+
+function toggleAPISortDirection() {
+  apiSortDirection.value = apiSortDirection.value === 'desc' ? 'asc' : 'desc'
+  apiPage.value = 1
+  writeStoredOption('easyllm.openai.api.sortDirection', apiSortDirection.value)
+}
 
 // Methods
 async function loadAccounts() {
@@ -1227,6 +2192,8 @@ async function loadAccounts() {
     // api interceptor returns response.data directly, so res IS the array
     const res = await api.get('/openai/accounts')
     accounts.value = Array.isArray(res) ? res : (res || [])
+    syncAccountGroupsWithAccounts()
+    syncCustomSortOrder()
     pruneSelectedAccountIds()
   } catch (e) {
     showToast('加载账号失败: ' + e.message, 'error')
@@ -1245,7 +2212,7 @@ async function switchAccount(account) {
       const [item] = accounts.value.splice(idx, 1)
       accounts.value.unshift(item)
     }
-    showToast(`已切换到 ${account.email}，~/.codex/auth.json 已更新`, 'success')
+    showToast(`已切换到 ${accountDisplayLabel(account)}，~/.codex/auth.json 已更新`, 'success')
   } catch (e) {
     showToast('切换失败: ' + (e.response?.data?.error || e.message), 'error')
   } finally {
@@ -1263,7 +2230,7 @@ async function switchAPIAccount(account) {
       const [item] = accounts.value.splice(idx, 1)
       accounts.value.unshift(item)
     }
-    showToast(`已切换到 ${account.email}，~/.codex/config.toml 已更新`, 'success')
+    showToast(`已切换到 ${accountDisplayLabel(account)}，~/.codex/config.toml 已更新`, 'success')
   } catch (e) {
     showToast('切换失败: ' + (e.response?.data?.error || e.message), 'error')
   } finally {
@@ -1299,7 +2266,7 @@ async function refreshToken(account) {
   refreshingId.value = account.id
   try {
     await api.post(`/openai/accounts/${account.id}/refresh-token`)
-    showToast(`${account.email} token 刷新成功`, 'success')
+    showToast(`${accountDisplayLabel(account)} token 刷新成功`, 'success')
     await loadAccounts()
   } catch (e) {
     showToast('刷新失败: ' + e.message, 'error')
@@ -1361,7 +2328,8 @@ async function toggleProxy(account) {
     const res = await api.post(`/openai/accounts/${account.id}/toggle-proxy`)
     const idx = accounts.value.findIndex(a => a.id === account.id)
     if (idx >= 0) accounts.value[idx].proxy_enabled = res.proxy_enabled
-    showToast(res.proxy_enabled ? `${account.email} 已加入代理池` : `${account.email} 已移出代理池`, 'success')
+    const label = accountDisplayLabel(account)
+    showToast(res.proxy_enabled ? `${label} 已加入代理池` : `${label} 已移出代理池`, 'success')
   } catch (e) {
     showToast('操作失败: ' + e.message, 'error')
   } finally {
@@ -1435,11 +2403,23 @@ function downloadExample(mode) {
 
 // ---- Import ----
 
+function selectImportMode(mode) {
+  importMode.value = mode
+  importResults.value = null
+  importFiles.value = []
+  importTokens.value = []
+  importSub2APIFile.value = null
+  importCockpitToolsFile.value = null
+  importCockpitToolsCount.value = 0
+  importBackupFile.value = null
+}
+
 const canRunImport = computed(() => {
   if (importMode.value === 'token-files') return importFiles.value.length > 0
   if (importMode.value === 'scan-dir') return scanDir.value.trim().length > 0
   if (importMode.value === 'refresh-tokens') return importTokens.value.length > 0
   if (importMode.value === 'sub2api') return !!importSub2APIFile.value
+  if (importMode.value === 'cockpit-tools') return !!importCockpitToolsFile.value
   if (importMode.value === 'from-export') return !!importBackupFile.value
   return false
 })
@@ -1451,9 +2431,12 @@ const importButtonLabel = computed(() => {
   if (importMode.value === 'sub2api') {
     return `导入 ${importSub2APIFile.value?.accounts?.length ?? 0} 个账号`
   }
+  if (importMode.value === 'cockpit-tools') {
+    return `导入 ${importCockpitToolsCount.value} 个账号`
+  }
   if (importMode.value === 'from-export') {
     const total = (importBackupFile.value?.oauth_accounts?.length ?? 0) + (importBackupFile.value?.api_accounts?.length ?? 0)
-    return `从备份导入 ${total} 个账号`
+    return importBackupFile.value?.local_access ? `从备份导入 ${total} 个账号 + 本地服务配置` : `从备份导入 ${total} 个账号`
   }
   return '导入'
 })
@@ -1475,7 +2458,7 @@ function parseBackupFile(file) {
   reader.onload = (e) => {
     try {
       const data = JSON.parse(e.target.result)
-      if (!data.oauth_accounts && !data.api_accounts) {
+      if (!data.oauth_accounts && !data.api_accounts && !data.local_access) {
         showToast('文件格式不正确，请上传由"导出账号"生成的备份文件', 'error')
         return
       }
@@ -1536,6 +2519,41 @@ function parseSub2APIFile(file) {
   reader.readAsText(file)
 }
 
+function resolveCockpitToolsPayload(data) {
+  if (Array.isArray(data)) return data
+  if (!data || typeof data !== 'object') return null
+  if (data.tokens || data.id_token || data.access_token || data.refresh_token || data.account_id || data.openai_api_key || data.auth_mode) return [data]
+  const fromPlatform = data.platforms?.codex
+  if (fromPlatform) return resolveCockpitToolsPayload(fromPlatform)
+  if (data.codex) return resolveCockpitToolsPayload(data.codex)
+  if (data.exported_data) return resolveCockpitToolsPayload(data.exported_data)
+  if (data.data) return resolveCockpitToolsPayload(data.data)
+  if (data.accounts) return resolveCockpitToolsPayload(data.accounts)
+  return null
+}
+
+function parseCockpitToolsFile(file) {
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result)
+      const accountsPayload = resolveCockpitToolsPayload(data)
+      const count = Array.isArray(accountsPayload) ? accountsPayload.length : 0
+      if (count <= 0) {
+        showToast('文件格式不正确，未找到 cockpit-tools 账号数据', 'error')
+        return
+      }
+      importCockpitToolsFile.value = data
+      importCockpitToolsCount.value = count
+      importResults.value = null
+    } catch (err) {
+      showToast('文件解析失败: ' + err.message, 'error')
+    }
+  }
+  reader.readAsText(file)
+}
+
 function handleDrop(event) {
   dragging.value = false
   const files = Array.from(event.dataTransfer?.files || [])
@@ -1553,6 +2571,10 @@ function handleDrop(event) {
   }
   if (importMode.value === 'sub2api') {
     parseSub2APIFile(file)
+    return
+  }
+  if (importMode.value === 'cockpit-tools') {
+    parseCockpitToolsFile(file)
     return
   }
   if (importMode.value === 'from-export') {
@@ -1575,6 +2597,12 @@ function handleFileSelect(event) {
 function handleSub2APIFileSelect(event) {
   const file = event.target.files?.[0]
   parseSub2APIFile(file)
+  event.target.value = ''
+}
+
+function handleCockpitToolsFileSelect(event) {
+  const file = event.target.files?.[0]
+  parseCockpitToolsFile(file)
   event.target.value = ''
 }
 
@@ -1626,6 +2654,7 @@ async function runImport() {
       res = await api.post('/openai/import/from-export', {
         oauth_accounts: importBackupFile.value.oauth_accounts || [],
         api_accounts:   importBackupFile.value.api_accounts   || [],
+        local_access:   importBackupFile.value.local_access   || null,
       })
       importResults.value = {
         success: res?.success ?? 0,
@@ -1637,6 +2666,16 @@ async function runImport() {
 
     } else if (importMode.value === 'sub2api') {
       res = await api.post('/openai/import/sub2api', importSub2APIFile.value)
+      importResults.value = {
+        success: res?.success ?? 0,
+        skipped: res?.skipped ?? 0,
+        failed:  res?.failed  ?? 0,
+        total:   res?.total   ?? 0,
+        results: res?.results ?? []
+      }
+
+    } else if (importMode.value === 'cockpit-tools') {
+      res = await api.post('/openai/import/cockpit-tools', importCockpitToolsFile.value)
       importResults.value = {
         success: res?.success ?? 0,
         skipped: res?.skipped ?? 0,
@@ -1663,9 +2702,16 @@ async function runImport() {
       }
     }
 
+    const restoredLocalAccess = importMode.value === 'from-export' && !!importBackupFile.value?.local_access
+    if (restoredLocalAccess) {
+      await Promise.all([loadServiceConfig(), loadLocalAccess()])
+    }
+
     if ((importResults.value?.success ?? 0) > 0) {
       await loadAccounts()
-      showToast(`成功导入 ${importResults.value.success} 个账号`, 'success')
+      showToast(restoredLocalAccess ? `成功导入 ${importResults.value.success} 个账号，并恢复本地服务配置` : `成功导入 ${importResults.value.success} 个账号`, 'success')
+    } else if (restoredLocalAccess) {
+      showToast('本地服务配置已恢复', 'success')
     } else if (importResults.value?.total > 0 && importResults.value?.failed === 0) {
       showToast('所有账号已存在，跳过重复导入', 'error')
     }
@@ -1683,6 +2729,8 @@ function closeImportDialog() {
   importFiles.value = []
   importBackupFile.value = null
   importSub2APIFile.value = null
+  importCockpitToolsFile.value = null
+  importCockpitToolsCount.value = 0
   importResults.value = null
 }
 
@@ -1842,9 +2890,9 @@ async function exchangeOAuthCode() {
     resetOAuthState()
     const email = res?.account?.email || ''
     if (res?.auto_joined_proxy) {
-      showToast(email ? `${email} 已登录并自动加入代理池` : 'OAuth 登录成功，账号已自动加入代理池', 'success')
+      showToast(email && !hideAccountEmails.value ? `${email} 已登录并自动加入代理池` : 'OAuth 登录成功，账号已自动加入代理池', 'success')
     } else {
-      showToast(email ? `${email} 已登录` : 'OAuth 登录成功', 'success')
+      showToast(email && !hideAccountEmails.value ? `${email} 已登录` : 'OAuth 登录成功', 'success')
     }
   } catch (e) {
     oauthState.value.error = e.message
@@ -1913,11 +2961,40 @@ async function loadServiceConfig() {
   }
 }
 
+function applyLocalAccessState(state) {
+  if (!state) return
+  localAccess.value = {
+    ...localAccess.value,
+    ...state,
+    collection: {
+      ...localAccess.value.collection,
+      ...(state.collection || {})
+    },
+    stats: {
+      daily: state.stats?.daily || { totals: {}, accounts: [] },
+      weekly: state.stats?.weekly || { totals: {}, accounts: [] },
+      monthly: state.stats?.monthly || { totals: {}, accounts: [] }
+    }
+  }
+  localAccessSelectedIds.value = [...(localAccess.value.collection?.account_ids || [])].map(accountId)
+  localAccessPortInput.value = String(localAccess.value.collection?.port || 8022)
+  localAccessRestrictFree.value = localAccess.value.collection?.restrict_free_accounts !== false
+}
+
+async function loadLocalAccess() {
+  try {
+    const res = await api.get('/openai/local-access')
+    applyLocalAccessState(res)
+  } catch (e) {
+    console.error('Failed to load local access:', e)
+  }
+}
+
 
 
 async function openServiceConfig() {
   showServiceConfigDialog.value = true
-  await loadServiceConfig()
+  await Promise.all([loadServiceConfig(), loadLocalAccess()])
 }
 
 async function exportAccounts() {
@@ -1963,6 +3040,102 @@ async function updateServiceStrategy(strategy) {
   } finally {
     savingServiceConfig.value = false
   }
+}
+
+async function activateCodexAPIService() {
+  savingServiceConfig.value = true
+  try {
+    await activateLocalAccess()
+    await loadServiceConfig()
+    await loadAccounts()
+  } catch (e) {
+    showToast('启动 Codex API 服务失败: ' + e.message, 'error')
+  } finally {
+    savingServiceConfig.value = false
+  }
+}
+
+function toggleLocalAccessAccount(id) {
+  const key = accountId(id)
+  if (localAccessSelectedIds.value.includes(key)) {
+    localAccessSelectedIds.value = localAccessSelectedIds.value.filter(item => item !== key)
+  } else {
+    localAccessSelectedIds.value = [...localAccessSelectedIds.value, key]
+  }
+}
+
+async function localAccessAction(task, successText) {
+  localAccessBusy.value = true
+  try {
+    const res = await task()
+    applyLocalAccessState(res?.state || res)
+    await loadServiceConfig()
+    showToast(successText, 'success')
+  } catch (e) {
+    showToast(e.message || '操作失败', 'error')
+    throw e
+  } finally {
+    localAccessBusy.value = false
+  }
+}
+
+async function activateLocalAccess() {
+  await localAccessAction(
+    () => api.post('/openai/local-access/activate'),
+    'Codex 本地 API 服务已启动并注入配置'
+  )
+}
+
+async function deactivateLocalAccess() {
+  await localAccessAction(
+    () => api.post('/openai/local-access/deactivate'),
+    'Codex 本地 API 服务已停止，已移除 EasyLLM 注入配置'
+  )
+}
+
+async function saveLocalAccessAccounts() {
+  await localAccessAction(
+    () => api.put('/openai/local-access/accounts', {
+      account_ids: localAccessSelectedIds.value,
+      restrict_free_accounts: localAccessRestrictFree.value
+    }),
+    'Codex API 服务账号集合已保存'
+  )
+}
+
+async function updateLocalAccessPort() {
+  const port = Number(localAccessPortInput.value)
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    showToast('端口必须是 1-65535', 'error')
+    return
+  }
+  await localAccessAction(
+    () => api.put('/openai/local-access/port', { port }),
+    'Codex API 服务端口已更新'
+  )
+}
+
+async function updateLocalAccessRouting(strategy) {
+  await localAccessAction(
+    () => api.put('/openai/local-access/routing', { strategy }),
+    'Codex API 服务调度策略已更新'
+  )
+}
+
+async function rotateLocalAccessKey() {
+  if (!confirm('重置后当前 Codex API 服务 Key 会失效，确认继续吗？')) return
+  await localAccessAction(
+    () => api.post('/openai/local-access/rotate-key'),
+    'Codex API 服务 Key 已重置并重新注入'
+  )
+}
+
+async function clearLocalAccessStats() {
+  if (!confirm('确认清空 Codex API 服务统计和日志吗？')) return
+  await localAccessAction(
+    () => api.delete('/openai/local-access/stats'),
+    'Codex API 服务统计已清空'
+  )
 }
 
 async function saveServiceApiKey() {
@@ -2088,13 +3261,13 @@ async function fetchQuotaForAccount(account) {
     quotaLastFetched.value = new Date().toLocaleTimeString('zh')
 
     if (status === 'quota') {
-      showToast(`${account.email || '账号'} 配额已更新`, 'success')
+      showToast(`${accountDisplayLabel(account) || '账号'} 配额已更新`, 'success')
     } else if (status === 'verified') {
-      showToast(`${account.email || '账号'} 账号有效，但未返回配额头`, 'success')
+      showToast(`${accountDisplayLabel(account) || '账号'} 账号有效，但未返回配额头`, 'success')
     } else if (status === 'forbidden') {
-      showToast(`${account.email || '账号'} 已被禁用`, 'error')
+      showToast(`${accountDisplayLabel(account) || '账号'} 已被禁用`, 'error')
     } else {
-      showToast(`${account.email || '账号'} 配额查询失败: ${result.error || '查询失败'}`, 'error')
+      showToast(`${accountDisplayLabel(account) || '账号'} 配额查询失败: ${result.error || '查询失败'}`, 'error')
     }
     reorderOAuthAccounts()
     // Reload accounts to get updated status
@@ -2176,7 +3349,7 @@ function openBulkDeleteConfirm() {
   bulkDeleteSelectionType.value = selectionType
   bulkDeleteAccountLabel.value = selectionType === 'api' ? 'API 账号' : 'OAuth 账号'
   bulkDeleteScopeLabel.value = selectionType === 'api'
-    ? (allAPISelected.value ? '全部 API 账号' : '手动勾选')
+    ? (allAPISelected.value ? '当前 API 筛选结果' : '手动勾选')
     : (allFilteredOAuthSelected.value ? `当前筛选结果（${quotaFilterLabel.value}）` : '手动勾选')
   bulkDeleteAllSelected.value = selectionType === 'api' ? allAPISelected.value : allFilteredOAuthSelected.value
   bulkDeletePreview.value = list
@@ -2246,6 +3419,13 @@ function pctBarClass(remainPct) {
   return 'bg-green-500'
 }
 
+function shortAccountIdentifier(account) {
+  const source = String(account?.chatgpt_account_id || account?.id || '').trim()
+  if (!source) return ''
+  const compact = source.replace(/[^a-zA-Z0-9]/g, '')
+  return compact.slice(-6).toUpperCase()
+}
+
 function accountId(id) {
   return String(id)
 }
@@ -2258,7 +3438,25 @@ function accountDisplayLabel(account) {
     const baseURL = account.base_url ? ` @ ${account.base_url}` : ''
     return `${provider}${model}${baseURL}`
   }
+  if (hideAccountEmails.value) {
+    const suffix = shortAccountIdentifier(account)
+    return suffix ? `OAuth 账号 #${suffix}` : 'OAuth 账号'
+  }
   return account.email || account.chatgpt_account_id || String(account.id)
+}
+
+function accountDisplayTitle(account) {
+  if (!account) return ''
+  if (!account.account_type || account.account_type === 'oauth') {
+    return hideAccountEmails.value ? '邮箱已隐藏' : (account.email || account.chatgpt_account_id || '')
+  }
+  return accountDisplayLabel(account)
+}
+
+function importResultDisplayLabel(result) {
+  if (!result) return ''
+  if (result.email && hideAccountEmails.value) return 'OAuth 账号（邮箱已隐藏）'
+  return result.email || result.filename || result.token_preview || ''
 }
 
 function getSelectedIds(type) {
@@ -2312,13 +3510,14 @@ function toggleSelectAllOAuth() {
 }
 
 function toggleSelectAllAPI() {
-  const ids = apiAccounts.value.map(a => accountId(a.id))
+  const ids = filteredAPIAccounts.value.map(a => accountId(a.id))
   if (!ids.length) return
   if (allAPISelected.value) {
-    setSelectedIds('api', [])
+    const currentSet = new Set(ids)
+    setSelectedIds('api', selectedAPIIds.value.filter(id => !currentSet.has(id)))
     return
   }
-  setSelectedIds('api', ids)
+  setSelectedIds('api', [...selectedAPIIds.value, ...ids])
 }
 
 function clearOAuthSelection() {
@@ -2452,7 +3651,7 @@ function showToast(message, type = 'success') {
   setTimeout(() => { toast.value.show = false }, 3500)
 }
 
-watch([filteredOAuthAccounts, apiAccounts], () => {
+watch([filteredOAuthAccounts, filteredAPIAccounts], () => {
   pruneSelectedAccountIds()
   if (oauthPage.value > oauthTotalPages.value) {
     oauthPage.value = oauthTotalPages.value
@@ -2473,6 +3672,9 @@ onBeforeUnmount(() => {
 <style scoped>
 .account-card-compact {
   @apply bg-gray-800/80 border border-gray-700 rounded-lg px-3.5 py-3 transition-all;
+}
+.account-card-compact--dense {
+  @apply px-2 py-2;
 }
 .account-card-compact:hover {
   @apply border-blue-500/40 shadow-md shadow-blue-500/5;
@@ -2510,6 +3712,15 @@ onBeforeUnmount(() => {
 
 .card-btn {
   @apply inline-flex items-center justify-center px-2 py-1 rounded text-[11px] font-medium transition-colors disabled:opacity-40;
+}
+.account-card-compact--dense .card-btn {
+  @apply px-1.5 py-0.5 text-[10px];
+}
+.dense-account-meta {
+  @apply mb-1.5 flex min-h-[20px] items-center gap-1.5 overflow-hidden text-[10px] text-gray-500;
+}
+.dense-pill {
+  @apply inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[9px] font-semibold;
 }
 .card-btn--primary {
   @apply bg-blue-600/80 text-blue-100 hover:bg-blue-600;

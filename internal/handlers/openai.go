@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/rand"
 	"easyllm/internal/models"
 	openaiplatform "easyllm/internal/platforms/openai"
 	"easyllm/internal/proxy"
 	"easyllm/internal/storage"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +56,14 @@ const (
 	defaultOpenAIOAuthRedirectURI  = "http://localhost:1455/auth/callback"
 	defaultOpenAIOAuthCallbackBase = "http://localhost:1455"
 	defaultOpenAIOAuthCallbackAddr = "127.0.0.1:1455"
+
+	codexLocalAccessEnabledKey              = "codex_local_access_enabled"
+	codexLocalAccessPortKey                 = "codex_local_access_port"
+	codexLocalAccessAccountIDsKey           = "codex_local_access_account_ids"
+	codexLocalAccessRestrictFreeAccountsKey = "codex_local_access_restrict_free_accounts"
+	codexLocalAccessRoutingStrategyKey      = "codex_local_access_routing_strategy"
+	codexLocalAccessCreatedAtKey            = "codex_local_access_created_at"
+	codexLocalAccessUpdatedAtKey            = "codex_local_access_updated_at"
 )
 
 var (
@@ -106,6 +117,7 @@ func (h *OpenAIHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.POST("/import/refresh-tokens", h.ImportByRefreshTokens) // legacy: refresh_token list
 	g.POST("/import/from-export", h.ImportFromExport)         // re-import from exported backup JSON (no API calls)
 	g.POST("/import/sub2api", h.ImportFromSub2API)            // import from sub2api format
+	g.POST("/import/cockpit-tools", h.ImportFromCockpitTools)
 	g.GET("/export", h.ExportAccounts)
 
 	// OAuth flow
@@ -136,6 +148,18 @@ func (h *OpenAIHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	// Service config (proxy pool switch, API key, stats)
 	g.GET("/service-config", h.GetServiceConfig)
 	g.PUT("/service-config", h.UpdateServiceConfig)
+	g.POST("/service-config/activate-codex", h.ActivateCodexAPIService)
+	g.GET("/local-access", h.GetCodexLocalAccess)
+	g.POST("/local-access/activate", h.ActivateCodexLocalAccess)
+	g.POST("/local-access/deactivate", h.DeactivateCodexLocalAccess)
+	g.PUT("/local-access/enabled", h.SetCodexLocalAccessEnabled)
+	g.PUT("/local-access/accounts", h.SaveCodexLocalAccessAccounts)
+	g.DELETE("/local-access/accounts/:id", h.RemoveCodexLocalAccessAccount)
+	g.PUT("/local-access/port", h.UpdateCodexLocalAccessPort)
+	g.PUT("/local-access/routing", h.UpdateCodexLocalAccessRoutingStrategy)
+	g.POST("/local-access/rotate-key", h.RotateCodexLocalAccessAPIKey)
+	g.DELETE("/local-access/stats", h.ClearCodexLocalAccessStats)
+	g.POST("/local-access/kill-port", h.KillCodexLocalAccessPort)
 
 }
 
@@ -1945,6 +1969,7 @@ func (h *OpenAIHandler) ToggleProxyAll(c *gin.Context) {
 // 导出时与 Codex / 常见 token JSON 一致（account_id、expired、disabled、last_refresh、type）；
 // 导入仍兼容旧字段 chatgpt_account_id、expires_at。
 type exportedOAuthAccount struct {
+	ID               string `json:"id,omitempty"`
 	AccessToken      string `json:"access_token"`
 	AccountID        string `json:"account_id,omitempty"`
 	Disabled         bool   `json:"disabled"`
@@ -2009,13 +2034,15 @@ func (h *OpenAIHandler) ExportAccounts(c *gin.Context) {
 	}
 
 	resp := struct {
-		ExportedAt    string                 `json:"exported_at"`
-		Usage         string                 `json:"_usage"`
-		OAuthAccounts []exportedOAuthAccount `json:"oauth_accounts"`
-		APIAccounts   []exportedAPIAccount   `json:"api_accounts"`
+		ExportedAt    string                             `json:"exported_at"`
+		Usage         string                             `json:"_usage"`
+		OAuthAccounts []exportedOAuthAccount             `json:"oauth_accounts"`
+		APIAccounts   []exportedAPIAccount               `json:"api_accounts"`
+		LocalAccess   *models.CodexLocalAccessCollection `json:"local_access,omitempty"`
 	}{
-		ExportedAt: time.Now().UTC().Format(time.RFC3339),
-		Usage:      "恢复时：在「批量导入 → 从备份导入」中上传此文件即可一键恢复所有账号，无需任何 API 调用。oauth_accounts 每条为 Codex 风格字段（account_id、expired、disabled、last_refresh、type 等）。仍兼容旧版 chatgpt_account_id / expires_at。请妥善保管此文件。",
+		ExportedAt:  time.Now().UTC().Format(time.RFC3339),
+		Usage:       "恢复时：在「批量导入 → 从备份导入」中上传此文件即可一键恢复所有账号，无需任何 API 调用。oauth_accounts 每条为 Codex 风格字段（account_id、expired、disabled、last_refresh、type 等）。仍兼容旧版 chatgpt_account_id / expires_at。请妥善保管此文件。",
+		LocalAccess: h.codexLocalAccessState(c).Collection,
 	}
 
 	for _, a := range accounts {
@@ -2039,6 +2066,7 @@ func (h *OpenAIHandler) ExportAccounts(c *gin.Context) {
 		lastRefreshStr = a.UpdatedAt.In(time.Local).Format(time.RFC3339)
 
 		resp.OAuthAccounts = append(resp.OAuthAccounts, exportedOAuthAccount{
+			ID:           a.ID,
 			AccessToken:  derefStr(a.AccessToken),
 			AccountID:    derefStr(a.ChatGPTAccountID),
 			Disabled:     a.Status != "" && a.Status != "active",
@@ -2059,15 +2087,16 @@ func (h *OpenAIHandler) ExportAccounts(c *gin.Context) {
 // 支持导出文件中的 oauth_accounts 和 api_accounts 两类账号。
 func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 	var payload struct {
-		OAuthAccounts []exportedOAuthAccount `json:"oauth_accounts"`
-		APIAccounts   []exportedAPIAccount   `json:"api_accounts"`
+		OAuthAccounts []exportedOAuthAccount             `json:"oauth_accounts"`
+		APIAccounts   []exportedAPIAccount               `json:"api_accounts"`
+		LocalAccess   *models.CodexLocalAccessCollection `json:"local_access"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "无效的请求体: " + err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
 
-	if len(payload.OAuthAccounts) == 0 && len(payload.APIAccounts) == 0 {
+	if len(payload.OAuthAccounts) == 0 && len(payload.APIAccounts) == 0 && payload.LocalAccess == nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "备份文件中没有账号数据", Code: "EMPTY_INPUT"})
 		return
 	}
@@ -2081,6 +2110,7 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 		Error   string `json:"error,omitempty"`
 	}
 	var results []result
+	oauthIDMap := make(map[string]string)
 
 	now := time.Now()
 
@@ -2111,6 +2141,7 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 		}
 
 		account := &models.OpenAIAccount{
+			ID:           strings.TrimSpace(a.ID),
 			Email:        a.Email,
 			AccountType:  models.OpenAIAccountTypeOAuth,
 			Status:       status,
@@ -2135,9 +2166,18 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 			account.ChatGPTAccountID = sPtr(cid)
 		}
 
-		if _, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts); err != nil {
+		saved, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts)
+		if err != nil {
 			results = append(results, result{Email: a.Email, Success: false, Error: err.Error()})
 			continue
+		}
+		if saved != nil {
+			if oldID := strings.TrimSpace(a.ID); oldID != "" {
+				oauthIDMap[oldID] = saved.ID
+			}
+			if cid := exportedOAuthChatGPTAccountID(a); cid != "" {
+				oauthIDMap[cid] = saved.ID
+			}
 		}
 		results = append(results, result{Email: a.Email, Success: true})
 	}
@@ -2176,6 +2216,41 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 		results = append(results, result{Email: label, Success: true})
 	}
 
+	if payload.LocalAccess != nil {
+		accountIDs := make([]string, 0, len(payload.LocalAccess.AccountIDs))
+		for _, id := range payload.LocalAccess.AccountIDs {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if mapped := oauthIDMap[id]; mapped != "" {
+				accountIDs = append(accountIDs, mapped)
+			} else {
+				accountIDs = append(accountIDs, id)
+			}
+		}
+		ids, err := h.filterCodexLocalAccessAccountIDs(accountIDs, payload.LocalAccess.RestrictFreeAccounts)
+		if err == nil {
+			_ = saveCodexLocalAccessAccountIDs(ids)
+			_ = storage.SaveSetting(codexLocalAccessRestrictFreeAccountsKey, fmt.Sprintf("%v", payload.LocalAccess.RestrictFreeAccounts))
+			if payload.LocalAccess.Port > 0 && payload.LocalAccess.Port <= 65535 {
+				_ = storage.SaveSetting(codexLocalAccessPortKey, strconv.Itoa(payload.LocalAccess.Port))
+			}
+			if isValidCodexProxyStrategy(payload.LocalAccess.RoutingStrategy) {
+				_ = storage.SaveSetting(codexLocalAccessRoutingStrategyKey, payload.LocalAccess.RoutingStrategy)
+				_ = storage.SaveSetting("proxy_strategy", payload.LocalAccess.RoutingStrategy)
+			}
+			_ = storage.SaveSetting(codexLocalAccessEnabledKey, fmt.Sprintf("%v", payload.LocalAccess.Enabled))
+			_ = saveCodexLocalAccessTimestamp(true)
+			if h.storage != nil && len(ids) > 0 {
+				_, _ = h.storage.SetProxyForIDs(ids, true)
+			}
+			if p := proxy.GetProxy(); p != nil {
+				p.Refresh()
+			}
+		}
+	}
+
 	success, skipped, failed := 0, 0, 0
 	for _, r := range results {
 		if r.Success {
@@ -2187,6 +2262,419 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 		}
 	}
 
+	c.JSON(http.StatusOK, gin.H{
+		"total":   len(results),
+		"success": success,
+		"skipped": skipped,
+		"failed":  failed,
+		"results": results,
+	})
+}
+
+type cockpitToolsTokenSet struct {
+	IDToken      string `json:"id_token"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+type cockpitToolsQuota struct {
+	HourlyPercentage *int   `json:"hourly_percentage"`
+	WeeklyPercentage *int   `json:"weekly_percentage"`
+	HourlyResetTime  *int64 `json:"hourly_reset_time"`
+	WeeklyResetTime  *int64 `json:"weekly_reset_time"`
+}
+
+type cockpitToolsAccount struct {
+	ID                      string                 `json:"id"`
+	Email                   string                 `json:"email"`
+	AuthMode                string                 `json:"auth_mode"`
+	IDToken                 string                 `json:"id_token"`
+	AccessToken             string                 `json:"access_token"`
+	RefreshToken            string                 `json:"refresh_token"`
+	OpenAIAPIKey            string                 `json:"openai_api_key"`
+	APIBaseURL              string                 `json:"api_base_url"`
+	APIProviderMode         string                 `json:"api_provider_mode"`
+	APIProviderID           string                 `json:"api_provider_id"`
+	APIProviderName         string                 `json:"api_provider_name"`
+	UserID                  string                 `json:"user_id"`
+	PlanType                string                 `json:"plan_type"`
+	AuthFilePlanType        string                 `json:"auth_file_plan_type"`
+	AccountID               string                 `json:"account_id"`
+	ChatGPTAccountID        string                 `json:"chatgpt_account_id"`
+	OrganizationID          string                 `json:"organization_id"`
+	AccountName             string                 `json:"account_name"`
+	AccountStructure        string                 `json:"account_structure"`
+	Expired                 string                 `json:"expired"`
+	ExpiresAt               string                 `json:"expires_at"`
+	LastRefresh             string                 `json:"last_refresh"`
+	Type                    string                 `json:"type"`
+	Disabled                bool                   `json:"disabled"`
+	Status                  string                 `json:"status"`
+	Tokens                  cockpitToolsTokenSet   `json:"tokens"`
+	Quota                   *cockpitToolsQuota     `json:"quota"`
+	Tags                    []string               `json:"tags"`
+	RequiresReauth          bool                   `json:"requires_reauth"`
+	AdditionalCompatibility map[string]interface{} `json:"-"`
+}
+
+type cockpitToolsImportResult struct {
+	Email   string `json:"email"`
+	Success bool   `json:"success"`
+	Skipped bool   `json:"skipped,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+func unwrapCockpitToolsAccountsPayload(raw []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty cockpit-tools payload")
+	}
+	if trimmed[0] == '[' {
+		return trimmed, nil
+	}
+
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &root); err != nil {
+		return nil, err
+	}
+
+	if looksLikeCockpitToolsAccount(root) {
+		return json.Marshal([]json.RawMessage{trimmed})
+	}
+
+	if payload, ok := rawObjectField(root, "platforms"); ok {
+		var platforms map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &platforms); err == nil {
+			if codexPayload, ok := platforms["codex"]; ok {
+				return unwrapCockpitToolsPlatformPayload(codexPayload)
+			}
+		}
+	}
+
+	for _, key := range []string{"codex", "exported_data", "data", "accounts"} {
+		if payload, ok := rawObjectField(root, key); ok {
+			return unwrapCockpitToolsPlatformPayload(payload)
+		}
+	}
+
+	return nil, fmt.Errorf("no cockpit-tools account payload found")
+}
+
+func rawObjectField(root map[string]json.RawMessage, key string) (json.RawMessage, bool) {
+	value, ok := root[key]
+	if !ok || len(bytes.TrimSpace(value)) == 0 || string(bytes.TrimSpace(value)) == "null" {
+		return nil, false
+	}
+	return value, true
+}
+
+func looksLikeCockpitToolsAccount(root map[string]json.RawMessage) bool {
+	if _, ok := root["tokens"]; ok {
+		return true
+	}
+	if _, ok := root["id_token"]; ok {
+		return true
+	}
+	if _, ok := root["access_token"]; ok {
+		return true
+	}
+	if _, ok := root["refresh_token"]; ok {
+		return true
+	}
+	if _, ok := root["account_id"]; ok {
+		return true
+	}
+	if _, ok := root["openai_api_key"]; ok {
+		return true
+	}
+	if _, ok := root["auth_mode"]; ok {
+		return true
+	}
+	return false
+}
+
+func unwrapCockpitToolsPlatformPayload(raw json.RawMessage) ([]byte, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty cockpit-tools payload")
+	}
+	if trimmed[0] == '[' {
+		return trimmed, nil
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &object); err != nil {
+		return nil, err
+	}
+	if looksLikeCockpitToolsAccount(object) {
+		return json.Marshal([]json.RawMessage{trimmed})
+	}
+	for _, key := range []string{"exported_data", "data", "accounts"} {
+		if payload, ok := rawObjectField(object, key); ok {
+			return unwrapCockpitToolsPlatformPayload(payload)
+		}
+	}
+	return nil, fmt.Errorf("no cockpit-tools accounts found in platform payload")
+}
+
+func parseCockpitToolsAccounts(raw []byte) ([]cockpitToolsAccount, error) {
+	payload, err := unwrapCockpitToolsAccountsPayload(raw)
+	if err != nil {
+		return nil, err
+	}
+	var accounts []cockpitToolsAccount
+	if err := json.Unmarshal(payload, &accounts); err != nil {
+		return nil, err
+	}
+	if len(accounts) == 0 {
+		return nil, fmt.Errorf("no cockpit-tools accounts found")
+	}
+	return accounts, nil
+}
+
+func cockpitToolsAccountLabel(a cockpitToolsAccount) string {
+	for _, value := range []string{a.Email, a.AccountName, a.APIProviderName, a.APIProviderID, a.ID, a.AccountID} {
+		if text := strings.TrimSpace(value); text != "" {
+			return text
+		}
+	}
+	return "(unknown)"
+}
+
+func cockpitToolsPlan(a cockpitToolsAccount) *string {
+	if text := strings.TrimSpace(a.PlanType); text != "" {
+		return sPtr(text)
+	}
+	if text := strings.TrimSpace(a.AuthFilePlanType); text != "" {
+		return sPtr(text)
+	}
+	return nil
+}
+
+func cockpitToolsStatus(a cockpitToolsAccount) string {
+	if text := strings.TrimSpace(a.Status); text != "" {
+		return text
+	}
+	if a.RequiresReauth || a.Disabled {
+		return "inactive"
+	}
+	return "active"
+}
+
+func cockpitToolsTokenValue(primary string, fallback string) string {
+	if text := strings.TrimSpace(primary); text != "" {
+		return text
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func cockpitToolsIDToken(a cockpitToolsAccount) string {
+	return cockpitToolsTokenValue(a.IDToken, a.Tokens.IDToken)
+}
+
+func cockpitToolsAccessToken(a cockpitToolsAccount) string {
+	return cockpitToolsTokenValue(a.AccessToken, a.Tokens.AccessToken)
+}
+
+func cockpitToolsRefreshToken(a cockpitToolsAccount) string {
+	return cockpitToolsTokenValue(a.RefreshToken, a.Tokens.RefreshToken)
+}
+
+func cockpitToolsAccountID(a cockpitToolsAccount) string {
+	if text := strings.TrimSpace(a.ChatGPTAccountID); text != "" {
+		return text
+	}
+	return strings.TrimSpace(a.AccountID)
+}
+
+func cockpitToolsExpiresAt(a cockpitToolsAccount) *time.Time {
+	if t, ok := parseExportedOAuthTime(a.Expired); ok {
+		return t
+	}
+	if t, ok := parseExportedOAuthTime(a.ExpiresAt); ok {
+		return t
+	}
+	return nil
+}
+
+func secondsUntilUnixTimestamp(ts *int64, now time.Time) *int64 {
+	if ts == nil || *ts <= 0 {
+		return nil
+	}
+	seconds := *ts - now.Unix()
+	if seconds < 0 {
+		seconds = 0
+	}
+	return &seconds
+}
+
+func applyCockpitToolsQuota(account *models.OpenAIAccount, quota *cockpitToolsQuota, now time.Time) {
+	if quota == nil {
+		return
+	}
+	if quota.HourlyPercentage != nil {
+		v := float64(*quota.HourlyPercentage)
+		account.Quota5hUsedPercent = &v
+	}
+	if quota.WeeklyPercentage != nil {
+		v := float64(*quota.WeeklyPercentage)
+		account.Quota7dUsedPercent = &v
+	}
+	account.Quota5hResetSeconds = secondsUntilUnixTimestamp(quota.HourlyResetTime, now)
+	account.Quota7dResetSeconds = secondsUntilUnixTimestamp(quota.WeeklyResetTime, now)
+	if account.Quota5hUsedPercent != nil || account.Quota7dUsedPercent != nil {
+		account.QuotaVerified = true
+		account.QuotaUpdatedAt = &now
+	}
+}
+
+func (h *OpenAIHandler) buildOAuthAccountFromCockpitTools(a cockpitToolsAccount, now time.Time) (*models.OpenAIAccount, error) {
+	idToken := cockpitToolsIDToken(a)
+	accessToken := cockpitToolsAccessToken(a)
+	refreshToken := cockpitToolsRefreshToken(a)
+	email := strings.TrimSpace(a.Email)
+	if email == "" && idToken != "" {
+		if userInfo := openaiplatform.ParseIDToken(idToken); userInfo != nil && userInfo.Email != nil {
+			email = strings.TrimSpace(*userInfo.Email)
+		}
+	}
+	if email == "" {
+		return nil, fmt.Errorf("缺少 email，且无法从 id_token 解析邮箱")
+	}
+	if accessToken == "" && refreshToken == "" && idToken == "" {
+		return nil, fmt.Errorf("缺少 access_token、refresh_token 或 id_token")
+	}
+
+	account := &models.OpenAIAccount{
+		Email:            email,
+		AccountType:      models.OpenAIAccountTypeOAuth,
+		Status:           cockpitToolsStatus(a),
+		AccessToken:      sPtr(accessToken),
+		RefreshToken:     sPtr(refreshToken),
+		ExpiresAt:        cockpitToolsExpiresAt(a),
+		ChatGPTAccountID: sPtr(cockpitToolsAccountID(a)),
+		ChatGPTUserID:    sPtr(strings.TrimSpace(a.UserID)),
+		OrganizationID:   sPtr(strings.TrimSpace(a.OrganizationID)),
+		Plan:             cockpitToolsPlan(a),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	if len(a.Tags) > 0 && strings.TrimSpace(a.Tags[0]) != "" {
+		account.TagName = sPtr(strings.TrimSpace(a.Tags[0]))
+	}
+	if idToken != "" {
+		account.IDToken = sPtr(idToken)
+		if userInfo := openaiplatform.ParseIDToken(idToken); userInfo != nil {
+			if account.ChatGPTAccountID == nil || *account.ChatGPTAccountID == "" {
+				account.ChatGPTAccountID = userInfo.ChatGPTAccountID
+			}
+			if account.ChatGPTUserID == nil || *account.ChatGPTUserID == "" {
+				account.ChatGPTUserID = userInfo.ChatGPTUserID
+			}
+			if account.OrganizationID == nil || *account.OrganizationID == "" {
+				account.OrganizationID = userInfo.OrganizationID
+			}
+		}
+		if j := openaiplatform.ExtractOpenAIAuthJSON(idToken); j != "" {
+			account.OpenAIAuthJSON = sPtr(j)
+		}
+	}
+	applyCockpitToolsQuota(account, a.Quota, now)
+	return account, nil
+}
+
+func (h *OpenAIHandler) buildAPIAccountFromCockpitTools(a cockpitToolsAccount, now time.Time) (*models.OpenAIAccount, error) {
+	apiKey := strings.TrimSpace(a.OpenAIAPIKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("api key 为空")
+	}
+	provider := strings.TrimSpace(a.APIProviderID)
+	if provider == "" {
+		provider = strings.TrimSpace(a.APIProviderName)
+	}
+	if provider == "" {
+		provider = "openai"
+	}
+	baseURL := strings.TrimSpace(a.APIBaseURL)
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+	label := strings.TrimSpace(a.Email)
+	if label == "" {
+		label = strings.TrimSpace(a.AccountName)
+	}
+	if label == "" {
+		label = provider
+	}
+	return &models.OpenAIAccount{
+		Email:         label,
+		AccountType:   models.OpenAIAccountTypeAPI,
+		ModelProvider: sPtr(provider),
+		Model:         sPtr(""),
+		BaseURL:       sPtr(baseURL),
+		APIKey:        sPtr(apiKey),
+		WireAPI:       sPtr("responses"),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}, nil
+}
+
+func (h *OpenAIHandler) ImportFromCockpitTools(c *gin.Context) {
+	data, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "读取请求体失败: " + err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	cockpitToolsAccounts, err := parseCockpitToolsAccounts(data)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "无效的 cockpit-tools 导出数据: " + err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+
+	existingAccounts, _ := h.storage.List()
+	results := make([]cockpitToolsImportResult, 0, len(cockpitToolsAccounts))
+	now := time.Now()
+
+	for _, item := range cockpitToolsAccounts {
+		label := cockpitToolsAccountLabel(item)
+		authMode := strings.ToLower(strings.TrimSpace(item.AuthMode))
+		isAPIKey := authMode == "apikey" || strings.TrimSpace(item.OpenAIAPIKey) != ""
+		if isAPIKey {
+			account, err := h.buildAPIAccountFromCockpitTools(item, now)
+			if err != nil {
+				results = append(results, cockpitToolsImportResult{Email: label, Success: false, Error: err.Error()})
+				continue
+			}
+			if _, _, err := h.upsertImportedAPIAccount(account, &existingAccounts); err != nil {
+				results = append(results, cockpitToolsImportResult{Email: label, Success: false, Error: err.Error()})
+				continue
+			}
+			results = append(results, cockpitToolsImportResult{Email: account.Email, Success: true})
+			continue
+		}
+
+		account, err := h.buildOAuthAccountFromCockpitTools(item, now)
+		if err != nil {
+			results = append(results, cockpitToolsImportResult{Email: label, Success: false, Error: err.Error()})
+			continue
+		}
+		if _, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts); err != nil {
+			results = append(results, cockpitToolsImportResult{Email: label, Success: false, Error: err.Error()})
+			continue
+		}
+		results = append(results, cockpitToolsImportResult{Email: account.Email, Success: true})
+	}
+
+	success, skipped, failed := 0, 0, 0
+	for _, r := range results {
+		if r.Success {
+			success++
+		} else if r.Skipped {
+			skipped++
+		} else {
+			failed++
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"total":   len(results),
 		"success": success,
@@ -2712,6 +3200,10 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 
 // GetServiceConfig returns proxy pool status, masked API key state, strategy, and request stats.
 func (h *OpenAIHandler) GetServiceConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, h.serviceConfigPayload(c))
+}
+
+func (h *OpenAIHandler) serviceConfigPayload(c *gin.Context) gin.H {
 	p := proxy.GetProxy()
 	enabled := false
 	strategy := "round_robin"
@@ -2741,8 +3233,10 @@ func (h *OpenAIHandler) GetServiceConfig(c *gin.Context) {
 	}
 
 	proxyCount, _ := h.storage.CountProxyEnabled()
+	v1ProxyMode, _ := storage.GetSetting("v1_proxy_mode")
+	codexAPIBaseURL := buildCodexAPIServiceBaseURL(c)
 
-	c.JSON(http.StatusOK, gin.H{
+	return gin.H{
 		"proxy_pool_enabled":  enabled,
 		"strategy":            strategy,
 		"pool_size":           poolSize,
@@ -2751,7 +3245,11 @@ func (h *OpenAIHandler) GetServiceConfig(c *gin.Context) {
 		"total_logs":          logTotal,
 		"api_key_set":         apiKey != "",
 		"api_key_masked":      maskedKey,
-	})
+		"v1_proxy_mode":       v1ProxyMode,
+		"codex_api_service":   enabled && v1ProxyMode == "codex",
+		"codex_api_base_url":  codexAPIBaseURL,
+		"codex_api_port_url":  strings.TrimRight(codexAPIBaseURL, "/") + "/responses",
+	}
 }
 
 // UpdateServiceConfig updates proxy pool enabled, strategy, and API key.
@@ -2773,19 +3271,571 @@ func (h *OpenAIHandler) UpdateServiceConfig(c *gin.Context) {
 		storage.SaveSetting("proxy_pool_enabled", fmt.Sprintf("%v", *req.ProxyPoolEnabled))
 	}
 	if req.Strategy != nil && p != nil {
-		valid := map[string]bool{"round_robin": true, "random": true, "least_used": true}
-		if !valid[*req.Strategy] {
+		if !isValidCodexProxyStrategy(*req.Strategy) {
 			c.JSON(http.StatusBadRequest, models.APIError{Error: "invalid strategy", Code: "INVALID_REQUEST"})
 			return
 		}
 		p.SetStrategy(*req.Strategy)
 		storage.SaveSetting("proxy_strategy", *req.Strategy)
+		storage.SaveSetting(codexLocalAccessRoutingStrategyKey, *req.Strategy)
 	}
 	if req.APIKey != nil {
 		storage.SaveSetting("proxy_api_key", strings.TrimSpace(*req.APIKey))
 	}
 
 	h.GetServiceConfig(c)
+}
+
+// ActivateCodexAPIService enables the local proxy service and injects it into
+// the user's ~/.codex config so Codex CLI can call EasyLLM directly.
+func (h *OpenAIHandler) ActivateCodexAPIService(c *gin.Context) {
+	apiKeyBefore, _ := storage.GetSetting("proxy_api_key")
+	if err := h.activateCodexLocalAccess(c); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "LOCAL_ACCESS_ERROR"})
+		return
+	}
+
+	payload := h.serviceConfigPayload(c)
+	payload["codex_config_injected"] = true
+	payload["api_key_generated"] = strings.TrimSpace(apiKeyBefore) == ""
+	c.JSON(http.StatusOK, payload)
+}
+
+func (h *OpenAIHandler) GetCodexLocalAccess(c *gin.Context) {
+	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+}
+
+func (h *OpenAIHandler) ActivateCodexLocalAccess(c *gin.Context) {
+	if err := h.activateCodexLocalAccess(c); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "LOCAL_ACCESS_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+}
+
+func (h *OpenAIHandler) DeactivateCodexLocalAccess(c *gin.Context) {
+	_ = storage.SaveSetting(codexLocalAccessEnabledKey, "false")
+	_ = storage.SaveSetting("proxy_pool_enabled", "false")
+	_ = storage.SaveSetting("v1_proxy_mode", "")
+	if p := proxy.GetProxy(); p != nil {
+		p.SetEnabled(false)
+	}
+	apiKey, _ := storage.GetSetting("proxy_api_key")
+	_ = openaiplatform.RemoveCodexAPIService(apiKey)
+	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+}
+
+func (h *OpenAIHandler) SetCodexLocalAccessEnabled(c *gin.Context) {
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Enabled == nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "enabled is required", Code: "INVALID_REQUEST"})
+		return
+	}
+	if *req.Enabled {
+		if err := h.activateCodexLocalAccess(c); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "LOCAL_ACCESS_ERROR"})
+			return
+		}
+		c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+		return
+	}
+	h.DeactivateCodexLocalAccess(c)
+}
+
+func (h *OpenAIHandler) SaveCodexLocalAccessAccounts(c *gin.Context) {
+	var req struct {
+		AccountIDs           []string `json:"account_ids"`
+		RestrictFreeAccounts *bool    `json:"restrict_free_accounts"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "INVALID_REQUEST"})
+		return
+	}
+	restrictFree := true
+	if req.RestrictFreeAccounts != nil {
+		restrictFree = *req.RestrictFreeAccounts
+	}
+	ids, err := h.filterCodexLocalAccessAccountIDs(req.AccountIDs, restrictFree)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	if err := saveCodexLocalAccessAccountIDs(ids); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "INTERNAL_ERROR"})
+		return
+	}
+	_ = storage.SaveSetting(codexLocalAccessRestrictFreeAccountsKey, fmt.Sprintf("%v", restrictFree))
+	_ = saveCodexLocalAccessTimestamp(false)
+	if h.storage != nil && len(ids) > 0 {
+		_, _ = h.storage.SetProxyForIDs(ids, true)
+	}
+	if p := proxy.GetProxy(); p != nil {
+		p.Refresh()
+	}
+	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+}
+
+func (h *OpenAIHandler) RemoveCodexLocalAccessAccount(c *gin.Context) {
+	target := strings.TrimSpace(c.Param("id"))
+	ids := readCodexLocalAccessAccountIDs()
+	next := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != target {
+			next = append(next, id)
+		}
+	}
+	if err := saveCodexLocalAccessAccountIDs(next); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "INTERNAL_ERROR"})
+		return
+	}
+	_ = saveCodexLocalAccessTimestamp(false)
+	if p := proxy.GetProxy(); p != nil {
+		p.Refresh()
+	}
+	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+}
+
+func (h *OpenAIHandler) UpdateCodexLocalAccessPort(c *gin.Context) {
+	var req struct {
+		Port int `json:"port"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Port <= 0 || req.Port > 65535 {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "port must be between 1 and 65535", Code: "INVALID_REQUEST"})
+		return
+	}
+	_ = storage.SaveSetting(codexLocalAccessPortKey, strconv.Itoa(req.Port))
+	_ = saveCodexLocalAccessTimestamp(false)
+	if readBoolSetting(codexLocalAccessEnabledKey, false) {
+		apiKey, _ := storage.GetSetting("proxy_api_key")
+		if apiKey != "" {
+			if err := openaiplatform.SwitchCodexAPIService(buildCodexAPIServiceBaseURL(c), apiKey); err != nil {
+				c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "CODEX_CONFIG_WRITE_FAILED"})
+				return
+			}
+		}
+	}
+	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+}
+
+func (h *OpenAIHandler) UpdateCodexLocalAccessRoutingStrategy(c *gin.Context) {
+	var req struct {
+		Strategy string `json:"strategy"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "INVALID_REQUEST"})
+		return
+	}
+	strategy := strings.TrimSpace(req.Strategy)
+	if !isValidCodexProxyStrategy(strategy) {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "invalid strategy", Code: "INVALID_REQUEST"})
+		return
+	}
+	_ = storage.SaveSetting(codexLocalAccessRoutingStrategyKey, strategy)
+	_ = storage.SaveSetting("proxy_strategy", strategy)
+	_ = saveCodexLocalAccessTimestamp(false)
+	if p := proxy.GetProxy(); p != nil {
+		p.SetStrategy(strategy)
+		p.Refresh()
+	}
+	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+}
+
+func (h *OpenAIHandler) RotateCodexLocalAccessAPIKey(c *gin.Context) {
+	apiKey, err := generateCodexAPIServiceKey()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "INTERNAL_ERROR"})
+		return
+	}
+	if err := storage.SaveSetting("proxy_api_key", apiKey); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "INTERNAL_ERROR"})
+		return
+	}
+	_ = saveCodexLocalAccessTimestamp(false)
+	if readBoolSetting(codexLocalAccessEnabledKey, false) {
+		if err := openaiplatform.SwitchCodexAPIService(buildCodexAPIServiceBaseURL(c), apiKey); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "CODEX_CONFIG_WRITE_FAILED"})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+}
+
+func (h *OpenAIHandler) ClearCodexLocalAccessStats(c *gin.Context) {
+	if h.codexStorage != nil {
+		if err := h.codexStorage.ClearLogs(); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
+}
+
+func (h *OpenAIHandler) KillCodexLocalAccessPort(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"killed_count": 0,
+		"state":        h.codexLocalAccessState(c),
+	})
+}
+
+func (h *OpenAIHandler) activateCodexLocalAccess(c *gin.Context) error {
+	p := proxy.GetProxy()
+	if p == nil {
+		return errors.New("Codex proxy is not initialized")
+	}
+
+	ids := readCodexLocalAccessAccountIDs()
+	if len(ids) == 0 && !codexLocalAccessAccountIDsConfigured() {
+		accounts, err := h.storage.List()
+		if err != nil {
+			return err
+		}
+		restrictFree := readBoolSetting(codexLocalAccessRestrictFreeAccountsKey, true)
+		for _, account := range accounts {
+			if account.AccountType != models.OpenAIAccountTypeOAuth {
+				continue
+			}
+			if derefStr(account.AccessToken) == "" {
+				continue
+			}
+			if restrictFree && strings.EqualFold(strings.TrimSpace(derefStr(account.Plan)), "free") {
+				continue
+			}
+			ids = append(ids, account.ID)
+		}
+		if len(ids) > 0 {
+			if err := saveCodexLocalAccessAccountIDs(ids); err != nil {
+				return err
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return errors.New("没有可用 OAuth 账号，请先导入账号")
+	}
+	if h.storage != nil {
+		_, _ = h.storage.SetProxyForIDs(ids, true)
+	}
+
+	strategy := readStringSetting(codexLocalAccessRoutingStrategyKey, readStringSetting("proxy_strategy", "auto"))
+	if !isValidCodexProxyStrategy(strategy) {
+		strategy = "auto"
+	}
+	p.SetStrategy(strategy)
+	p.SetEnabled(true)
+	p.Refresh()
+
+	if p.PoolSize() == 0 {
+		return errors.New("没有可用代理池账号，请检查账号 token 或订阅状态")
+	}
+
+	_ = storage.SaveSetting(codexLocalAccessEnabledKey, "true")
+	_ = storage.SaveSetting(codexLocalAccessRoutingStrategyKey, strategy)
+	_ = storage.SaveSetting("proxy_strategy", strategy)
+	_ = storage.SaveSetting("proxy_pool_enabled", "true")
+	_ = storage.SaveSetting("v1_proxy_mode", "codex")
+	_ = saveCodexLocalAccessTimestamp(true)
+
+	apiKey, _ := storage.GetSetting("proxy_api_key")
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		var err error
+		apiKey, err = generateCodexAPIServiceKey()
+		if err != nil {
+			return err
+		}
+		if err := storage.SaveSetting("proxy_api_key", apiKey); err != nil {
+			return err
+		}
+	}
+
+	return openaiplatform.SwitchCodexAPIService(buildCodexAPIServiceBaseURL(c), apiKey)
+}
+
+func generateCodexAPIServiceKey() (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("failed to generate API key: %w", err)
+	}
+	return "easyllm_codex_" + strings.TrimRight(base64.RawURLEncoding.EncodeToString(buf), "="), nil
+}
+
+func buildCodexAPIServiceBaseURL(c *gin.Context) string {
+	host := "localhost:8022"
+	if c != nil && c.Request != nil {
+		if requestHost := strings.TrimSpace(c.Request.Host); requestHost != "" {
+			host = requestHost
+		}
+	}
+	hostOnly, port, err := net.SplitHostPort(host)
+	if err == nil {
+		if hostOnly == "" || hostOnly == "0.0.0.0" || hostOnly == "::" || hostOnly == "[::]" || strings.EqualFold(hostOnly, "localhost") || net.ParseIP(hostOnly) != nil {
+			hostOnly = "localhost"
+		}
+		if configuredPort := readIntSetting(codexLocalAccessPortKey, 0); configuredPort > 0 {
+			port = strconv.Itoa(configuredPort)
+		}
+		host = net.JoinHostPort(hostOnly, port)
+	} else if configuredPort := readIntSetting(codexLocalAccessPortKey, 0); configuredPort > 0 {
+		hostOnly := strings.TrimSpace(host)
+		if hostOnly == "" || hostOnly == "0.0.0.0" || hostOnly == "::" || hostOnly == "[::]" || strings.EqualFold(hostOnly, "localhost") || net.ParseIP(hostOnly) != nil {
+			hostOnly = "localhost"
+		}
+		host = net.JoinHostPort(hostOnly, strconv.Itoa(configuredPort))
+	}
+	scheme := "http"
+	if c != nil && c.Request != nil && c.Request.TLS != nil {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s/v1", scheme, host)
+}
+
+func (h *OpenAIHandler) codexLocalAccessState(c *gin.Context) models.CodexLocalAccessState {
+	baseURL := buildCodexAPIServiceBaseURL(c)
+	apiKey, _ := storage.GetSetting("proxy_api_key")
+	collection := &models.CodexLocalAccessCollection{
+		Enabled:              readBoolSetting(codexLocalAccessEnabledKey, false),
+		Port:                 localAccessPortFromBaseURL(baseURL),
+		APIKeyMasked:         maskAPIKey(apiKey),
+		RoutingStrategy:      readStringSetting(codexLocalAccessRoutingStrategyKey, readStringSetting("proxy_strategy", "auto")),
+		RestrictFreeAccounts: readBoolSetting(codexLocalAccessRestrictFreeAccountsKey, true),
+		AccountIDs:           readCodexLocalAccessAccountIDs(),
+		CreatedAt:            readStringSetting(codexLocalAccessCreatedAtKey, ""),
+		UpdatedAt:            readStringSetting(codexLocalAccessUpdatedAtKey, ""),
+	}
+	if !isValidCodexProxyStrategy(collection.RoutingStrategy) {
+		collection.RoutingStrategy = "auto"
+	}
+	running := false
+	if p := proxy.GetProxy(); p != nil {
+		running = p.IsEnabled() && collection.Enabled
+	}
+	return models.CodexLocalAccessState{
+		Collection:  collection,
+		Running:     running,
+		BaseURL:     baseURL,
+		APIPortURL:  strings.TrimRight(baseURL, "/") + "/responses",
+		ModelIDs:    []string{"gpt-5-codex", "gpt-5-codex-mini", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-image-2"},
+		MemberCount: len(collection.AccountIDs),
+		Stats:       h.buildCodexLocalAccessStats(),
+	}
+}
+
+func (h *OpenAIHandler) buildCodexLocalAccessStats() models.CodexLocalAccessStats {
+	now := time.Now()
+	return models.CodexLocalAccessStats{
+		Daily:   h.buildCodexLocalAccessStatsWindow(now.Add(-24*time.Hour), now),
+		Weekly:  h.buildCodexLocalAccessStatsWindow(now.Add(-7*24*time.Hour), now),
+		Monthly: h.buildCodexLocalAccessStatsWindow(now.Add(-30*24*time.Hour), now),
+	}
+}
+
+func (h *OpenAIHandler) buildCodexLocalAccessStatsWindow(since, now time.Time) models.CodexLocalAccessStatsWindow {
+	window := models.CodexLocalAccessStatsWindow{
+		Since:     since.UTC().Format(time.RFC3339),
+		UpdatedAt: now.UTC().Format(time.RFC3339),
+		Accounts:  []models.CodexLocalAccessAccountStats{},
+	}
+	if h.codexStorage == nil {
+		return window
+	}
+	logs, err := h.codexStorage.GetLogsSince(since)
+	if err != nil {
+		return window
+	}
+	byAccount := make(map[string]*models.CodexLocalAccessAccountStats)
+	for _, item := range logs {
+		if item.CreatedAt.Before(since) {
+			continue
+		}
+		addUsage(&window.Totals, item)
+		accountKey := strings.TrimSpace(item.AccountID)
+		if accountKey == "" {
+			accountKey = strings.TrimSpace(item.AccountEmail)
+		}
+		if accountKey == "" {
+			accountKey = "unknown"
+		}
+		accountStats := byAccount[accountKey]
+		if accountStats == nil {
+			accountStats = &models.CodexLocalAccessAccountStats{
+				AccountID: accountKey,
+				Email:     item.AccountEmail,
+			}
+			byAccount[accountKey] = accountStats
+		}
+		addUsage(&accountStats.Usage, item)
+		if accountStats.UpdatedAt == "" || item.CreatedAt.Format(time.RFC3339) > accountStats.UpdatedAt {
+			accountStats.UpdatedAt = item.CreatedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	for _, accountStats := range byAccount {
+		window.Accounts = append(window.Accounts, *accountStats)
+	}
+	sort.Slice(window.Accounts, func(i, j int) bool {
+		return window.Accounts[i].Usage.RequestCount > window.Accounts[j].Usage.RequestCount
+	})
+	return window
+}
+
+func addUsage(target *models.CodexLocalAccessUsageStats, log models.CodexLog) {
+	target.RequestCount++
+	if log.StatusCode >= 200 && log.StatusCode < 400 {
+		target.SuccessCount++
+	} else {
+		target.FailureCount++
+	}
+	target.TotalLatencyMs += log.Duration
+	target.InputTokens += log.InputTokens
+	target.OutputTokens += log.OutputTokens
+	target.TotalTokens += log.InputTokens + log.OutputTokens
+}
+
+func (h *OpenAIHandler) filterCodexLocalAccessAccountIDs(ids []string, restrictFree bool) ([]string, error) {
+	if h.storage == nil {
+		return nil, errors.New("OpenAI storage is not initialized")
+	}
+	accounts, err := h.storage.List()
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]models.OpenAIAccount, len(accounts))
+	for _, account := range accounts {
+		if account.AccountType == models.OpenAIAccountTypeOAuth {
+			byID[account.ID] = account
+		}
+	}
+	seen := map[string]bool{}
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		account, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("账号不存在: %s", id)
+		}
+		if restrictFree && strings.EqualFold(strings.TrimSpace(derefStr(account.Plan)), "free") {
+			continue
+		}
+		result = append(result, id)
+		seen[id] = true
+	}
+	return result, nil
+}
+
+func readCodexLocalAccessAccountIDs() []string {
+	raw, ok := storage.GetSetting(codexLocalAccessAccountIDsKey)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return []string{}
+	}
+	result := make([]string, 0, len(ids))
+	seen := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" && !seen[id] {
+			result = append(result, id)
+			seen[id] = true
+		}
+	}
+	return result
+}
+
+func codexLocalAccessAccountIDsConfigured() bool {
+	raw, ok := storage.GetSetting(codexLocalAccessAccountIDsKey)
+	return ok && strings.TrimSpace(raw) != ""
+}
+
+func saveCodexLocalAccessAccountIDs(ids []string) error {
+	data, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	return storage.SaveSetting(codexLocalAccessAccountIDsKey, string(data))
+}
+
+func saveCodexLocalAccessTimestamp(createIfMissing bool) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if createIfMissing {
+		if _, ok := storage.GetSetting(codexLocalAccessCreatedAtKey); !ok {
+			if err := storage.SaveSetting(codexLocalAccessCreatedAtKey, now); err != nil {
+				return err
+			}
+		}
+	}
+	return storage.SaveSetting(codexLocalAccessUpdatedAtKey, now)
+}
+
+func readStringSetting(key, fallback string) string {
+	if value, ok := storage.GetSetting(key); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return fallback
+}
+
+func readBoolSetting(key string, fallback bool) bool {
+	value, ok := storage.GetSetting(key)
+	if !ok {
+		return fallback
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func readIntSetting(key string, fallback int) int {
+	value, ok := storage.GetSetting(key)
+	if !ok {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func localAccessPortFromBaseURL(baseURL string) int {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return readIntSetting(codexLocalAccessPortKey, 8022)
+	}
+	if p := u.Port(); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil {
+			return parsed
+		}
+	}
+	return readIntSetting(codexLocalAccessPortKey, 8022)
+}
+
+func maskAPIKey(apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return ""
+	}
+	if len(apiKey) <= 8 {
+		return "****"
+	}
+	return apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+}
+
+func isValidCodexProxyStrategy(strategy string) bool {
+	switch strings.TrimSpace(strategy) {
+	case "round_robin", "random", "least_used", "auto", "quota_high_first", "quota_low_first", "plan_high_first", "plan_low_first", "expiry_soon_first":
+		return true
+	default:
+		return false
+	}
 }
 
 // ---- helpers ----

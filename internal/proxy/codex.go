@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +23,9 @@ type poolEntry struct {
 	chatgptAccountID string // chatgpt-account-id header value (OAuth accounts)
 	source           string // "codex" | "openai"
 	requests         *int64
+	planRank         int
+	remainingQuota   *int
+	expiresAt        *time.Time
 }
 
 // CodexProxy manages the unified proxy pool
@@ -81,12 +85,16 @@ func (p *CodexProxy) Refresh() {
 	p.mu.RUnlock()
 
 	var entries []poolEntry
+	selectedIDs := loadLocalAccessAccountIDSet()
 
 	// Dedicated Codex pool accounts
 	if p.codexDB != nil {
 		accounts, err := p.codexDB.LoadEnabledAccounts()
 		if err == nil {
 			for _, a := range accounts {
+				if selectedIDs != nil && !selectedIDs[a.ID] {
+					continue
+				}
 				cnt := a.RequestCount
 				if old, ok := oldCounters[a.ID]; ok && old != nil {
 					cnt = atomic.LoadInt64(old)
@@ -110,6 +118,9 @@ func (p *CodexProxy) Refresh() {
 				if a.AccessToken == nil || *a.AccessToken == "" {
 					continue
 				}
+				if selectedIDs != nil && !selectedIDs[a.ID] {
+					continue
+				}
 				cnt := int64(0)
 				if old, ok := oldCounters[a.ID]; ok && old != nil {
 					cnt = atomic.LoadInt64(old)
@@ -125,6 +136,9 @@ func (p *CodexProxy) Refresh() {
 					chatgptAccountID: accountID,
 					source:           "openai",
 					requests:         &cnt,
+					planRank:         planRank(a.Plan),
+					remainingQuota:   remainingQuota(&a),
+					expiresAt:        a.ExpiresAt,
 				})
 			}
 		}
@@ -245,8 +259,16 @@ func (p *CodexProxy) pickEntry() *poolEntry {
 			}
 		}
 		return least
+	case "auto", "quota_high_first", "quota_low_first", "plan_high_first", "plan_low_first", "expiry_soon_first":
+		bestIndex := 0
+		for i := 1; i < len(p.pool); i++ {
+			if comparePoolEntries(&p.pool[i], &p.pool[bestIndex], p.strategy) < 0 {
+				bestIndex = i
+			}
+		}
+		return &p.pool[bestIndex]
 	default: // round_robin
-		idx := int(atomicAddInt64(&p.currentIndex, 1) - 1) % len(p.pool)
+		idx := int(atomicAddInt64(&p.currentIndex, 1)-1) % len(p.pool)
 		return &p.pool[idx]
 	}
 }
@@ -329,6 +351,201 @@ func (p *CodexProxy) TotalRequests() int64 {
 		}
 	}
 	return total
+}
+
+func loadLocalAccessAccountIDSet() map[string]bool {
+	raw, ok := storage.GetSetting("codex_local_access_account_ids")
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return nil
+	}
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			set[id] = true
+		}
+	}
+	return set
+}
+
+func planRank(plan *string) int {
+	value := ""
+	if plan != nil {
+		value = strings.ToLower(strings.TrimSpace(*plan))
+	}
+	switch value {
+	case "enterprise":
+		return 6
+	case "business":
+		return 5
+	case "team":
+		return 4
+	case "pro":
+		return 3
+	case "plus":
+		return 2
+	case "free":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func remainingQuota(account *models.OpenAIAccount) *int {
+	if account == nil {
+		return nil
+	}
+	values := make([]int, 0, 2)
+	if account.Quota5hUsedPercent != nil {
+		values = append(values, clampPercent(100-int(*account.Quota5hUsedPercent)))
+	}
+	if account.Quota7dUsedPercent != nil {
+		values = append(values, clampPercent(100-int(*account.Quota7dUsedPercent)))
+	}
+	if len(values) == 0 && account.QuotaTotal != nil && *account.QuotaTotal > 0 && account.QuotaUsed != nil {
+		remaining := int((1 - float64(*account.QuotaUsed)/float64(*account.QuotaTotal)) * 100)
+		values = append(values, clampPercent(remaining))
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	best := values[0]
+	for _, value := range values[1:] {
+		if value < best {
+			best = value
+		}
+	}
+	return &best
+}
+
+func clampPercent(value int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
+}
+
+func comparePoolEntries(left, right *poolEntry, strategy string) int {
+	switch strategy {
+	case "quota_high_first":
+		if diff := compareOptionalIntDesc(left.remainingQuota, right.remainingQuota); diff != 0 {
+			return diff
+		}
+		if diff := compareIntDesc(left.planRank, right.planRank); diff != 0 {
+			return diff
+		}
+	case "quota_low_first":
+		if diff := compareOptionalIntAsc(left.remainingQuota, right.remainingQuota); diff != 0 {
+			return diff
+		}
+		if diff := compareIntDesc(left.planRank, right.planRank); diff != 0 {
+			return diff
+		}
+	case "plan_high_first":
+		if diff := compareIntDesc(left.planRank, right.planRank); diff != 0 {
+			return diff
+		}
+		if diff := compareOptionalIntDesc(left.remainingQuota, right.remainingQuota); diff != 0 {
+			return diff
+		}
+	case "plan_low_first":
+		if diff := compareIntAsc(left.planRank, right.planRank); diff != 0 {
+			return diff
+		}
+		if diff := compareOptionalIntDesc(left.remainingQuota, right.remainingQuota); diff != 0 {
+			return diff
+		}
+	case "expiry_soon_first":
+		if diff := compareOptionalTimeAsc(left.expiresAt, right.expiresAt); diff != 0 {
+			return diff
+		}
+		if diff := compareIntDesc(left.planRank, right.planRank); diff != 0 {
+			return diff
+		}
+		if diff := compareOptionalIntDesc(left.remainingQuota, right.remainingQuota); diff != 0 {
+			return diff
+		}
+	default: // auto
+		if diff := compareIntDesc(left.planRank, right.planRank); diff != 0 {
+			return diff
+		}
+		if diff := compareOptionalIntDesc(left.remainingQuota, right.remainingQuota); diff != 0 {
+			return diff
+		}
+	}
+	return strings.Compare(left.id, right.id)
+}
+
+func compareIntDesc(left, right int) int {
+	if left == right {
+		return 0
+	}
+	if left > right {
+		return -1
+	}
+	return 1
+}
+
+func compareIntAsc(left, right int) int {
+	if left == right {
+		return 0
+	}
+	if left < right {
+		return -1
+	}
+	return 1
+}
+
+func compareOptionalIntDesc(left, right *int) int {
+	if left == nil && right == nil {
+		return 0
+	}
+	if left == nil {
+		return 1
+	}
+	if right == nil {
+		return -1
+	}
+	return compareIntDesc(*left, *right)
+}
+
+func compareOptionalIntAsc(left, right *int) int {
+	if left == nil && right == nil {
+		return 0
+	}
+	if left == nil {
+		return 1
+	}
+	if right == nil {
+		return -1
+	}
+	return compareIntAsc(*left, *right)
+}
+
+func compareOptionalTimeAsc(left, right *time.Time) int {
+	if left == nil && right == nil {
+		return 0
+	}
+	if left == nil {
+		return 1
+	}
+	if right == nil {
+		return -1
+	}
+	if left.Equal(*right) {
+		return 0
+	}
+	if left.Before(*right) {
+		return -1
+	}
+	return 1
 }
 
 // saveRateLimits captures rate-limit headers from upstream and persists them to the OpenAI account.

@@ -22,7 +22,8 @@ import (
 func setupOpenAIHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
+	dbName := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+	db, err := gorm.Open(sqlite.Open("file:"+dbName+"?mode=memory&cache=shared"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -315,6 +316,124 @@ func TestUpsertImportedOAuthAccountCanEnableProxyForExistingAccount(t *testing.T
 	}
 	if !stored.ProxyEnabled {
 		t.Fatalf("expected stored account to persist proxy_enabled=true")
+	}
+}
+
+func TestParseCockpitToolsAccountsSupportsArrayAndTransferBundle(t *testing.T) {
+	arrayPayload := []byte(`[
+		{
+			"id":"codex-1",
+			"email":"one@example.com",
+			"auth_mode":"oauth",
+			"account_id":"acct-1",
+			"tokens":{"access_token":"at1","refresh_token":"rt1","id_token":""}
+		}
+	]`)
+	accounts, err := parseCockpitToolsAccounts(arrayPayload)
+	if err != nil {
+		t.Fatalf("parse account array: %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].Email != "one@example.com" || accounts[0].Tokens.AccessToken != "at1" {
+		t.Fatalf("unexpected parsed accounts: %+v", accounts)
+	}
+
+	topLevelPayload := []byte(`{
+		"id_token":"id-top",
+		"access_token":"at-top",
+		"refresh_token":"rt-top",
+		"account_id":"acct-top",
+		"last_refresh":"2026-05-07T01:29:06.000Z",
+		"email":"top@example.com",
+		"type":"codex",
+		"expired":"2026-05-16T06:20:07.000Z"
+	}`)
+	accounts, err = parseCockpitToolsAccounts(topLevelPayload)
+	if err != nil {
+		t.Fatalf("parse top-level token object: %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].Email != "top@example.com" || accounts[0].AccessToken != "at-top" || accounts[0].RefreshToken != "rt-top" {
+		t.Fatalf("unexpected parsed top-level account: %+v", accounts)
+	}
+
+	bundlePayload := []byte(`{
+		"schema":"account-transfer",
+		"platforms":{
+			"codex":{
+				"account_count":1,
+				"exported_data":[
+					{
+						"id":"codex-2",
+						"email":"two@example.com",
+						"auth_mode":"oauth",
+						"account_id":"acct-2",
+						"tokens":{"access_token":"at2","refresh_token":"rt2","id_token":""}
+					}
+				]
+			}
+		}
+	}`)
+	accounts, err = parseCockpitToolsAccounts(bundlePayload)
+	if err != nil {
+		t.Fatalf("parse transfer bundle: %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].Email != "two@example.com" || accounts[0].Tokens.RefreshToken != "rt2" {
+		t.Fatalf("unexpected parsed bundle accounts: %+v", accounts)
+	}
+}
+
+func TestImportFromCockpitToolsImportsOAuthAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	body := strings.NewReader(`[
+		{
+			"id":"codex-1",
+			"email":"one@example.com",
+			"id_token":"id1",
+			"access_token":"at1",
+			"refresh_token":"rt1",
+			"account_id":"acct-1",
+			"expired":"2026-05-16T06:20:07.000Z",
+			"plan_type":"plus",
+			"type":"codex"
+		}
+	]`)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", body)
+
+	handler.ImportFromCockpitTools(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Total   int `json:"total"`
+		Success int `json:"success"`
+		Failed  int `json:"failed"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Total != 1 || payload.Success != 1 || payload.Failed != 0 {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("expected 1 account imported, got %d", len(accounts))
+	}
+	if accounts[0].Email != "one@example.com" ||
+		derefStr(accounts[0].AccessToken) != "at1" ||
+		derefStr(accounts[0].RefreshToken) != "rt1" ||
+		derefStr(accounts[0].IDToken) != "id1" ||
+		derefStr(accounts[0].ChatGPTAccountID) != "acct-1" ||
+		accounts[0].ExpiresAt == nil {
+		t.Fatalf("unexpected imported account: %+v", accounts[0])
 	}
 }
 

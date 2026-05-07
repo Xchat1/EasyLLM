@@ -61,7 +61,7 @@
               </div>
             </div>
             <div class="mt-2 text-gray-500">
-              {{ serverRunning ? '服务运行正常，可访问驾驶舱和代理接口。' : '服务状态未知，正在等待下一次轮询。' }}
+              {{ serverRunning ? '服务运行正常，可访问总览和代理接口。' : '服务状态未知，正在等待下一次轮询。' }}
             </div>
           </div>
           <button
@@ -75,7 +75,7 @@
       </div>
     </aside>
 
-    <main class="relative flex-1 overflow-y-auto">
+    <main class="relative min-w-0 flex-1 overflow-y-auto">
       <div v-if="notification.show" class="fixed right-4 top-4 z-50 max-w-sm">
         <div
           class="flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm shadow-2xl"

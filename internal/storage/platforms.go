@@ -122,6 +122,17 @@ func (s *OpenAIStorage) CountProxyEnabled() (int64, error) {
 	return count, err
 }
 
+// SetProxyForIDs updates proxy_enabled for a selected set of OAuth account IDs.
+func (s *OpenAIStorage) SetProxyForIDs(ids []string, enabled bool) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	res := s.db.Model(&models.OpenAIAccount{}).
+		Where("id IN ? AND account_type = ?", ids, models.OpenAIAccountTypeOAuth).
+		Update("proxy_enabled", enabled)
+	return res.RowsAffected, res.Error
+}
+
 // --- Cursor ---
 
 type CursorStorage struct{ db *gorm.DB }

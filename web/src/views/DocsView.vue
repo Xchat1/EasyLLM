@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 max-w-5xl">
+  <div class="docs-page p-4 sm:p-6 w-full max-w-7xl mx-auto space-y-6">
     <!-- Header -->
     <div class="mb-8">
       <h1 class="text-3xl font-bold text-white mb-2">📖 使用文档</h1>
@@ -7,9 +7,9 @@
     </div>
 
     <!-- Quick nav -->
-    <div class="card p-4 mb-8">
+    <div class="card docs-card p-4">
       <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">快速导航</div>
-      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9 gap-2">
+      <div class="grid docs-nav-grid gap-2">
         <button v-for="section in sections" :key="section.id"
           @click="scrollTo(section.id)"
           class="flex items-center gap-2 px-3 py-2 bg-gray-800/50 hover:bg-gray-700/50 rounded-lg text-sm text-gray-300 hover:text-white transition-all duration-200 border border-gray-700/50 hover:border-blue-500/50">
@@ -22,11 +22,11 @@
     <div class="space-y-6">
 
       <!-- Overview -->
-      <div id="sec-overview" class="card p-5">
+      <div id="sec-overview" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">🎯</span> 产品简介
         </h2>
-        <div class="grid md:grid-cols-3 gap-4 mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <div class="bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-lg p-4">
             <div class="text-2xl mb-2">🤖</div>
             <div class="text-sm font-semibold text-white mb-1">多平台账号管理</div>
@@ -52,29 +52,47 @@
       </div>
 
       <!-- Codex CLI -->
-      <div id="sec-codex" class="card p-5">
+      <div id="sec-codex" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">🖥️</span> Codex CLI 接入
         </h2>
-        <p class="text-sm text-gray-400 mb-5">将 EasyLLM 作为 Codex CLI 的代理，实现多账号轮询、请求日志记录。</p>
+        <p class="text-sm text-gray-400 mb-5">将 EasyLLM 作为 Codex CLI 的代理，实现多账号轮询、请求日志记录和本机配置注入。</p>
 
         <!-- Method 1 -->
         <div class="mb-5 p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg">
           <div class="flex items-center gap-2 mb-2">
             <span class="px-2 py-0.5 bg-blue-500/20 text-blue-400 text-xs font-semibold rounded">推荐</span>
-            <h3 class="text-sm font-semibold text-white">方式一：OAuth 账号</h3>
+            <h3 class="text-sm font-semibold text-white">方式一：本地 API 服务</h3>
           </div>
-          <p class="text-xs text-gray-400 mb-3">在 OpenAI / Codex 页面添加 OAuth 账号后，点击"切换"按钮即可自动写入配置文件。</p>
+          <p class="text-xs text-gray-400 mb-3">在 OpenAI / Codex 页面导入 OAuth 账号后，打开"服务配置"，点击"启动并注入 Codex"，EasyLLM 会写入本机 Codex 配置并使用账号集合调度请求。</p>
           <div class="doc-code">
             <div class="doc-code-header">自动配置的 ~/.codex/config.toml</div>
-            <pre>chatgpt_base_url = "http://localhost:{{ port }}"</pre>
+            <pre>model_provider = "easyllm"
+model = "gpt-5-codex"
+
+[model_providers.easyllm]
+name = "EasyLLM API Service"
+base_url = "http://localhost:{{ port }}/v1"
+wire_api = "responses"
+requires_openai_auth = true</pre>
             <button @click="copyCurl('codex-oauth')" class="doc-code-copy">复制</button>
           </div>
         </div>
 
         <!-- Method 2 -->
         <div class="mb-5">
-          <h3 class="text-sm font-semibold text-white mb-2">方式二：API Key 账号</h3>
+          <h3 class="text-sm font-semibold text-white mb-2">方式二：OAuth 单账号切换</h3>
+          <p class="text-xs text-gray-400 mb-3">在 OpenAI / Codex 页面添加 OAuth 账号后，点击账号卡片里的"切换"按钮即可写入 <code class="code">~/.codex/auth.json</code>。</p>
+          <div class="doc-code">
+            <div class="doc-code-header">自动配置的 ~/.codex/config.toml</div>
+            <pre>chatgpt_base_url = "http://localhost:{{ port }}"</pre>
+            <button @click="copyCurl('codex-pool')" class="doc-code-copy">复制</button>
+          </div>
+        </div>
+
+        <!-- Method 3 -->
+        <div class="mb-5">
+          <h3 class="text-sm font-semibold text-white mb-2">方式三：API Key 账号</h3>
           <p class="text-xs text-gray-400 mb-3">在 OpenAI / Codex 页面的"API 配置"标签添加第三方 Provider（如 OpenRouter、DeepSeek 等）。</p>
           <div class="doc-code">
             <div class="doc-code-header">示例：配置 OpenRouter</div>
@@ -89,10 +107,10 @@ wire_api = "chat"</pre>
           </div>
         </div>
 
-        <!-- Method 3 -->
+        <!-- Method 4 -->
         <div>
-          <h3 class="text-sm font-semibold text-white mb-2">方式三：代理池模式</h3>
-          <p class="text-xs text-gray-400 mb-3">启用多个 OAuth 账号的"代理开关"，请求将自动轮询池中账号。</p>
+          <h3 class="text-sm font-semibold text-white mb-2">方式四：代理池模式</h3>
+          <p class="text-xs text-gray-400 mb-3">启用多个 OAuth 账号的"代理开关"，请求将按配置策略调度到账号池。</p>
           <div class="doc-code">
             <div class="doc-code-header">~/.codex/config.toml</div>
             <pre>chatgpt_base_url = "http://localhost:{{ port }}"</pre>
@@ -102,7 +120,7 @@ wire_api = "chat"</pre>
       </div>
 
       <!-- cURL -->
-      <div id="sec-curl" class="card p-5">
+      <div id="sec-curl" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">📡</span> cURL 调用示例
         </h2>
@@ -147,7 +165,7 @@ wire_api = "chat"</pre>
       </div>
 
       <!-- Python -->
-      <div id="sec-python" class="card p-5">
+      <div id="sec-python" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">🐍</span> Python 调用
         </h2>
@@ -173,13 +191,13 @@ print(response.output_text)</pre>
       </div>
 
       <!-- Quota -->
-      <div id="sec-quota" class="card p-5">
+      <div id="sec-quota" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">📊</span> 配额查询
         </h2>
         <p class="text-sm text-gray-400 mb-4">查看 5 小时和 7 天配额使用情况（支持图表与趋势分析）。</p>
 
-        <div class="grid md:grid-cols-2 gap-4 mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">
             <div class="text-sm font-semibold text-white mb-2">⏱️ 5 小时配额</div>
             <div class="text-xs text-gray-400">短期会话限制，快速重置</div>
@@ -195,11 +213,11 @@ print(response.output_text)</pre>
       </div>
 
       <!-- Import -->
-      <div id="sec-import" class="card p-5">
+      <div id="sec-import" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">📦</span> 批量导入
         </h2>
-        <p class="text-sm text-gray-400 mb-4">通过 refresh_token 批量导入 OpenAI OAuth 账号。</p>
+        <p class="text-sm text-gray-400 mb-4">支持 token 文件、扫描目录、refresh_token、Sub2API、cockpit-tools 导出文件，以及 EasyLLM 备份文件。</p>
 
         <div class="space-y-4">
           <div>
@@ -229,11 +247,29 @@ print(response.output_text)</pre>
               <button @click="copyCurl('openai-scan')" class="doc-code-copy">复制</button>
             </div>
           </div>
+
+          <div>
+            <h3 class="text-sm font-semibold text-white mb-2">备份恢复</h3>
+            <p class="text-xs text-gray-400 mb-2">通过"一键导出所有最新数据"生成的备份可在"批量导入 → 从备份导入"恢复账号；如果备份包含本地 API 服务配置，也会一并恢复账号集合、端口和调度策略。</p>
+            <div class="doc-code">
+              <div class="doc-code-header">备份文件结构</div>
+              <pre>{
+  "oauth_accounts": [],
+  "api_accounts": [],
+  "local_access": {
+    "enabled": true,
+    "port": 8022,
+    "routing_strategy": "auto",
+    "account_ids": []
+  }
+}</pre>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Auth -->
-      <div id="sec-auth" class="card p-5">
+      <div id="sec-auth" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">🔒</span> 代理池鉴权
         </h2>
@@ -256,14 +292,20 @@ print(response.output_text)</pre>
 
         <div class="doc-code">
           <div class="doc-code-header">支持的负载均衡策略</div>
-          <pre>round_robin  — 轮询（默认），均匀分配请求到各账号
-random       — 随机选择一个账号
-least_used   — 选择请求次数最少的账号</pre>
+          <pre>auto               — 综合订阅计划和剩余额度选择
+quota_high_first   — 优先使用剩余额度高的账号
+quota_low_first    — 优先消耗剩余额度低的账号
+plan_high_first    — 优先使用高订阅账号
+plan_low_first     — 优先使用低订阅账号
+expiry_soon_first  — 优先使用更早到期的账号
+round_robin        — 轮询
+random             — 随机
+least_used         — 选择请求次数最少的账号</pre>
         </div>
       </div>
 
       <!-- Docker -->
-      <div id="sec-docker" class="card p-5">
+      <div id="sec-docker" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">🐳</span> Docker 部署
         </h2>
@@ -292,7 +334,7 @@ least_used   — 选择请求次数最少的账号</pre>
       </div>
 
       <!-- FAQ -->
-      <div id="sec-faq" class="card p-5">
+      <div id="sec-faq" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">❓</span> 常见问题
         </h2>
@@ -348,7 +390,14 @@ const faqs = [
 ]
 
 const curlSnippets = {
-  'codex-oauth': `chatgpt_base_url = "http://localhost:PORT"`,
+  'codex-oauth': `model_provider = "easyllm"
+model = "gpt-5-codex"
+
+[model_providers.easyllm]
+name = "EasyLLM API Service"
+base_url = "http://localhost:PORT/v1"
+wire_api = "responses"
+requires_openai_auth = true`,
   openrouter: `model_provider = "openrouter"
 model = "deepseek/deepseek-chat"
 
@@ -416,20 +465,44 @@ function scrollTo(id) {
 </script>
 
 <style scoped>
+.docs-page {
+  min-width: 0;
+}
+.docs-card,
+.doc-section {
+  min-width: 0;
+}
+.doc-section {
+  scroll-margin-top: 24px;
+}
+.docs-nav-grid {
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
 .code {
   @apply bg-gray-800 text-blue-400 px-1.5 py-0.5 rounded text-xs font-mono;
 }
 .doc-code {
-  @apply bg-gray-950 border border-gray-800 rounded-lg overflow-hidden relative;
+  @apply bg-gray-950 border border-gray-800 rounded-lg overflow-hidden relative max-w-full;
+  min-width: 0;
 }
 .doc-code-header {
-  @apply bg-gray-900 px-3 py-1.5 text-xs text-gray-500 border-b border-gray-800 font-mono;
+  @apply bg-gray-900 pl-3 pr-16 py-1.5 text-xs text-gray-500 border-b border-gray-800 font-mono truncate;
 }
 .doc-code pre {
   @apply px-4 py-3 text-xs text-gray-300 font-mono overflow-x-auto whitespace-pre leading-relaxed;
+  max-width: 100%;
+  min-width: 0;
 }
 .doc-code-copy {
   @apply absolute top-1.5 right-2 text-xs text-gray-500 hover:text-white bg-gray-800 hover:bg-gray-700
          px-2 py-0.5 rounded transition-colors;
+}
+@media (max-width: 640px) {
+  .docs-nav-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .doc-code pre {
+    @apply px-3 text-[11px];
+  }
 }
 </style>

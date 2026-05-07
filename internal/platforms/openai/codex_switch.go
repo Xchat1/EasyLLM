@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+const (
+	codexAPIServiceProviderID      = "easyllm"
+	codexAPIServiceProviderName    = "EasyLLM API Service"
+	codexAPIServiceDefaultModel    = "gpt-5-codex"
+	codexAPIServiceDefaultWireAPI  = "responses"
+	codexAPIServiceRequiresAuthKey = "requires_openai_auth"
+)
+
 // SwitchCodexOAuthAccount writes OAuth tokens to ~/.codex/auth.json
 // and cleans up API-related fields from ~/.codex/config.toml
 func SwitchCodexOAuthAccount(accessToken, refreshToken, idToken string, accountID *string) error {
@@ -103,6 +111,7 @@ func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI
 	configLines = append(configLines, fmt.Sprintf(`name = "%s"`, modelProvider))
 	configLines = append(configLines, fmt.Sprintf(`base_url = "%s"`, baseURL))
 	configLines = append(configLines, fmt.Sprintf(`wire_api = "%s"`, wireAPIVal))
+	configLines = append(configLines, fmt.Sprintf(`%s = true`, codexAPIServiceRequiresAuthKey))
 
 	configContent := strings.Join(configLines, "\n") + "\n"
 
@@ -110,6 +119,84 @@ func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI
 		return fmt.Errorf("failed to write config.toml: %w", err)
 	}
 
+	return nil
+}
+
+// SwitchCodexAPIService writes the local EasyLLM API service into Codex CLI.
+// Codex sees a custom OpenAI-compatible provider, while requests are handled
+// by EasyLLM's local proxy pool.
+func SwitchCodexAPIService(baseURL, apiKey string) error {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	apiKey = strings.TrimSpace(apiKey)
+	if baseURL == "" {
+		return fmt.Errorf("baseURL is required")
+	}
+	if apiKey == "" {
+		return fmt.Errorf("apiKey is required")
+	}
+
+	codexDir, err := getCodexDir()
+	if err != nil {
+		return err
+	}
+
+	authFile := filepath.Join(codexDir, "auth.json")
+	configFile := filepath.Join(codexDir, "config.toml")
+
+	authData := map[string]interface{}{}
+	if data, err := os.ReadFile(authFile); err == nil {
+		_ = json.Unmarshal(data, &authData)
+	}
+	authData["OPENAI_API_KEY"] = apiKey
+	delete(authData, "tokens")
+
+	authJSON, err := json.MarshalIndent(authData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal auth.json: %w", err)
+	}
+	if err := os.WriteFile(authFile, authJSON, 0600); err != nil {
+		return fmt.Errorf("failed to write auth.json: %w", err)
+	}
+
+	configContent := buildCodexAPIServiceConfig(configFile, baseURL)
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		return fmt.Errorf("failed to write config.toml: %w", err)
+	}
+	return nil
+}
+
+// RemoveCodexAPIService removes the EasyLLM managed provider from Codex CLI config.
+func RemoveCodexAPIService(apiKey string) error {
+	codexDir, err := getCodexDir()
+	if err != nil {
+		return err
+	}
+
+	authFile := filepath.Join(codexDir, "auth.json")
+	configFile := filepath.Join(codexDir, "config.toml")
+
+	authData := map[string]interface{}{}
+	if data, err := os.ReadFile(authFile); err == nil {
+		_ = json.Unmarshal(data, &authData)
+		currentKey, _ := authData["OPENAI_API_KEY"].(string)
+		if currentKey == "" || currentKey == strings.TrimSpace(apiKey) || strings.HasPrefix(currentKey, "easyllm_codex_") {
+			delete(authData, "OPENAI_API_KEY")
+			authJSON, err := json.MarshalIndent(authData, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to marshal auth.json: %w", err)
+			}
+			if err := os.WriteFile(authFile, authJSON, 0600); err != nil {
+				return fmt.Errorf("failed to write auth.json: %w", err)
+			}
+		}
+	}
+
+	if data, err := os.ReadFile(configFile); err == nil {
+		configContent := stripCodexAPIServiceManagedConfig(string(data), codexAPIServiceProviderID)
+		if err := os.WriteFile(configFile, []byte(strings.TrimLeft(configContent, "\n")), 0644); err != nil {
+			return fmt.Errorf("failed to write config.toml: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -146,6 +233,88 @@ func getCodexDir() (string, error) {
 		return "", fmt.Errorf("failed to create .codex directory: %w", err)
 	}
 	return codexDir, nil
+}
+
+func buildCodexAPIServiceConfig(configFile, baseURL string) string {
+	data, _ := os.ReadFile(configFile)
+	existing := stripCodexAPIServiceManagedConfig(string(data), codexAPIServiceProviderID)
+	serviceBlock := strings.Join([]string{
+		fmt.Sprintf("model_provider = %s", tomlString(codexAPIServiceProviderID)),
+		fmt.Sprintf("model = %s", tomlString(codexAPIServiceDefaultModel)),
+		"",
+		fmt.Sprintf("[model_providers.%s]", codexAPIServiceProviderID),
+		fmt.Sprintf("name = %s", tomlString(codexAPIServiceProviderName)),
+		fmt.Sprintf("base_url = %s", tomlString(baseURL)),
+		fmt.Sprintf("wire_api = %s", tomlString(codexAPIServiceDefaultWireAPI)),
+		fmt.Sprintf("%s = true", codexAPIServiceRequiresAuthKey),
+	}, "\n") + "\n"
+
+	existing = strings.TrimLeft(existing, "\n")
+	if strings.TrimSpace(existing) == "" {
+		return serviceBlock
+	}
+	return serviceBlock + "\n" + existing
+}
+
+func stripCodexAPIServiceManagedConfig(content, providerID string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	filtered := make([]string, 0, len(lines))
+	inSection := false
+	skipProviderSection := false
+	targetSection := "model_providers." + providerID
+	topLevelKeys := map[string]bool{
+		"model_provider":         true,
+		"model":                  true,
+		"model_reasoning_effort": true,
+		"openai_base_url":        true,
+		"chatgpt_base_url":       true,
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			sectionName := strings.Trim(trimmed, "[]")
+			inSection = true
+			skipProviderSection = sectionName == targetSection
+			if skipProviderSection {
+				continue
+			}
+		}
+		if skipProviderSection {
+			continue
+		}
+		if !inSection {
+			key := topLevelKey(trimmed)
+			if topLevelKeys[key] {
+				continue
+			}
+		}
+		filtered = append(filtered, line)
+	}
+
+	return strings.TrimRight(strings.Join(filtered, "\n"), "\n") + "\n"
+}
+
+func topLevelKey(line string) string {
+	if line == "" || strings.HasPrefix(line, "#") {
+		return ""
+	}
+	idx := strings.Index(line, "=")
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(line[:idx])
+}
+
+func tomlString(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
 }
 
 // injectChatGPTBaseURL ensures chatgpt_base_url is set in config.toml so the

@@ -8,7 +8,7 @@
             <span>EasyLLM</span>
           </div>
           <div>
-            <h1 class="text-3xl font-semibold text-white">多平台驾驶舱总览</h1>
+            <h1 class="text-3xl font-semibold text-white">多平台总览</h1>
             <p class="mt-2 text-sm leading-6 text-gray-300">
               一站式总览，集中管理多平台账号、运行实例和自动化任务状态，提供全局视角。
             </p>
@@ -74,7 +74,7 @@
                   </div>
                 </div>
                 <span class="badge" :class="platform.managementMode === 'legacy' ? 'badge-yellow' : 'badge-blue'">
-                  {{ platform.managementMode === 'legacy' ? 'legacy' : 'cockpit' }}
+                  {{ platform.managementMode === 'legacy' ? 'legacy' : '通用' }}
                 </span>
               </div>
             </div>
