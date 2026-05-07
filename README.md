@@ -4,6 +4,10 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-EasyLLM-blue?logo=github)](https://github.com/libaxuan/EasyLLM)
 
+## 界面预览
+
+![EasyLLM 总览](./总览.png)
+
 ## 功能特性
 
 **多平台账号管理**
@@ -141,6 +145,8 @@ chatgpt_base_url = "http://localhost:8022"
 ```
 
 Codex CLI 的所有请求将自动通过 EasyLLM 轮询池中的账号。
+
+![Codex CLI 接入效果](./codex.png)
 
 ## API 参考
 
