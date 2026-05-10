@@ -73,7 +73,7 @@
                 @click="refreshAllTokens"
                 :disabled="refreshingAllTokens || oauthAccounts.length === 0"
                 class="toolbar-btn toolbar-btn-neutral"
-                title="刷新全部 OAuth 账号的 Token"
+                title="刷新全部 OAuth 账号的 Token，全部完成并落库后自动导出最新 JSON"
               >
                 <svg class="w-3.5 h-3.5" :class="refreshingAllTokens ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
@@ -1940,7 +1940,7 @@ async function refreshAllTokens() {
     showToast('没有可刷新的 OAuth 账号', 'error')
     return
   }
-  if (!confirm('刷新后 RT 会变化，请保存最新的账号文件。是否同意继续刷新全部 Token？')) {
+  if (!confirm('刷新全部 Token 会轮换 RT。确认后会先等待全部账号刷新完成并写入本地库，然后自动下载最新账号 JSON。是否继续？')) {
     return
   }
   refreshingAllTokens.value = true
@@ -1953,9 +1953,13 @@ async function refreshAllTokens() {
     if (success > 0) parts.push(`成功 ${success}`)
     if (skipped > 0) parts.push(`跳过 ${skipped}`)
     if (failed > 0) parts.push(`失败 ${failed}`)
-    showToast(`全部刷新完成：${parts.join('，') || '无可用账号'}`, failed > 0 && success === 0 ? 'error' : 'success')
     await loadAccounts()
-    await exportAccounts()
+    if (success > 0) {
+      await exportAccounts({ showSuccessToast: false, throwOnError: true })
+      showToast(`全部刷新完成并已导出最新 JSON：${parts.join('，')}`, failed > 0 ? 'error' : 'success')
+    } else {
+      showToast(`全部刷新完成：${parts.join('，') || '无可用账号'}，没有成功刷新账号，未自动下载 JSON`, 'error')
+    }
   } catch (e) {
     showToast('刷新全部失败: ' + e.message, 'error')
   } finally {
@@ -1967,9 +1971,9 @@ async function refreshToken(account) {
   refreshingId.value = account.id
   try {
     await api.post(`/openai/accounts/${account.id}/refresh-token`)
-    showToast(`${accountDisplayLabel(account)} token 刷新成功`, 'success')
     await loadAccounts()
-    await exportAccounts()
+    await exportAccounts({ showSuccessToast: false, throwOnError: true })
+    showToast(`${accountDisplayLabel(account)} token 刷新成功，已导出最新 JSON`, 'success')
   } catch (e) {
     showToast('刷新失败: ' + e.message, 'error')
   } finally {
@@ -2773,7 +2777,9 @@ async function openServiceConfig() {
   await Promise.all([loadServiceConfig(), loadLocalAccess()])
 }
 
-async function exportAccounts() {
+async function exportAccounts(options = {}) {
+  const showSuccessToast = options?.showSuccessToast !== false
+  const throwOnError = options?.throwOnError === true
   exportingAccounts.value = true
   try {
     const payload = await openaiAPI.exportJSON()
@@ -2784,9 +2790,14 @@ async function exportAccounts() {
     a.download = `easyllm-accounts-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     URL.revokeObjectURL(url)
-    showToast(`已导出 ${payload.oauth_accounts?.length ?? 0} 个 OAuth + ${payload.api_accounts?.length ?? 0} 个 API 账号（基于后端最新落库数据）`, 'success')
+    if (showSuccessToast) {
+      showToast(`已导出 ${payload.oauth_accounts?.length ?? 0} 个 OAuth + ${payload.api_accounts?.length ?? 0} 个 API 账号（基于后端最新落库数据）`, 'success')
+    }
+    return payload
   } catch (e) {
     showToast('导出失败: ' + e.message, 'error')
+    if (throwOnError) throw e
+    return null
   } finally {
     exportingAccounts.value = false
   }
