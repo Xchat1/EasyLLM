@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "normalize:structure": "node scripts/normalize-structure.mjs",
+    "audit:theme": "node scripts/audit-theme.mjs",
+    "build": "npm run normalize:structure && npm run audit:theme && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

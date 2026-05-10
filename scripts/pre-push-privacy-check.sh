@@ -28,7 +28,15 @@ is_blocked_path() {
   fi
 
   case "$path" in
-    .env|.env.*|*/.env|*/.env.*|cred.json|*/cred.json|big_token.json|*/big_token.json|auth/*.json|*/auth/*.json|*.pem|*.p12|*.pfx|id_rsa|id_dsa|id_ecdsa|id_ed25519)
+    .env|.env.*|*/.env|*/.env.*|\
+    cred.json|*/cred.json|big_token.json|*/big_token.json|\
+    auth/*.json|*/auth/*.json|\
+    data/*|*/data/*|logs/*|*/logs/*|\
+    *.log|*.db|*.db-*|*.sqlite|*.sqlite-*|*.sqlite3|*.sqlite3-*|\
+    build/*|*/build/*|web/dist/*|*/web/dist/*|node_modules/*|*/node_modules/*|\
+    easyllm|easyllm_new|*.app|*.app/*|\
+    .codex_tmp/*|*/.codex_tmp/*|\
+    *.pem|*.key|*.p12|*.pfx|id_rsa|id_dsa|id_ecdsa|id_ed25519)
       return 0
       ;;
     *)
@@ -62,29 +70,38 @@ added_lines_for_file() {
 }
 
 match_secret_line() {
-  local lines="$1"
+	local lines="$1"
+	local line
 
-  if printf '%s\n' "$lines" | grep -Eiq 'BEGIN (RSA|DSA|EC|OPENSSH|PGP|PRIVATE) PRIVATE KEY'; then
-    return 0
-  fi
+	while IFS= read -r line; do
+		[ -z "$line" ] && continue
 
-  if printf '%s\n' "$lines" | grep -Eiq '(^|[^[:alnum:]_])(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,})([^[:alnum:]_]|$)'; then
-    return 0
-  fi
+		if printf '%s\n' "$line" | grep -Eiq 'BEGIN (RSA|DSA|EC|OPENSSH|PGP|PRIVATE) PRIVATE KEY'; then
+			printf '%s\n' "$line"
+			return 0
+		fi
 
-  if printf '%s\n' "$lines" \
-    | grep -Eiq '("?(access_token|refresh_token|id_token|api_key|proxy_api_key|cookie_token|authorization|secret_key|client_secret|password)"?[[:space:]]*[:=][[:space:]]*"?[^"[:space:]]{16,})' \
-    && ! printf '%s\n' "$lines" | grep -Eiq '(YOUR_|your_|example|sample|placeholder|dummy|changeme|<token>|<secret>|token_here|api_key_here)'; then
-    return 0
-  fi
+		if printf '%s\n' "$line" | grep -Eiq '(^|[^[:alnum:]_])(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,})([^[:alnum:]_]|$)'; then
+			printf '%s\n' "$line"
+			return 0
+		fi
 
-  if printf '%s\n' "$lines" \
-    | grep -Eiq '(^|\+)[[:space:]]*(OPENAI_API_KEY|API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|ID_TOKEN|BEARER_TOKEN|COOKIE_TOKEN|PROXY_API_KEY|SECRET_KEY|CLIENT_SECRET|PASSWORD)[[:space:]]*=[[:space:]]*[^[:space:]#]{12,}' \
-    && ! printf '%s\n' "$lines" | grep -Eiq '(YOUR_|your_|example|sample|placeholder|dummy|changeme)'; then
-    return 0
-  fi
+		if printf '%s\n' "$line" | grep -Eiq '(YOUR_|your_|example|sample|placeholder|dummy|changeme|<token>|<secret>|token_here|api_key_here|_here|\.{3}|json:"|"at-[A-Za-z0-9_-]+"|"rt-[A-Za-z0-9_-]+")'; then
+			continue
+		fi
 
-  return 1
+		if printf '%s\n' "$line" | grep -Eiq '("?(access_token|refresh_token|id_token|api_key|proxy_api_key|cookie_token|authorization|secret_key|client_secret|password)"?[[:space:]]*[:=][[:space:]]*["'\''][^"'\''[:space:]]{16,})'; then
+			printf '%s\n' "$line"
+			return 0
+		fi
+
+		if printf '%s\n' "$line" | grep -Eiq '(^|\+)[[:space:]]*(OPENAI_API_KEY|API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|ID_TOKEN|BEARER_TOKEN|COOKIE_TOKEN|PROXY_API_KEY|SECRET_KEY|CLIENT_SECRET|PASSWORD)[[:space:]]*=[[:space:]]*[^[:space:]#]{12,}'; then
+			printf '%s\n' "$line"
+			return 0
+		fi
+	done <<< "$lines"
+
+	return 1
 }
 
 print_header=1
@@ -125,8 +142,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
       added_lines="$(added_lines_for_file "$commit" "$path")"
       [ -z "$added_lines" ] && continue
 
-      if match_secret_line "$added_lines"; then
-        preview="$(printf '%s\n' "$added_lines" | head -n 1)"
+      if preview="$(match_secret_line "$added_lines")"; then
         if [ "$print_header" -eq 1 ]; then
           echo "Push blocked: detected content that looks like a secret or credential."
           echo "Remote: ${remote_name} ${remote_url}"

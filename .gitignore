@@ -2,6 +2,8 @@
 easyllm
 easyllm_new
 *.exe
+build/
+*.app
 
 # Environment
 .env
@@ -13,11 +15,24 @@ easyllm_new
 # Data
 data/
 *.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
 
 # Auth tokens
 auth/*.json
 cred.json
 big_token.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
 
 # OS files
 .DS_Store
@@ -32,10 +47,14 @@ web/node_modules/
 web/dist/
 
 # Temp/backup files
+logs/
+*.log
 *.bak
 *.tmp
 *.tmp2
-easyllm.log
+*.swp
+*.swo
+.codex_tmp/
 *_new.vue
 OpenAI账号显示优化说明.md
 功能对齐报告.md

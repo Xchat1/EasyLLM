@@ -49,7 +49,7 @@ kill_port() {
   local port="$1"
   local pids
 
-  pids="$(lsof -ti ":${port}" 2>/dev/null || true)"
+  pids="$(lsof -nP -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
   if [[ -z "${pids}" ]]; then
     echo "✓ 端口 ${port} 空闲"
     return
@@ -59,7 +59,7 @@ kill_port() {
   kill ${pids} 2>/dev/null || true
   sleep 1
 
-  pids="$(lsof -ti ":${port}" 2>/dev/null || true)"
+  pids="$(lsof -nP -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
   if [[ -n "${pids}" ]]; then
     echo "⚠ 端口 ${port} 仍被占用，强制终止 PID: ${pids}"
     kill -9 ${pids} 2>/dev/null || true

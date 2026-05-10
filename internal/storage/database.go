@@ -57,18 +57,31 @@ func InitDB(cfg *config.Config) error {
 
 // AutoMigrate runs database migrations for all models
 func AutoMigrate() error {
-	return DB.AutoMigrate(
+	if err := DB.AutoMigrate(
 		&models.OpenAIAccount{},
 		&models.OpenAIAPIKey{},
 		&models.CodexAccount{},
-		&models.CodexLog{},
-		&models.CursorAccount{},
 		&models.AntigravityAccount{},
 		&models.PlatformAccount{},
 		&models.PlatformInstance{},
 		&models.WakeupTask{},
 		&models.AppSettings{},
-	)
+	); err != nil {
+		return err
+	}
+	return PurgeCodexLogs()
+}
+
+// PurgeCodexLogs removes the legacy per-request log table. EasyLLM keeps account
+// configuration and aggregate counters, but it must not retain API call logs.
+func PurgeCodexLogs() error {
+	if DB == nil {
+		return nil
+	}
+	if !DB.Migrator().HasTable(&models.CodexLog{}) {
+		return nil
+	}
+	return DB.Migrator().DropTable(&models.CodexLog{})
 }
 
 // GetDB returns the database instance

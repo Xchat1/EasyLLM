@@ -1,42 +1,45 @@
 <template>
   <div class="p-6 space-y-6">
     <!-- Header -->
-    <div class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-bold text-white">OpenAI / Codex 管理</h1>
-        <p class="text-gray-400 text-sm mt-1">管理 OpenAI OAuth 账号及 Codex API 配置</p>
+    <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+      <div class="flex min-w-0 items-center gap-3">
+        <PlatformIcon :platform="codexPlatform" size="lg" />
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold text-white">OpenAI / Codex 管理</h1>
+          <p class="text-gray-400 text-sm mt-1">管理 OpenAI OAuth 账号及 Codex API 配置</p>
+        </div>
       </div>
-      <div class="flex gap-2">
-        <button @click="showImportDialog = true" class="btn btn-secondary flex items-center gap-2">
+      <div class="stable-actions">
+        <button @click="showImportDialog = true" class="btn btn-secondary header-action-btn" title="批量导入账号">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
           </svg>
-          批量导入
+          导入
         </button>
-        <button @click="openOAuthDialog" class="btn btn-secondary flex items-center gap-2">
+        <button @click="openOAuthDialog" class="btn btn-secondary header-action-btn" title="OAuth 登录">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
           </svg>
-          OAuth 登录
+          OAuth
         </button>
-        <button @click="showAddAPIDialog = true" class="btn btn-primary flex items-center gap-2">
+        <button @click="showAddAPIDialog = true" class="btn btn-primary header-action-btn" title="添加 API 账号">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
           </svg>
-          添加 API 账号
+          API 账号
         </button>
-        <button @click="openServiceConfig" class="btn btn-secondary flex items-center gap-2" title="服务配置：代理池开关、对外API Key、调用统计">
+        <button @click="openServiceConfig" class="btn btn-secondary header-action-btn" title="服务配置：代理池开关、对外 API Key、账号集合">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
           </svg>
-          服务配置
+          配置
         </button>
       </div>
     </div>
 
     <!-- Tab bar -->
-    <div class="flex gap-1 bg-gray-800 rounded-lg p-1 w-fit">
+    <div class="stable-tabs">
       <button
         v-for="tab in tabs"
         :key="tab.id"
@@ -60,165 +63,149 @@
       </div>
       <template v-else>
         <!-- Quota refresh bar -->
-        <div class="flex items-center justify-between mb-3">
-          <div class="text-xs text-gray-500">
-            <span v-if="quotaLastFetched">配额更新于 {{ quotaLastFetched }}</span>
+        <div class="mb-3 space-y-2">
+          <div v-if="quotaLastFetched" class="text-xs text-gray-500">
+            配额更新于 {{ quotaLastFetched }}
           </div>
-          <div class="flex items-center gap-2 flex-wrap justify-end">
-            <button
-              @click="refreshAllTokens"
-              :disabled="refreshingAllTokens || oauthAccounts.length === 0"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-              title="刷新全部 OAuth 账号的 Token"
-            >
-              <svg class="w-3.5 h-3.5" :class="refreshingAllTokens ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-              </svg>
-              {{ refreshingAllTokens ? '正在刷新所有 Token...' : '刷新所有 Token' }}
-            </button>
-            <button
-              @click="fetchAllQuotas"
-              :disabled="fetchingQuotas || oauthAccounts.length === 0"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-              title="查询全部 OAuth 账号配额"
-            >
-              <svg class="w-3.5 h-3.5" :class="fetchingQuotas ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-              </svg>
-              {{ fetchingQuotas ? '正在查询所有配额...' : '查询所有配额' }}
-            </button>
-            <button
-              @click="exportAccounts"
-              :disabled="exportingAccounts"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700/20 hover:bg-emerald-700/30 border border-emerald-600/40 text-emerald-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-              title="导出全部账号的最新落库数据"
-            >
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-              </svg>
-              {{ exportingAccounts ? '正在导出所有最新数据...' : '一键导出所有最新数据' }}
-            </button>
-
-            <!-- Search + Quota result filter + bulk select -->
-            <input
-              v-model="searchQuery"
-              class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 w-40 transition-colors focus:outline-none focus:border-blue-500 placeholder-gray-600"
-              placeholder="搜索账号 / ID"
-              title="按账号标识或账号 ID 搜索"
-            />
-            <select
-              v-model="activeGroupFilter"
-              @change="persistActiveGroupFilter"
-              class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 transition-colors focus:outline-none focus:border-blue-500"
-              title="按账号分组过滤"
-            >
-              <option value="all">全部分组</option>
-              <option v-for="group in accountGroups" :key="group.id" :value="group.id">{{ group.name }}（{{ group.account_ids.length }}）</option>
-            </select>
-            <button
-              @click="showGroupManager = true"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors"
-              title="管理账号分组"
-            >
-              分组
-            </button>
-            <button
-              @click="openCustomSortDialog"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors"
-              title="调整自定义账号顺序"
-            >
-              自定义排序
-            </button>
-            <button
-              @click="toggleAccountLayout"
-              class="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors"
-              :class="accountLayout === 'dense' ? 'bg-blue-600/20 hover:bg-blue-600/30 border-blue-500/40 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
-              :title="accountLayout === 'dense' ? '当前为紧凑布局：点击切换标准布局' : '当前为标准布局：点击切换紧凑布局'"
-              aria-label="切换账号列表布局"
-            >
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z"/>
-              </svg>
-              {{ accountLayout === 'dense' ? '紧凑' : '标准' }}
-            </button>
-            <label class="flex items-center gap-1.5 px-2 py-1.5 text-xs text-gray-400">
-              <input v-model="groupByTag" @change="persistGroupByTag" type="checkbox" class="h-3.5 w-3.5 rounded border-gray-600 bg-gray-900 text-blue-500" />
-              标签分组
-            </label>
-            <button
-              @click="toggleAccountPrivacy"
-              class="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors"
-              :class="hideAccountEmails ? 'bg-sky-600/20 hover:bg-sky-600/30 border-sky-500/40 text-sky-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
-              :title="hideAccountEmails ? '隐私模式已开启：点击显示邮箱' : '隐私模式：点击隐藏账号邮箱'"
-              aria-label="切换账号邮箱隐私显示"
-            >
-              <svg v-if="hideAccountEmails" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
-              </svg>
-              <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-              </svg>
-              {{ hideAccountEmails ? '隐私已开' : '隐私' }}
-            </button>
-            <select
-              v-model="quotaFilter"
-              class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 transition-colors focus:outline-none focus:border-blue-500"
-              title="按上次配额查询结果过滤账号"
-            >
-              <option value="all">全部</option>
-              <option value="200">200（成功）</option>
-              <option value="401">401（失效/未授权）</option>
-              <option value="403">403（地区受限/禁止）</option>
-              <option value="429">429（限流）</option>
-            </select>
-            <select
-              :value="oauthSortBy"
-              @change="setOAuthSortBy($event.target.value)"
-              class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 transition-colors focus:outline-none focus:border-blue-500"
-              title="账号排序维度"
-            >
-              <option v-for="option in oauthSortOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
-            </select>
-            <button
-              @click="toggleOAuthSortDirection"
-              class="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors"
-              :title="oauthSortDirection === 'desc' ? '当前：降序，点击切换为升序' : '当前：升序，点击切换为降序'"
-              aria-label="切换 OAuth 账号排序方向"
-            >
-              {{ oauthSortDirection === 'desc' ? '↓' : '↑' }}
-            </button>
-
-            <button
-              v-if="filteredOAuthAccounts.length > 0"
-              @click="toggleSelectAllOAuth"
-              :disabled="bulkDeleting"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-              :title="allFilteredOAuthSelected ? `取消全选当前筛选结果（${filteredOAuthAccounts.length}）` : `全选当前筛选结果（${filteredOAuthAccounts.length}）`"
-            >
-              {{ allFilteredOAuthSelected ? '取消全选' : `全选(${filteredOAuthAccounts.length})` }}
-            </button>
-            <button
-              v-if="selectedOAuthIds.length > 0"
-              @click="clearOAuthSelection"
-              :disabled="bulkDeleting"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-              title="清空当前已选 OAuth 账号"
-            >
-              清空已选
-            </button>
-            <div v-if="filteredOAuthAccounts.length > 0" class="text-xs text-gray-400 px-1">
-              已选 {{ selectedOAuthIds.length }} 个
+          <div class="account-toolbar account-toolbar--oauth">
+            <div class="toolbar-section toolbar-section--actions">
+              <button
+                @click="refreshAllTokens"
+                :disabled="refreshingAllTokens || oauthAccounts.length === 0"
+                class="toolbar-btn toolbar-btn-neutral"
+                title="刷新全部 OAuth 账号的 Token"
+              >
+                <svg class="w-3.5 h-3.5" :class="refreshingAllTokens ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                {{ refreshingAllTokens ? '刷新中' : '刷新' }}
+              </button>
+              <button
+                @click="fetchAllQuotas"
+                :disabled="fetchingQuotas || oauthAccounts.length === 0"
+                class="toolbar-btn toolbar-btn-neutral"
+                title="查询全部 OAuth 账号配额"
+              >
+                <svg class="w-3.5 h-3.5" :class="fetchingQuotas ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                {{ fetchingQuotas ? '查询中' : '配额' }}
+              </button>
+              <button
+                @click="exportAccounts"
+                :disabled="exportingAccounts"
+                class="toolbar-btn toolbar-btn-success"
+                title="导出全部账号的最新落库数据"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                {{ exportingAccounts ? '导出中' : '导出' }}
+              </button>
             </div>
-            <button
-              v-if="selectedOAuthIds.length > 0"
-              @click="openBulkDeleteConfirm"
-              :disabled="bulkDeleting"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-600/40 text-red-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-              :title="`批量删除已选 OAuth 账号（${selectedOAuthIds.length}）`"
-            >
-              {{ bulkDeleting ? '删除中...' : `批量删除(${selectedOAuthIds.length})` }}
-            </button>
+
+            <div class="toolbar-section toolbar-section--search">
+              <input
+                v-model="searchQuery"
+                class="toolbar-input toolbar-search"
+                placeholder="搜索账号"
+                title="按账号标识或账号 ID 搜索"
+              />
+            </div>
+
+            <div class="toolbar-section toolbar-section--view">
+              <select
+                v-model="activeGroupFilter"
+                @change="persistActiveGroupFilter"
+                class="toolbar-select toolbar-select--group"
+                title="按账号分组过滤"
+              >
+                <option value="all">全部分组</option>
+                <option v-for="group in accountGroups" :key="group.id" :value="group.id">{{ group.name }}（{{ group.account_ids.length }}）</option>
+              </select>
+              <button
+                @click="showGroupManager = true"
+                class="toolbar-btn toolbar-btn-neutral"
+                title="管理账号分组"
+              >
+                分组
+              </button>
+              <button
+                @click="toggleAccountLayout"
+                class="toolbar-btn toolbar-btn--layout"
+                :class="accountLayout === 'dense' ? 'bg-blue-600/20 hover:bg-blue-600/30 border-blue-500/40 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
+                :title="accountLayout === 'dense' ? '当前为紧凑布局：点击切换标准布局' : '当前为标准布局：点击切换紧凑布局'"
+                aria-label="切换账号列表布局"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z"/>
+                </svg>
+                {{ accountLayout === 'dense' ? '紧凑' : '标准' }}
+              </button>
+              <button
+                @click="toggleAccountPrivacy"
+                class="toolbar-btn toolbar-btn--layout"
+                :class="hideAccountEmails ? 'bg-sky-600/20 hover:bg-sky-600/30 border-sky-500/40 text-sky-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
+                :title="hideAccountEmails ? '隐私模式已开启：点击显示邮箱' : '隐私模式：点击隐藏账号邮箱'"
+                aria-label="切换账号邮箱隐私显示"
+              >
+                <svg v-if="hideAccountEmails" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+                </svg>
+                <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                </svg>
+                {{ hideAccountEmails ? '隐私开' : '隐私' }}
+              </button>
+            </div>
+
+            <div class="toolbar-section toolbar-section--filter">
+              <select
+                v-model="quotaFilter"
+                class="toolbar-select toolbar-select--quota"
+                title="按上次配额查询结果过滤账号"
+              >
+                <option value="all">全部</option>
+                <option value="200">200（成功）</option>
+                <option value="401">401（失效/未授权）</option>
+                <option value="403">403（地区受限/禁止）</option>
+                <option value="429">429（限流）</option>
+              </select>
+            </div>
+
+            <div class="toolbar-section toolbar-section--selection">
+              <button
+                v-if="filteredOAuthAccounts.length > 0"
+                @click="toggleSelectAllOAuth"
+                :disabled="bulkDeleting"
+                class="toolbar-btn toolbar-btn-neutral toolbar-btn--select"
+                :title="allFilteredOAuthSelected ? `取消全选当前筛选结果（${filteredOAuthAccounts.length}）` : `全选当前筛选结果（${filteredOAuthAccounts.length}）`"
+              >
+                {{ allFilteredOAuthSelected ? '取消' : `全选 ${filteredOAuthAccounts.length}` }}
+              </button>
+              <button
+                v-if="selectedOAuthIds.length > 0"
+                @click="clearOAuthSelection"
+                :disabled="bulkDeleting"
+                class="toolbar-btn toolbar-btn-neutral"
+                title="清空当前已选 OAuth 账号"
+              >
+                清空
+              </button>
+              <div v-if="filteredOAuthAccounts.length > 0" class="toolbar-status">
+                已选 {{ selectedOAuthIds.length }}
+              </div>
+              <button
+                v-if="selectedOAuthIds.length > 0"
+                @click="openBulkDeleteConfirm"
+                :disabled="bulkDeleting"
+                class="toolbar-btn toolbar-btn-danger"
+                :title="`批量删除已选 OAuth 账号（${selectedOAuthIds.length}）`"
+              >
+                {{ bulkDeleting ? '删除中' : `删除 ${selectedOAuthIds.length}` }}
+              </button>
+            </div>
           </div>
         </div>
         <div class="grid" :class="accountGridClass">
@@ -370,7 +357,7 @@
 
               <!-- No quota data yet -->
               <div v-if="!hasQuotaData(account) && !account.quota_is_forbidden" class="text-[9px] text-gray-600">
-                <span v-if="jwtPlanType(account) === 'free'">免费账号·配额头部不开放</span>
+                <span v-if="accountPlanType(account) === 'free'">免费账号·配额头部不开放</span>
                 <span v-else>点击卡片「配额」或上方「查询配额」获取</span>
               </div>
             </div>
@@ -383,20 +370,20 @@
               <span v-if="!planBadge(account) && !hasQuotaData(account) && !account.quota_is_forbidden" class="text-gray-600 truncate">未查配额</span>
             </div>
             <!-- Row 3: all action buttons in one row -->
-            <div class="flex items-center gap-1.5">
+            <div v-if="accountLayout !== 'dense'" class="card-actions">
               <button
                 @click="toggleProxy(account)" :disabled="togglingProxyId === account.id"
-                class="card-btn" :class="account.proxy_enabled ? 'card-btn--on' : 'card-btn--off'"
+                class="card-btn card-btn--text" :class="account.proxy_enabled ? 'card-btn--on' : 'card-btn--off'"
                 :title="account.proxy_enabled ? '移出代理池' : '加入代理池'"
               >{{ togglingProxyId === account.id ? '...' : account.proxy_enabled ? '代理' : '代理' }}</button>
               <button
                 @click="switchAccount(account)" :disabled="switchingId === account.id"
-                class="card-btn card-btn--primary"
+                class="card-btn card-btn--primary card-btn--text"
                 title="切换到该账号"
               >{{ switchingId === account.id ? '...' : '切换' }}</button>
               <button
                 @click="refreshToken(account)" :disabled="refreshingId === account.id"
-                class="card-btn card-btn--secondary" title="刷新 Token"
+                class="card-btn card-btn--secondary card-btn--icon" title="刷新 Token"
               >
                 <svg class="w-3 h-3" :class="refreshingId === account.id ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
@@ -405,10 +392,10 @@
               <button
                 @click="fetchQuotaForAccount(account)"
                 :disabled="fetchingQuotas || isFetchingQuota(account.id)"
-                class="card-btn card-btn--secondary"
+                class="card-btn card-btn--secondary card-btn--text"
                 title="查询配额"
               >{{ isFetchingQuota(account.id) ? '...' : '配额' }}</button>
-              <button @click="deleteAccount(account.id)" class="card-btn card-btn--danger" title="删除">
+              <button @click="deleteAccount(account.id)" class="card-btn card-btn--danger card-btn--icon" title="删除">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                 </svg>
@@ -432,71 +419,61 @@
         <p class="text-sm">点击"添加 API 账号"配置自定义 API 端点</p>
       </div>
       <template v-else>
-        <div class="flex items-center justify-end gap-2 flex-wrap mb-3">
-          <input
-            v-model="apiSearchQuery"
-            class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 w-44 transition-colors focus:outline-none focus:border-blue-500 placeholder-gray-600"
-            placeholder="搜索 API 账号"
-            title="按 provider、model、base URL 搜索 API 账号"
-          />
-          <select
-            :value="apiSortBy"
-            @change="setAPISortBy($event.target.value)"
-            class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs px-2.5 py-1.5 transition-colors focus:outline-none focus:border-blue-500"
-            title="API 账号排序维度"
-          >
-            <option v-for="option in apiSortOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
-          </select>
-          <button
-            @click="toggleAPISortDirection"
-            class="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors"
-            :title="apiSortDirection === 'desc' ? '当前：降序，点击切换为升序' : '当前：升序，点击切换为降序'"
-            aria-label="切换 API 账号排序方向"
-          >
-            {{ apiSortDirection === 'desc' ? '↓' : '↑' }}
-          </button>
-          <button
-            @click="toggleAccountLayout"
-            class="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors"
-            :class="accountLayout === 'dense' ? 'bg-blue-600/20 hover:bg-blue-600/30 border-blue-500/40 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
-            :title="accountLayout === 'dense' ? '当前为紧凑布局：点击切换标准布局' : '当前为标准布局：点击切换紧凑布局'"
-            aria-label="切换账号列表布局"
-          >
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z"/>
-            </svg>
-            {{ accountLayout === 'dense' ? '紧凑' : '标准' }}
-          </button>
-          <button
-            v-if="filteredAPIAccounts.length > 0"
-            @click="toggleSelectAllAPI"
-            :disabled="bulkDeleting"
-            class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-            :title="allAPISelected ? `取消全选当前 API 筛选结果（${filteredAPIAccounts.length}）` : `全选当前 API 筛选结果（${filteredAPIAccounts.length}）`"
-          >
-            {{ allAPISelected ? '取消全选' : `全选(${filteredAPIAccounts.length})` }}
-          </button>
-          <button
-            v-if="selectedAPIIds.length > 0"
-            @click="clearAPISelection"
-            :disabled="bulkDeleting"
-            class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-            title="清空当前已选 API 账号"
-          >
-            清空已选
-          </button>
-          <div class="text-xs text-gray-400 px-1">
-            已选 {{ selectedAPIIds.length }} 个
+        <div class="account-toolbar account-toolbar--api mb-3">
+          <div class="toolbar-section toolbar-section--search">
+            <input
+              v-model="apiSearchQuery"
+              class="toolbar-input toolbar-search"
+              placeholder="搜索 API"
+              title="按 provider、model、base URL 搜索 API 账号"
+            />
           </div>
-          <button
-            v-if="selectedAPIIds.length > 0"
-            @click="openBulkDeleteConfirm"
-            :disabled="bulkDeleting"
-            class="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-600/40 text-red-300 rounded-lg text-xs transition-colors disabled:opacity-40"
-            :title="`批量删除已选 API 账号（${selectedAPIIds.length}）`"
-          >
-            {{ bulkDeleting ? '删除中...' : `批量删除(${selectedAPIIds.length})` }}
-          </button>
+          <div class="toolbar-section toolbar-section--view">
+            <button
+              @click="toggleAccountLayout"
+              class="toolbar-btn toolbar-btn--layout"
+              :class="accountLayout === 'dense' ? 'bg-blue-600/20 hover:bg-blue-600/30 border-blue-500/40 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
+              :title="accountLayout === 'dense' ? '当前为紧凑布局：点击切换标准布局' : '当前为标准布局：点击切换紧凑布局'"
+              aria-label="切换账号列表布局"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z"/>
+              </svg>
+              {{ accountLayout === 'dense' ? '紧凑' : '标准' }}
+            </button>
+          </div>
+          <div class="toolbar-section toolbar-section--selection">
+            <button
+              v-if="filteredAPIAccounts.length > 0"
+              @click="toggleSelectAllAPI"
+              :disabled="bulkDeleting"
+              class="toolbar-btn toolbar-btn-neutral toolbar-btn--select"
+              :title="allAPISelected ? `取消全选当前 API 筛选结果（${filteredAPIAccounts.length}）` : `全选当前 API 筛选结果（${filteredAPIAccounts.length}）`"
+            >
+              {{ allAPISelected ? '取消' : `全选 ${filteredAPIAccounts.length}` }}
+            </button>
+            <button
+              v-if="selectedAPIIds.length > 0"
+              @click="clearAPISelection"
+              :disabled="bulkDeleting"
+              class="toolbar-btn toolbar-btn-neutral"
+              title="清空当前已选 API 账号"
+            >
+              清空
+            </button>
+            <div class="toolbar-status">
+              已选 {{ selectedAPIIds.length }}
+            </div>
+            <button
+              v-if="selectedAPIIds.length > 0"
+              @click="openBulkDeleteConfirm"
+              :disabled="bulkDeleting"
+              class="toolbar-btn toolbar-btn-danger"
+              :title="`批量删除已选 API 账号（${selectedAPIIds.length}）`"
+            >
+              {{ bulkDeleting ? '删除中' : `删除 ${selectedAPIIds.length}` }}
+            </button>
+          </div>
         </div>
         <div class="grid" :class="accountGridClass">
           <div
@@ -525,16 +502,16 @@
               <span v-if="account.wire_api" class="shrink-0">{{ account.wire_api }}</span>
             </div>
             <!-- Row 3: action buttons -->
-            <div class="flex items-center gap-1.5">
-              <button @click="switchAPIAccount(account)" :disabled="switchingId === account.id" class="card-btn card-btn--primary flex-1" title="切换配置">
+            <div v-if="accountLayout !== 'dense'" class="card-actions">
+              <button @click="switchAPIAccount(account)" :disabled="switchingId === account.id" class="card-btn card-btn--primary card-btn--text flex-1" title="切换配置">
                 {{ switchingId === account.id ? '...' : '切换' }}
               </button>
-              <button @click="editAPIAccount(account)" class="card-btn card-btn--secondary" title="编辑">
+              <button @click="editAPIAccount(account)" class="card-btn card-btn--secondary card-btn--icon" title="编辑">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                 </svg>
               </button>
-              <button @click="deleteAccount(account.id)" class="card-btn card-btn--danger" title="删除">
+              <button @click="deleteAccount(account.id)" class="card-btn card-btn--danger card-btn--icon" title="删除">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                 </svg>
@@ -675,38 +652,6 @@
       </div>
     </div>
 
-    <!-- Custom Sort Dialog -->
-    <div v-if="showCustomSortDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="showCustomSortDialog = false">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl shadow-2xl">
-        <div class="flex items-center justify-between p-6 border-b border-gray-700">
-          <h2 class="text-lg font-semibold text-white">自定义账号排序</h2>
-          <button @click="showCustomSortDialog = false" class="text-gray-400 hover:text-white">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-        <div class="p-6 space-y-3">
-          <div class="flex justify-between text-xs text-gray-500">
-            <span>使用上下按钮调整顺序，账号列表选择“自定义顺序”后生效。</span>
-            <button @click="resetCustomSortOrder" class="text-gray-400 hover:text-white">重置</button>
-          </div>
-          <div class="space-y-2 max-h-96 overflow-y-auto">
-            <div v-for="(account, index) in customSortAccounts" :key="account.id" class="flex items-center gap-3 rounded-lg border border-gray-700 bg-gray-800/60 px-3 py-2">
-              <div class="w-8 text-xs text-gray-500">{{ index + 1 }}</div>
-              <div class="min-w-0 flex-1">
-                <div class="truncate text-sm text-white" :title="accountDisplayTitle(account)">{{ accountDisplayLabel(account) }}</div>
-                <div class="text-xs text-gray-500 truncate">{{ account.chatgpt_account_id || account.id }}</div>
-              </div>
-              <button @click="moveCustomSortAccount(account.id, -1)" :disabled="index === 0" class="btn btn-xs btn-secondary">上移</button>
-              <button @click="moveCustomSortAccount(account.id, 1)" :disabled="index === customSortAccounts.length - 1" class="btn btn-xs btn-secondary">下移</button>
-            </div>
-            <div v-if="customSortAccounts.length === 0" class="text-sm text-gray-500 text-center py-8">暂无 OAuth 账号</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- Batch Import Dialog -->
     <div v-if="showImportDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl shadow-2xl">
@@ -839,7 +784,14 @@
           <!-- Mode 5: Import from Sub2API JSON format -->
           <div v-if="importMode === 'sub2api'">
             <div class="bg-blue-900/20 border border-blue-700/40 rounded-lg p-3 text-xs text-blue-300 mb-3">
-              🚀 直接导入 Sub2API 格式的 JSON 文件（支持包含 accounts 数组的文件）
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  🚀 直接导入 Sub2API 格式的 JSON 文件（支持包含 accounts 数组的文件）
+                </div>
+                <button @click="downloadExample('sub2api')" class="shrink-0 px-2 py-1 bg-blue-800/60 hover:bg-blue-700/80 text-blue-200 rounded text-xs transition-colors whitespace-nowrap">
+                  下载示例
+                </button>
+              </div>
             </div>
             <div v-if="!importSub2APIFile">
               <input ref="importSub2APIFileInput" type="file" accept=".json" class="hidden" @change="handleSub2APIFileSelect"/>
@@ -872,7 +824,14 @@
           <!-- Mode 6: Import cockpit-tools accounts exported by another desktop manager -->
           <div v-if="importMode === 'cockpit-tools'">
             <div class="bg-cyan-900/20 border border-cyan-700/40 rounded-lg p-3 text-xs text-cyan-300 mb-3">
-              🧭 直接导入 cockpit-tools 导出的账号 JSON，支持账号数组和账户迁移包结构，无需调用 OpenAI API。
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  🧭 直接导入 cockpit-tools 导出的账号 JSON，支持账号数组和账户迁移包结构，无需调用 OpenAI API。
+                </div>
+                <button @click="downloadExample('cockpit-tools')" class="shrink-0 px-2 py-1 bg-cyan-800/60 hover:bg-cyan-700/80 text-cyan-200 rounded text-xs transition-colors whitespace-nowrap">
+                  下载示例
+                </button>
+              </div>
             </div>
             <div v-if="!importCockpitToolsFile">
               <input ref="importCockpitToolsFileInput" type="file" accept=".json" class="hidden" @change="handleCockpitToolsFileSelect"/>
@@ -905,7 +864,14 @@
           <!-- Mode 4: Re-import from exported backup JSON -->
           <div v-if="importMode === 'from-export'">
             <div class="bg-purple-900/20 border border-purple-700/40 rounded-lg p-3 text-xs text-purple-300 mb-3">
-              📦 直接导入由「服务配置 → 导出账号」生成的备份文件（无需任何 OpenAI API 调用，速度最快）
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  📦 直接导入由「服务配置 → 导出账号」生成的备份文件（无需任何 OpenAI API 调用，速度最快）
+                </div>
+                <button @click="downloadExample('from-export')" class="shrink-0 px-2 py-1 bg-purple-800/60 hover:bg-purple-700/80 text-purple-200 rounded text-xs transition-colors whitespace-nowrap">
+                  下载示例
+                </button>
+              </div>
             </div>
             <div v-if="!importBackupFile">
               <input ref="importBackupFileInput" type="file" accept=".json" class="hidden" @change="handleBackupFileSelect"/>
@@ -1142,8 +1108,8 @@
               <div class="text-xs text-gray-400 mt-1">转发请求数</div>
             </div>
             <div class="bg-gray-800 rounded-xl p-4 text-center">
-              <div class="text-2xl font-bold text-purple-400">{{ serviceConfig.total_logs }}</div>
-              <div class="text-xs text-gray-400 mt-1">历史日志数</div>
+              <div class="text-2xl font-bold text-purple-400">不保留</div>
+              <div class="text-xs text-gray-400 mt-1">调用日志</div>
             </div>
           </div>
 
@@ -1193,7 +1159,7 @@
               <div>
                 <div class="text-sm font-medium text-white">Codex 本地 API 服务</div>
                 <div class="text-xs text-gray-400 mt-0.5">
-                  管理注入到本机 Codex 的账号集合、端口、策略和调用统计。
+                  管理注入到本机 Codex 的账号集合、端口和调度策略。
                 </div>
               </div>
               <div class="flex items-center gap-2 shrink-0">
@@ -1234,7 +1200,7 @@
                   <input v-model="localAccessPortInput" class="input text-xs" placeholder="端口，例如 8022" />
                   <button @click="updateLocalAccessPort" :disabled="localAccessBusy" class="btn btn-sm btn-secondary">保存端口</button>
                 </div>
-                <div class="grid sm:grid-cols-[1fr_auto_auto] gap-2">
+                <div class="grid sm:grid-cols-[1fr_auto] gap-2">
                   <select
                     :value="localAccess.collection?.routing_strategy || serviceConfig.strategy"
                     @change="updateLocalAccessRouting($event.target.value)"
@@ -1243,7 +1209,6 @@
                     <option v-for="s in strategies" :key="s.id" :value="s.id">{{ s.label }}</option>
                   </select>
                   <button @click="rotateLocalAccessKey" :disabled="localAccessBusy" class="btn btn-sm btn-secondary">重置 Key</button>
-                  <button @click="clearLocalAccessStats" :disabled="localAccessBusy" class="btn btn-sm btn-secondary">清空统计</button>
                 </div>
                 <label class="flex items-center gap-2 text-xs text-gray-300">
                   <input v-model="localAccessRestrictFree" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
@@ -1252,9 +1217,15 @@
               </div>
 
               <div class="space-y-2">
-                <div class="flex items-center justify-between">
+                <div class="flex flex-wrap items-center justify-between gap-2">
                   <div class="text-xs font-medium text-gray-300">API 服务账号集合</div>
-                  <button @click="saveLocalAccessAccounts" :disabled="localAccessBusy" class="btn btn-xs btn-primary">保存集合</button>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-[11px] text-gray-500">{{ localAccessSelectedCount }}/{{ oauthAccounts.length }}</span>
+                    <button @click="selectAllLocalAccessAccounts" :disabled="localAccessBusy || oauthAccounts.length === 0" class="btn btn-xs btn-secondary">全选</button>
+                    <button @click="clearLocalAccessAccounts" :disabled="localAccessBusy || localAccessSelectedCount === 0" class="btn btn-xs btn-secondary">清空</button>
+                    <button @click="saveAllLocalAccessAccounts" :disabled="localAccessBusy || oauthAccounts.length === 0" class="btn btn-xs btn-primary">全选加入</button>
+                    <button @click="saveLocalAccessAccounts" :disabled="localAccessBusy" class="btn btn-xs btn-primary">保存集合</button>
+                  </div>
                 </div>
                 <div class="max-h-36 overflow-y-auto rounded-lg border border-gray-700 bg-gray-900/60 p-2 space-y-1">
                   <label v-for="account in oauthAccounts" :key="account.id" class="flex items-center gap-2 rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-800">
@@ -1267,37 +1238,6 @@
                     <span v-if="account.plan" class="text-gray-500">{{ account.plan }}</span>
                   </label>
                   <div v-if="oauthAccounts.length === 0" class="text-xs text-gray-500 px-2 py-3 text-center">暂无 OAuth 账号</div>
-                </div>
-              </div>
-            </div>
-
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <div class="flex gap-1 bg-gray-900/60 rounded-lg p-1">
-                  <button v-for="range in localAccessStatsRanges" :key="range.id"
-                    @click="localAccessStatsRange = range.id"
-                    class="px-3 py-1 rounded-md text-xs"
-                    :class="localAccessStatsRange === range.id ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'"
-                  >{{ range.label }}</button>
-                </div>
-                <div class="text-xs text-gray-500">按账号统计来自代理日志和 Codex session 扫描</div>
-              </div>
-              <div class="grid md:grid-cols-4 gap-2 text-xs">
-                <div class="bg-gray-900/60 rounded-lg px-3 py-2">
-                  <div class="text-gray-500">请求</div>
-                  <div class="mt-1 text-lg font-semibold text-white">{{ localAccessStatsTotals.request_count || 0 }}</div>
-                </div>
-                <div class="bg-gray-900/60 rounded-lg px-3 py-2">
-                  <div class="text-gray-500">成功 / 失败</div>
-                  <div class="mt-1 text-lg font-semibold text-white">{{ localAccessStatsTotals.success_count || 0 }} / {{ localAccessStatsTotals.failure_count || 0 }}</div>
-                </div>
-                <div class="bg-gray-900/60 rounded-lg px-3 py-2">
-                  <div class="text-gray-500">Token</div>
-                  <div class="mt-1 text-lg font-semibold text-white">{{ localAccessStatsTotals.total_tokens || 0 }}</div>
-                </div>
-                <div class="bg-gray-900/60 rounded-lg px-3 py-2">
-                  <div class="text-gray-500">平均延迟</div>
-                  <div class="mt-1 text-lg font-semibold text-white">{{ localAccessAverageLatency }}</div>
                 </div>
               </div>
             </div>
@@ -1441,8 +1381,11 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, inject, watch } from 'vue'
 import api, { longApi, openaiAPI } from '@/api/index.js'
+import PlatformIcon from '@/components/PlatformIcon.vue'
+import { getPlatformMeta } from '@/lib/platforms'
 
 // State
+const codexPlatform = getPlatformMeta('codex')
 const accounts = ref([])
 const loading = ref(false)
 const activeTab = ref('oauth')
@@ -1480,47 +1423,14 @@ const bulkDeleteScopeLabel = ref('')
 const bulkDeleteAllSelected = ref(false)
 const selectedOAuthIds = ref([])
 const selectedAPIIds = ref([])
-
-const sortDirections = ['asc', 'desc']
-const oauthSortOptions = [
-  { id: 'recommended', label: '智能排序' },
-  { id: 'created_at', label: '创建时间' },
-  { id: 'updated_at', label: '更新时间' },
-  { id: 'email', label: '邮箱' },
-  { id: 'plan', label: '订阅计划' },
-  { id: 'status', label: '状态' },
-  { id: 'proxy', label: '代理池' },
-  { id: 'quota_5h', label: '5小时剩余额度' },
-  { id: 'quota_7d', label: '周剩余额度' },
-  { id: 'quota_5h_reset', label: '5小时重置' },
-  { id: 'quota_7d_reset', label: '周重置' },
-  { id: 'expires_at', label: '订阅有效期' },
-  { id: 'custom', label: '自定义顺序' },
-]
-const apiSortOptions = [
-  { id: 'created_at', label: '创建时间' },
-  { id: 'updated_at', label: '更新时间' },
-  { id: 'provider', label: 'Provider' },
-  { id: 'model', label: 'Model' },
-  { id: 'base_url', label: 'Base URL' },
-  { id: 'wire_api', label: 'Wire API' },
-]
-const oauthSortBy = ref(readStoredOption('easyllm.openai.oauth.sortBy', 'quota_5h', oauthSortOptions.map(o => o.id)))
-const oauthSortDirection = ref(readStoredOption('easyllm.openai.oauth.sortDirection', 'desc', sortDirections))
-const apiSortBy = ref(readStoredOption('easyllm.openai.api.sortBy', 'created_at', apiSortOptions.map(o => o.id)))
-const apiSortDirection = ref(readStoredOption('easyllm.openai.api.sortDirection', 'desc', sortDirections))
 const hideAccountEmails = ref(readStoredBoolean('easyllm.openai.hideAccountEmails', false))
 const accountLayoutModes = ['standard', 'dense']
 const accountLayout = ref(readStoredOption('easyllm.openai.accountLayout', 'standard', accountLayoutModes))
 const storedAccountGroups = readStoredJSON('easyllm.openai.accountGroups', [])
 const accountGroups = ref(Array.isArray(storedAccountGroups) ? storedAccountGroups.map(normalizeAccountGroup).filter(Boolean) : [])
 const activeGroupFilter = ref(readStoredOption('easyllm.openai.activeGroupFilter', 'all', ['all', ...accountGroups.value.map(g => g.id)]))
-const groupByTag = ref(readStoredBoolean('easyllm.openai.groupByTag', false))
 const showGroupManager = ref(false)
 const newGroupName = ref('')
-const showCustomSortDialog = ref(false)
-const storedCustomSortOrder = readStoredJSON('easyllm.openai.customSortOrder', [])
-const customSortOrder = ref(Array.isArray(storedCustomSortOrder) ? storedCustomSortOrder.map(accountId) : [])
 
 const quotaFilterLabel = computed(() => {
   if (quotaFilter.value === '429') return '429（限流）'
@@ -1588,7 +1498,7 @@ const serviceConfig = ref({
   pool_size: 0,
   proxy_enabled_count: 0,
   total_requests: 0,
-  total_logs: 0,
+  request_logs_retained: false,
   api_key_set: false,
   api_key_masked: '',
   v1_proxy_mode: '',
@@ -1619,12 +1529,6 @@ const localAccessBusy = ref(false)
 const localAccessSelectedIds = ref([])
 const localAccessPortInput = ref('')
 const localAccessRestrictFree = ref(true)
-const localAccessStatsRange = ref('daily')
-const localAccessStatsRanges = [
-  { id: 'daily', label: '日' },
-  { id: 'weekly', label: '周' },
-  { id: 'monthly', label: '月' }
-]
 const strategies = [
   { id: 'auto', label: '自动' },
   { id: 'quota_high_first', label: '优先高配额' },
@@ -1659,24 +1563,7 @@ const proxyEnabledCount = computed(() => oauthAccounts.value.filter(a => a.proxy
 const proxyAllOn = computed(() => oauthAccounts.value.length > 0 && proxyEnabledCount.value === oauthAccounts.value.length)
 const activeGroup = computed(() => accountGroups.value.find(g => g.id === activeGroupFilter.value) || null)
 const activeGroupAccountIDs = computed(() => new Set(activeGroup.value?.account_ids || []))
-const customSortAccounts = computed(() => {
-  const index = new Map(customSortOrder.value.map((id, i) => [accountId(id), i]))
-  return [...oauthAccounts.value].sort((left, right) => {
-    const leftIndex = index.has(accountId(left.id)) ? index.get(accountId(left.id)) : Number.MAX_SAFE_INTEGER
-    const rightIndex = index.has(accountId(right.id)) ? index.get(accountId(right.id)) : Number.MAX_SAFE_INTEGER
-    if (leftIndex !== rightIndex) return leftIndex - rightIndex
-    return compareText(left.email || left.id, right.email || right.id, 'asc')
-  })
-})
-const localAccessStatsWindow = computed(() => localAccess.value?.stats?.[localAccessStatsRange.value] || { totals: {}, accounts: [] })
-const localAccessStatsTotals = computed(() => localAccessStatsWindow.value?.totals || {})
-const localAccessAverageLatency = computed(() => {
-  const totals = localAccessStatsTotals.value
-  const count = Number(totals.request_count || 0)
-  if (!count) return '--'
-  const avg = Number(totals.total_latency_ms || 0) / count
-  return avg >= 1000 ? `${(avg / 1000).toFixed(2)}s` : `${Math.round(avg)}ms`
-})
+const localAccessSelectedCount = computed(() => localAccessSelectedIds.value.length)
 
 const filteredOAuthAccounts = computed(() => {
   let list = oauthAccounts.value
@@ -1723,7 +1610,7 @@ const allAPISelected = computed(() => (
   filteredAPIAccounts.value.every(a => selectedAPIIds.value.includes(accountId(a.id)))
 ))
 const accountGridClass = computed(() => accountLayout.value === 'dense'
-  ? 'grid-cols-1 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8 gap-2'
+  ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-6 gap-2'
   : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3'
 )
 
@@ -1809,7 +1696,6 @@ function toggleAccountLayout() {
   oauthPage.value = 1
   apiPage.value = 1
   writeStoredOption('easyllm.openai.accountLayout', accountLayout.value)
-  showToast(accountLayout.value === 'dense' ? '已切换为紧凑布局' : '已切换为标准布局', 'success')
 }
 
 function normalizeAccountGroup(group) {
@@ -1842,11 +1728,6 @@ function persistActiveGroupFilter() {
   }
   oauthPage.value = 1
   writeStoredOption('easyllm.openai.activeGroupFilter', activeGroupFilter.value)
-}
-
-function persistGroupByTag() {
-  oauthPage.value = 1
-  writeStoredBoolean('easyllm.openai.groupByTag', groupByTag.value)
 }
 
 function accountGroupNames(account) {
@@ -1933,67 +1814,6 @@ function syncAccountGroupsWithAccounts() {
   if (changed) persistAccountGroups()
 }
 
-function normalizeCustomSortOrder() {
-  const oauthIDs = oauthAccounts.value.map(account => accountId(account.id))
-  const known = new Set(oauthIDs)
-  const next = []
-  const seen = new Set()
-  for (const id of customSortOrder.value.map(accountId)) {
-    if (!known.has(id) || seen.has(id)) continue
-    next.push(id)
-    seen.add(id)
-  }
-  for (const id of oauthIDs) {
-    if (!seen.has(id)) next.push(id)
-  }
-  return next
-}
-
-function persistCustomSortOrder() {
-  customSortOrder.value = normalizeCustomSortOrder()
-  writeStoredJSON('easyllm.openai.customSortOrder', customSortOrder.value)
-}
-
-function syncCustomSortOrder() {
-  const next = normalizeCustomSortOrder()
-  if (JSON.stringify(next) !== JSON.stringify(customSortOrder.value)) {
-    customSortOrder.value = next
-    writeStoredJSON('easyllm.openai.customSortOrder', customSortOrder.value)
-  }
-}
-
-function openCustomSortDialog() {
-  syncCustomSortOrder()
-  showCustomSortDialog.value = true
-}
-
-function resetCustomSortOrder() {
-  customSortOrder.value = oauthAccounts.value.map(account => accountId(account.id))
-  writeStoredJSON('easyllm.openai.customSortOrder', customSortOrder.value)
-  oauthSortBy.value = 'custom'
-  writeStoredOption('easyllm.openai.oauth.sortBy', oauthSortBy.value)
-  oauthPage.value = 1
-  showToast('自定义顺序已重置为当前列表顺序', 'success')
-}
-
-function moveCustomSortAccount(id, direction) {
-  const targetID = accountId(id)
-  if (!targetID) return
-  customSortOrder.value = normalizeCustomSortOrder()
-  const currentIndex = customSortOrder.value.indexOf(targetID)
-  if (currentIndex < 0) return
-  const nextIndex = currentIndex + direction
-  if (nextIndex < 0 || nextIndex >= customSortOrder.value.length) return
-  const nextOrder = [...customSortOrder.value]
-  const [item] = nextOrder.splice(currentIndex, 1)
-  nextOrder.splice(nextIndex, 0, item)
-  customSortOrder.value = nextOrder
-  persistCustomSortOrder()
-  oauthSortBy.value = 'custom'
-  writeStoredOption('easyllm.openai.oauth.sortBy', oauthSortBy.value)
-  oauthPage.value = 1
-}
-
 function dateSortValue(value) {
   if (!value) return null
   const timestamp = new Date(value).getTime()
@@ -2025,21 +1845,6 @@ function accountUpdatedSortValue(account) {
   return dateSortValue(account?.updated_at) ?? accountCreatedSortValue(account)
 }
 
-function oauthPlanRank(account) {
-  const plan = String(account?.plan || jwtPlanType(account) || '').toLowerCase()
-  const ranks = { enterprise: 6, business: 5, team: 4, pro: 3, plus: 2, free: 1 }
-  return ranks[plan] || 0
-}
-
-function oauthStatusRank(account) {
-  if (account?.status === 'active') return 4
-  if (account?._quota_http_status === 200) return 3
-  if (account?._quota_http_status === 429) return 2
-  if (account?._quota_http_status === 403) return 1
-  if (account?._quota_http_status === 401 || account?.status === 'reauth_required') return 0
-  return 2
-}
-
 function oauthRemainingQuota(account, windowKey) {
   if (windowKey === '5h') {
     return account?.quota_5h_used_percent == null ? null : 100 - Number(account.quota_5h_used_percent)
@@ -2049,83 +1854,15 @@ function oauthRemainingQuota(account, windowKey) {
   return null
 }
 
-function oauthResetSeconds(account, windowKey) {
-  const value = windowKey === '5h' ? account?.quota_5h_reset_seconds : account?.quota_7d_reset_seconds
-  return value == null ? null : Number(value)
-}
-
-function oauthExpiryValue(account) {
-  return dateSortValue(account?.expires_at)
-}
-
-function tagSortLabel(account) {
-  return String(account?.tag_name || '').trim()
-}
-
-function sortByTagGroup(list) {
-  if (!groupByTag.value) return list
-  return [...list].sort((left, right) => {
-    const leftTag = tagSortLabel(left)
-    const rightTag = tagSortLabel(right)
-    if (!leftTag && !rightTag) return 0
-    if (!leftTag) return 1
-    if (!rightTag) return -1
-    return compareText(leftTag, rightTag, 'asc')
-  })
-}
-
 function sortOAuthAccounts(list) {
-  const direction = oauthSortDirection.value
   const sorted = [...list]
-  if (oauthSortBy.value === 'custom') {
-    const index = new Map(customSortOrder.value.map((id, i) => [accountId(id), i]))
-    sorted.sort((left, right) => {
-      const leftIndex = index.has(accountId(left.id)) ? index.get(accountId(left.id)) : Number.MAX_SAFE_INTEGER
-      const rightIndex = index.has(accountId(right.id)) ? index.get(accountId(right.id)) : Number.MAX_SAFE_INTEGER
-      if (leftIndex !== rightIndex) return leftIndex - rightIndex
-      return compareText(left?.email || left?.id, right?.email || right?.id, 'asc')
-    })
-    return sortByTagGroup(sorted)
-  }
   sorted.sort((left, right) => {
-    if (groupByTag.value) {
-      const leftTag = tagSortLabel(left)
-      const rightTag = tagSortLabel(right)
-      if (!leftTag && rightTag) return 1
-      if (leftTag && !rightTag) return -1
-      const tagDiff = compareText(leftTag, rightTag, 'asc')
-      if (tagDiff !== 0) return tagDiff
-    }
     const activeDiff = compareActiveAccountFirst(left, right)
     if (activeDiff !== 0) return activeDiff
 
-    let diff = 0
-    if (oauthSortBy.value === 'recommended') {
-      diff = oauthAccountPriority(left) - oauthAccountPriority(right)
-      if (diff === 0) diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), 'desc')
-    } else if (oauthSortBy.value === 'created_at') {
-      diff = compareNullableNumber(accountCreatedSortValue(left), accountCreatedSortValue(right), direction)
-    } else if (oauthSortBy.value === 'updated_at') {
-      diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), direction)
-    } else if (oauthSortBy.value === 'email') {
-      diff = compareText(left?.email, right?.email, direction)
-    } else if (oauthSortBy.value === 'plan') {
-      diff = compareNullableNumber(oauthPlanRank(left), oauthPlanRank(right), direction)
-    } else if (oauthSortBy.value === 'status') {
-      diff = compareNullableNumber(oauthStatusRank(left), oauthStatusRank(right), direction)
-    } else if (oauthSortBy.value === 'proxy') {
-      diff = compareNullableNumber(left?.proxy_enabled ? 1 : 0, right?.proxy_enabled ? 1 : 0, direction)
-    } else if (oauthSortBy.value === 'quota_5h') {
-      diff = compareNullableNumber(oauthRemainingQuota(left, '5h'), oauthRemainingQuota(right, '5h'), direction)
-    } else if (oauthSortBy.value === 'quota_7d') {
-      diff = compareNullableNumber(oauthRemainingQuota(left, '7d'), oauthRemainingQuota(right, '7d'), direction)
-    } else if (oauthSortBy.value === 'quota_5h_reset') {
-      diff = compareNullableNumber(oauthResetSeconds(left, '5h'), oauthResetSeconds(right, '5h'), direction)
-    } else if (oauthSortBy.value === 'quota_7d_reset') {
-      diff = compareNullableNumber(oauthResetSeconds(left, '7d'), oauthResetSeconds(right, '7d'), direction)
-    } else if (oauthSortBy.value === 'expires_at') {
-      diff = compareNullableNumber(oauthExpiryValue(left), oauthExpiryValue(right), direction)
-    }
+    let diff = oauthAccountPriority(left) - oauthAccountPriority(right)
+    if (diff === 0) diff = compareNullableNumber(oauthRemainingQuota(left, '5h'), oauthRemainingQuota(right, '5h'), 'desc')
+    if (diff === 0) diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), 'desc')
     if (diff !== 0) return diff
     return compareText(left?.email || left?.id, right?.email || right?.id, 'asc')
   })
@@ -2133,56 +1870,17 @@ function sortOAuthAccounts(list) {
 }
 
 function sortAPIAccounts(list) {
-  const direction = apiSortDirection.value
   const sorted = [...list]
   sorted.sort((left, right) => {
     const activeDiff = compareActiveAccountFirst(left, right)
     if (activeDiff !== 0) return activeDiff
 
-    let diff = 0
-    if (apiSortBy.value === 'created_at') {
-      diff = compareNullableNumber(accountCreatedSortValue(left), accountCreatedSortValue(right), direction)
-    } else if (apiSortBy.value === 'updated_at') {
-      diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), direction)
-    } else if (apiSortBy.value === 'provider') {
-      diff = compareText(left?.model_provider || left?.email, right?.model_provider || right?.email, direction)
-    } else if (apiSortBy.value === 'model') {
-      diff = compareText(left?.model, right?.model, direction)
-    } else if (apiSortBy.value === 'base_url') {
-      diff = compareText(left?.base_url, right?.base_url, direction)
-    } else if (apiSortBy.value === 'wire_api') {
-      diff = compareText(left?.wire_api, right?.wire_api, direction)
-    }
+    let diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), 'desc')
+    if (diff === 0) diff = compareNullableNumber(accountCreatedSortValue(left), accountCreatedSortValue(right), 'desc')
     if (diff !== 0) return diff
     return compareText(left?.model_provider || left?.email || left?.id, right?.model_provider || right?.email || right?.id, 'asc')
   })
   return sorted
-}
-
-function setOAuthSortBy(value) {
-  if (!oauthSortOptions.some(option => option.id === value)) return
-  oauthSortBy.value = value
-  oauthPage.value = 1
-  writeStoredOption('easyllm.openai.oauth.sortBy', value)
-}
-
-function toggleOAuthSortDirection() {
-  oauthSortDirection.value = oauthSortDirection.value === 'desc' ? 'asc' : 'desc'
-  oauthPage.value = 1
-  writeStoredOption('easyllm.openai.oauth.sortDirection', oauthSortDirection.value)
-}
-
-function setAPISortBy(value) {
-  if (!apiSortOptions.some(option => option.id === value)) return
-  apiSortBy.value = value
-  apiPage.value = 1
-  writeStoredOption('easyllm.openai.api.sortBy', value)
-}
-
-function toggleAPISortDirection() {
-  apiSortDirection.value = apiSortDirection.value === 'desc' ? 'asc' : 'desc'
-  apiPage.value = 1
-  writeStoredOption('easyllm.openai.api.sortDirection', apiSortDirection.value)
 }
 
 // Methods
@@ -2193,7 +1891,6 @@ async function loadAccounts() {
     const res = await api.get('/openai/accounts')
     accounts.value = Array.isArray(res) ? res : (res || [])
     syncAccountGroupsWithAccounts()
-    syncCustomSortOrder()
     pruneSelectedAccountIds()
   } catch (e) {
     showToast('加载账号失败: ' + e.message, 'error')
@@ -2243,6 +1940,9 @@ async function refreshAllTokens() {
     showToast('没有可刷新的 OAuth 账号', 'error')
     return
   }
+  if (!confirm('刷新后 RT 会变化，请保存最新的账号文件。是否同意继续刷新全部 Token？')) {
+    return
+  }
   refreshingAllTokens.value = true
   try {
     const res = await openaiAPI.refreshAll()
@@ -2255,6 +1955,7 @@ async function refreshAllTokens() {
     if (failed > 0) parts.push(`失败 ${failed}`)
     showToast(`全部刷新完成：${parts.join('，') || '无可用账号'}`, failed > 0 && success === 0 ? 'error' : 'success')
     await loadAccounts()
+    await exportAccounts()
   } catch (e) {
     showToast('刷新全部失败: ' + e.message, 'error')
   } finally {
@@ -2268,6 +1969,7 @@ async function refreshToken(account) {
     await api.post(`/openai/accounts/${account.id}/refresh-token`)
     showToast(`${accountDisplayLabel(account)} token 刷新成功`, 'success')
     await loadAccounts()
+    await exportAccounts()
   } catch (e) {
     showToast('刷新失败: ' + e.message, 'error')
   } finally {
@@ -2384,6 +2086,80 @@ const exampleFiles = {
       "v1.OTg3NjU0MzIxMDk4NzY1NDMyMTA5ODc2NTQzMjE...",
       "v1.NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM..."
     ], null, 2)
+  },
+  'sub2api': {
+    filename: 'sub2api_example.json',
+    content: JSON.stringify({
+      "exported_at": "2026-05-08T12:00:00Z",
+      "accounts": [
+        {
+          "name": "your-email@example.com",
+          "platform": "openai",
+          "type": "oauth",
+          "credentials": {
+            "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE5MzQ0ZTY1In0...",
+            "refresh_token": "v1.MjQ3NDUzMTg3NjE0NzY3OTc0NjQxNDExNDY3ODk...",
+            "id_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+            "chatgpt_account_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+            "chatgpt_user_id": "user-xxxx",
+            "organization_id": "org-xxxx",
+            "plan_type": "team",
+            "expires_at": 1772632299
+          },
+          "extra": {
+            "email": "your-email@example.com"
+          }
+        }
+      ]
+    }, null, 2)
+  },
+  'cockpit-tools': {
+    filename: 'cockpit_tools_example.json',
+    content: JSON.stringify([
+      {
+        "id": "codex-account-1",
+        "email": "your-email@example.com",
+        "authMode": "oauth",
+        "tokens": {
+          "idToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+          "accessToken": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE5MzQ0ZTY1In0...",
+          "refreshToken": "v1.MjQ3NDUzMTg3NjE0NzY3OTc0NjQxNDExNDY3ODk..."
+        },
+        "accountId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "organizationId": "org-xxxx",
+        "accountName": "Team Workspace",
+        "accountStructure": "team",
+        "planType": "team",
+        "type": "codex"
+      }
+    ], null, 2)
+  },
+  'from-export': {
+    filename: 'easyllm_accounts_backup_example.json',
+    content: JSON.stringify({
+      "exported_at": "2026-05-08T12:00:00Z",
+      "version": "2.0.0",
+      "oauth_accounts": [
+        {
+          "email": "your-email@example.com",
+          "account_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+          "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE5MzQ0ZTY1In0...",
+          "refresh_token": "v1.MjQ3NDUzMTg3NjE0NzY3OTc0NjQxNDExNDY3ODk...",
+          "id_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+          "expired": "2026-06-01T00:00:00Z",
+          "last_refresh": "2026-05-08T12:00:00Z",
+          "type": "codex"
+        }
+      ],
+      "api_accounts": [],
+      "local_access": {
+        "enabled": true,
+        "port": 8022,
+        "routing_strategy": "auto",
+        "restrict_free_accounts": true,
+        "account_ids": []
+      }
+    }, null, 2)
   }
 }
 
@@ -3045,9 +2821,10 @@ async function updateServiceStrategy(strategy) {
 async function activateCodexAPIService() {
   savingServiceConfig.value = true
   try {
-    await activateLocalAccess()
-    await loadServiceConfig()
-    await loadAccounts()
+    const res = await api.post('/openai/service-config/activate-codex')
+    Object.assign(serviceConfig.value, res)
+    await Promise.all([loadLocalAccess(), loadAccounts()])
+    showToast(res?.codex_app_restarted ? 'Codex 已重启并注入配置' : 'Codex 已启动并注入配置', 'success')
   } catch (e) {
     showToast('启动 Codex API 服务失败: ' + e.message, 'error')
   } finally {
@@ -3062,6 +2839,23 @@ function toggleLocalAccessAccount(id) {
   } else {
     localAccessSelectedIds.value = [...localAccessSelectedIds.value, key]
   }
+}
+
+function selectAllLocalAccessAccounts() {
+  localAccessSelectedIds.value = oauthAccounts.value.map(account => accountId(account.id)).filter(Boolean)
+}
+
+function clearLocalAccessAccounts() {
+  localAccessSelectedIds.value = []
+}
+
+async function saveAllLocalAccessAccounts() {
+  selectAllLocalAccessAccounts()
+  if (localAccessSelectedIds.value.length === 0) {
+    showToast('暂无可加入的 OAuth 账号', 'error')
+    return
+  }
+  await saveLocalAccessAccounts()
 }
 
 async function localAccessAction(task, successText) {
@@ -3131,7 +2925,7 @@ async function rotateLocalAccessKey() {
 }
 
 async function clearLocalAccessStats() {
-  if (!confirm('确认清空 Codex API 服务统计和日志吗？')) return
+  if (!confirm('确认清空旧版 Codex API 服务统计数据吗？')) return
   await localAccessAction(
     () => api.delete('/openai/local-access/stats'),
     'Codex API 服务统计已清空'
@@ -3571,24 +3365,34 @@ function decodeJWTPayload(token) {
 }
 
 function jwtPlanType(account) {
-  const token = account.access_token
-  const payload = decodeJWTPayload(token)
-  if (!payload) return null
-  // JWT structure: { "https://api.openai.com/auth": { "chatgpt_plan_type": "free" } }
-  return payload?.['https://api.openai.com/auth']?.chatgpt_plan_type || null
+  for (const token of [account?.id_token, account?.access_token]) {
+    const payload = decodeJWTPayload(token)
+    const plan = String(payload?.['https://api.openai.com/auth']?.chatgpt_plan_type || '').trim().toLowerCase()
+    if (plan && plan !== 'free') return plan
+  }
+  return null
 }
 
 const PLAN_LABELS = {
-  free:  { text: 'Free',  cls: 'bg-gray-700 text-gray-300' },
-  plus:  { text: 'Plus',  cls: 'bg-purple-700/60 text-purple-300' },
-  pro:   { text: 'Pro',   cls: 'bg-yellow-700/60 text-yellow-300' },
-  team:  { text: 'Team',  cls: 'bg-blue-700/60 text-blue-300' },
+  free:       { text: 'Free',     cls: 'bg-gray-700 text-gray-300' },
+  plus:       { text: 'Plus',     cls: 'bg-purple-700/60 text-purple-300' },
+  pro:        { text: 'Pro',      cls: 'bg-yellow-700/60 text-yellow-300' },
+  prolite:    { text: 'Pro 5x',   cls: 'bg-yellow-700/60 text-yellow-300' },
+  promax:     { text: 'Pro 20x',  cls: 'bg-amber-700/60 text-amber-300' },
+  team:       { text: 'Team',     cls: 'bg-blue-700/60 text-blue-300' },
+  business:   { text: 'Business', cls: 'bg-cyan-700/60 text-cyan-300' },
+  enterprise: { text: 'Enterprise', cls: 'bg-emerald-700/60 text-emerald-300' },
+}
+
+function accountPlanType(account) {
+  const persistedPlan = String(account?.plan || '').trim().toLowerCase()
+  return persistedPlan || jwtPlanType(account) || ''
 }
 
 function planBadge(account) {
-  const plan = jwtPlanType(account)
+  const plan = accountPlanType(account)
   if (!plan) return null
-  return PLAN_LABELS[plan.toLowerCase()] || { text: plan, cls: 'bg-gray-700 text-gray-400' }
+  return PLAN_LABELS[plan] || { text: plan, cls: 'bg-gray-700 text-gray-400' }
 }
 
 // ---- Quota ----
@@ -3671,19 +3475,26 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .account-card-compact {
-  @apply bg-gray-800/80 border border-gray-700 rounded-lg px-3.5 py-3 transition-all;
+  @apply rounded-lg border px-3.5 py-3 transition-all;
+  background: var(--app-surface);
+  border-color: var(--app-border);
+  color: var(--app-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 .account-card-compact--dense {
   @apply px-2 py-2;
 }
 .account-card-compact:hover {
-  @apply border-blue-500/40 shadow-md shadow-blue-500/5;
+  border-color: var(--app-accent-soft);
+  box-shadow: 0 10px 26px var(--app-accent-shadow);
 }
 .account-card-compact--selected {
-  @apply border-red-500/40 ring-1 ring-red-500/30;
+  border-color: rgba(255, 59, 48, 0.44);
+  box-shadow: inset 0 0 0 1px rgba(255, 59, 48, 0.28);
 }
 .account-card-compact--api:hover {
-  @apply border-emerald-500/40 shadow-emerald-500/5;
+  border-color: rgba(52, 199, 89, 0.44);
+  box-shadow: 0 10px 26px rgba(52, 199, 89, 0.14);
 }
 
 .selection-checkbox {
@@ -3693,10 +3504,13 @@ onBeforeUnmount(() => {
   @apply sr-only;
 }
 .selection-checkbox span {
-  @apply relative inline-block w-4 h-4 rounded border border-gray-500 bg-gray-900/80 transition-colors;
+  @apply relative inline-block w-4 h-4 rounded border transition-colors;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
 }
 .selection-checkbox input:checked + span {
-  @apply bg-red-500 border-red-400;
+  background: var(--app-danger);
+  border-color: var(--app-danger);
 }
 .selection-checkbox input:checked + span::after {
   content: '';
@@ -3710,53 +3524,309 @@ onBeforeUnmount(() => {
   transform: rotate(45deg);
 }
 
+.card-actions {
+  @apply flex items-center gap-1.5 overflow-hidden;
+}
 .card-btn {
-  @apply inline-flex items-center justify-center px-2 py-1 rounded text-[11px] font-medium transition-colors disabled:opacity-40;
+  @apply inline-flex h-8 shrink-0 items-center justify-center rounded text-[11px] font-medium transition-colors disabled:opacity-40 whitespace-nowrap;
+}
+.card-btn--text {
+  @apply min-w-[52px] px-2.5;
+}
+.card-btn--icon {
+  @apply h-8 w-8 min-w-8 px-0;
 }
 .account-card-compact--dense .card-btn {
-  @apply px-1.5 py-0.5 text-[10px];
+  @apply h-7 text-[10px];
+}
+.account-card-compact--dense .card-btn--text {
+  @apply min-w-[42px] px-1.5;
+}
+.account-card-compact--dense .card-btn--icon {
+  @apply h-7 w-7 min-w-7 px-0;
 }
 .dense-account-meta {
-  @apply mb-1.5 flex min-h-[20px] items-center gap-1.5 overflow-hidden text-[10px] text-gray-500;
+  @apply mb-1.5 flex min-h-[20px] items-center gap-1.5 overflow-hidden text-[10px];
+  color: var(--app-text-muted);
 }
 .dense-pill {
   @apply inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[9px] font-semibold;
 }
 .card-btn--primary {
-  @apply bg-blue-600/80 text-blue-100 hover:bg-blue-600;
+  color: #fff;
+  background: var(--app-accent);
+}
+.card-btn--primary:hover {
+  background: var(--app-accent-strong);
 }
 .card-btn--secondary {
-  @apply bg-gray-700 text-gray-300 hover:bg-gray-600;
+  background: var(--app-control-bg);
+  color: var(--app-text-secondary);
+  border: 1px solid var(--app-border-soft);
+}
+.card-btn--secondary:hover {
+  background: var(--app-control-hover-bg);
+  color: var(--app-text);
 }
 .card-btn--danger {
-  @apply bg-transparent text-red-400/70 hover:text-red-300 hover:bg-red-500/10;
+  background: transparent;
+  color: var(--app-danger);
+}
+.card-btn--danger:hover {
+  background: rgba(255, 59, 48, 0.1);
 }
 .card-btn--on {
-  @apply bg-green-500/20 text-green-300 hover:bg-green-500/30;
+  background: rgba(52, 199, 89, 0.16);
+  color: var(--app-success);
+}
+.card-btn--on:hover {
+  background: rgba(52, 199, 89, 0.24);
 }
 .card-btn--off {
-  @apply bg-gray-700/60 text-gray-500 hover:text-gray-300 hover:bg-gray-700;
+  background: var(--app-control-bg);
+  color: var(--app-text-muted);
+}
+.card-btn--off:hover {
+  background: var(--app-control-hover-bg);
+  color: var(--app-text-secondary);
+}
+
+.stable-actions {
+  @apply flex w-full flex-wrap items-center gap-1.5 overflow-visible xl:w-auto xl:justify-end;
+}
+.account-toolbar {
+  @apply grid w-full items-center gap-1.5 overflow-visible;
+  grid-template-columns: auto minmax(128px, 1fr) auto auto auto;
+}
+.account-toolbar--api {
+  grid-template-columns: minmax(160px, 1fr) auto auto;
+}
+.toolbar-section {
+  @apply flex min-w-0 items-center gap-1.5;
+}
+.toolbar-section--actions,
+.toolbar-section--view,
+.toolbar-section--filter {
+  @apply flex-nowrap;
+}
+.toolbar-section--search {
+  @apply min-w-0;
+}
+.toolbar-section--selection {
+  @apply justify-end;
+}
+.stable-actions > *,
+.toolbar-section > * {
+  @apply whitespace-nowrap;
+}
+.toolbar-btn {
+  @apply inline-flex h-8 min-w-[50px] shrink-0 items-center justify-center gap-1 rounded-md border px-2 text-[11px] font-medium leading-none transition-colors disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap;
+}
+.toolbar-btn--layout,
+.toolbar-btn--select {
+  @apply min-w-[62px];
+}
+.toolbar-btn-neutral {
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+  color: var(--app-text-secondary);
+}
+.toolbar-btn-neutral:hover {
+  background: var(--app-control-hover-bg);
+  color: var(--app-text);
+}
+.toolbar-btn-success {
+  border-color: rgba(52, 199, 89, 0.34);
+  background: rgba(52, 199, 89, 0.14);
+  color: var(--app-success);
+}
+.toolbar-btn-success:hover {
+  background: rgba(52, 199, 89, 0.22);
+}
+.toolbar-btn-danger {
+  border-color: rgba(255, 59, 48, 0.34);
+  background: rgba(255, 59, 48, 0.12);
+  color: var(--app-danger);
+}
+.toolbar-btn-danger:hover {
+  background: rgba(255, 59, 48, 0.2);
+}
+.toolbar-icon-btn {
+  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border text-xs transition-colors;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+  color: var(--app-text-secondary);
+}
+.toolbar-icon-btn:hover {
+  background: var(--app-control-hover-bg);
+  color: var(--app-text);
+}
+.toolbar-input,
+.toolbar-select {
+  @apply h-8 rounded-md border px-2 text-[11px] transition-colors focus:outline-none;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+  color: var(--app-text);
+}
+.toolbar-input:focus,
+.toolbar-select:focus {
+  border-color: var(--app-accent);
+}
+.toolbar-input {
+  color: var(--app-text);
+}
+.toolbar-input::placeholder {
+  color: var(--app-text-faint);
+}
+.toolbar-search {
+  @apply w-full min-w-[116px];
+}
+.toolbar-select {
+  @apply w-[86px] min-w-[86px] max-w-[86px] shrink-0 truncate;
+}
+.toolbar-select--group {
+  @apply w-[112px] min-w-[112px] max-w-[160px];
+}
+.toolbar-select--quota {
+  @apply w-[76px] min-w-[76px] max-w-[76px];
+}
+.toolbar-status {
+  @apply inline-flex h-8 shrink-0 items-center px-1 text-[11px] whitespace-nowrap;
+  color: var(--app-text-muted);
+}
+@media (max-width: 1420px) {
+  .account-toolbar--oauth {
+    grid-template-columns: auto minmax(140px, 1fr) auto;
+  }
+  .account-toolbar--oauth .toolbar-section--filter,
+  .account-toolbar--oauth .toolbar-section--selection {
+    @apply justify-start;
+  }
+}
+@media (max-width: 1080px) {
+  .account-toolbar,
+  .account-toolbar--api,
+  .account-toolbar--oauth {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .toolbar-section {
+    @apply flex-wrap justify-start;
+  }
+  .toolbar-section--search .toolbar-search {
+    @apply max-w-none;
+  }
+}
+.stable-tabs {
+  @apply flex w-full max-w-full gap-1 overflow-x-auto rounded-lg border p-1 sm:w-fit;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+}
+.stable-tabs > * {
+  @apply shrink-0 whitespace-nowrap;
+}
+
+.stable-tabs button {
+  color: var(--app-text-secondary);
+}
+
+.stable-tabs button:hover {
+  color: var(--app-text);
+}
+
+.stable-tabs button.bg-blue-600 {
+  color: #fff !important;
+  background: var(--app-accent) !important;
+  box-shadow: 0 8px 20px var(--app-accent-shadow);
+}
+
+.stable-tabs button .bg-blue-500 {
+  background: rgba(255, 255, 255, 0.24) !important;
+  color: #fff !important;
+}
+
+.stable-tabs button .bg-gray-700 {
+  background: var(--app-surface-muted) !important;
+  color: var(--app-text-secondary) !important;
 }
 
 .btn {
-  @apply px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply inline-flex items-center justify-center px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap;
+}
+.header-action-btn {
+  @apply h-9 min-w-[76px] gap-1.5 px-2.5 py-0 text-sm;
 }
 .btn-primary {
-  @apply bg-blue-600 hover:bg-blue-700 text-white;
+  color: #fff;
+  background: var(--app-accent);
+}
+.btn-primary:hover {
+  background: var(--app-accent-strong);
 }
 .btn-secondary {
-  @apply bg-gray-700 hover:bg-gray-600 text-gray-200;
+  background: var(--app-control-bg);
+  color: var(--app-text);
+  border: 1px solid var(--app-border);
+}
+.btn-secondary:hover {
+  background: var(--app-control-hover-bg);
 }
 .btn-danger {
-  @apply bg-red-600 hover:bg-red-700 text-white;
+  color: #fff;
+  background: var(--app-danger);
 }
 .btn-ghost {
-  @apply bg-transparent hover:bg-gray-700 text-gray-400 hover:text-white;
+  background: transparent;
+  color: var(--app-text-secondary);
+}
+.btn-ghost:hover {
+  background: var(--app-control-hover-bg);
+  color: var(--app-text);
 }
 .btn-sm {
   @apply px-2.5 py-1.5 text-xs;
 }
 .input {
-  @apply bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500;
+  @apply rounded-lg border px-3 py-2 text-sm focus:outline-none;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+  color: var(--app-text);
+}
+.input:focus {
+  border-color: var(--app-accent);
+}
+
+[data-theme-mode='light'] .account-card-compact {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+[data-theme-mode='light'] .account-card-compact:hover {
+  background: rgba(255, 255, 255, 0.96);
+}
+
+[data-theme-mode='light'] .toolbar-btn.bg-gray-800,
+[data-theme-mode='light'] .toolbar-btn[class~='bg-gray-800'],
+[data-theme-mode='light'] .toolbar-btn[class~='bg-blue-600/20'],
+[data-theme-mode='light'] .toolbar-btn[class~='bg-sky-600/20'] {
+  background: var(--app-control-bg) !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text-secondary) !important;
+}
+
+[data-theme-mode='light'] .toolbar-btn[class~='bg-blue-600/20'],
+[data-theme-mode='light'] .toolbar-btn[class~='bg-sky-600/20'] {
+  background: var(--app-accent-tint) !important;
+  border-color: var(--app-accent-soft) !important;
+  color: var(--app-accent) !important;
+}
+
+[data-theme-mode='light'] .account-card-compact .bg-gray-700,
+[data-theme-mode='light'] .account-card-compact [class~='bg-gray-700/60'],
+[data-theme-mode='light'] .account-card-compact [class~='bg-gray-600/60'] {
+  background: var(--app-surface-muted) !important;
+}
+
+[data-theme-mode='light'] .account-card-compact .text-blue-300,
+[data-theme-mode='light'] .account-card-compact .text-blue-200 {
+  color: var(--app-accent) !important;
 }
 </style>

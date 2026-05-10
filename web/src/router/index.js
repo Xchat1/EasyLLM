@@ -41,18 +41,6 @@ const routes = [
   },
   ...genericPlatformRoutes,
   {
-    path: '/instances',
-    name: 'instances',
-    component: () => import('@/views/InstancesView.vue'),
-    meta: { title: '实例', icon: '🪟' },
-  },
-  {
-    path: '/wakeup',
-    name: 'wakeup',
-    component: () => import('@/views/WakeupView.vue'),
-    meta: { title: '唤醒', icon: '⏰' },
-  },
-  {
     path: '/docs',
     name: 'docs',
     component: () => import('@/views/DocsView.vue'),

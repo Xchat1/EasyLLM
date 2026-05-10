@@ -67,40 +67,10 @@ var cockpitPlatformDefinitions = []PlatformDefinition{
 		},
 	},
 	{
-		ID:             "windsurf",
-		Label:          "Windsurf",
-		Icon:           "🌊",
-		Description:    "围绕账号切换、多开实例和启动路径配置进行管理。",
-		Category:       "ide",
-		ManagementMode: "generic",
-		Supports: PlatformSupport{
-			MultiAccount:   true,
-			Instances:      true,
-			Wakeup:         false,
-			QuotaTracking:  true,
-			LaunchProfiles: true,
-		},
-	},
-	{
 		ID:             "kiro",
 		Label:          "Kiro",
 		Icon:           "🪐",
 		Description:    "统一账号、实例与刷新策略配置。",
-		Category:       "ide",
-		ManagementMode: "generic",
-		Supports: PlatformSupport{
-			MultiAccount:   true,
-			Instances:      true,
-			Wakeup:         false,
-			QuotaTracking:  true,
-			LaunchProfiles: true,
-		},
-	},
-	{
-		ID:             "cursor",
-		Label:          "Cursor",
-		Icon:           "💻",
-		Description:    "统一账号、实例和路径配置，兼容 EasyLLM 原有数据。",
 		Category:       "ide",
 		ManagementMode: "generic",
 		Supports: PlatformSupport{
@@ -124,96 +94,6 @@ var cockpitPlatformDefinitions = []PlatformDefinition{
 			Wakeup:         false,
 			QuotaTracking:  true,
 			LaunchProfiles: false,
-		},
-	},
-	{
-		ID:             "codebuddy",
-		Label:          "CodeBuddy",
-		Icon:           "🧩",
-		Description:    "适配 CodeBuddy 系列账号台账、实例和路径管理。",
-		Category:       "ide",
-		ManagementMode: "generic",
-		Supports: PlatformSupport{
-			MultiAccount:   true,
-			Instances:      true,
-			Wakeup:         false,
-			QuotaTracking:  true,
-			LaunchProfiles: true,
-		},
-	},
-	{
-		ID:             "codebuddy-cn",
-		Label:          "CodeBuddy CN",
-		Icon:           "🀄",
-		Description:    "面向国内客户端的账号、实例和配置同步视图。",
-		Category:       "ide",
-		ManagementMode: "generic",
-		Supports: PlatformSupport{
-			MultiAccount:   true,
-			Instances:      true,
-			Wakeup:         false,
-			QuotaTracking:  true,
-			LaunchProfiles: true,
-		},
-	},
-	{
-		ID:             "qoder",
-		Label:          "Qoder",
-		Icon:           "📐",
-		Description:    "支持多账号、多实例与额度记录的统一编排视图。",
-		Category:       "ide",
-		ManagementMode: "generic",
-		Supports: PlatformSupport{
-			MultiAccount:   true,
-			Instances:      true,
-			Wakeup:         false,
-			QuotaTracking:  true,
-			LaunchProfiles: true,
-		},
-	},
-	{
-		ID:             "trae",
-		Label:          "Trae",
-		Icon:           "🛤️",
-		Description:    "提供账户面板、额度备注和实例生命周期规划。",
-		Category:       "ide",
-		ManagementMode: "generic",
-		Supports: PlatformSupport{
-			MultiAccount:   true,
-			Instances:      true,
-			Wakeup:         false,
-			QuotaTracking:  true,
-			LaunchProfiles: true,
-		},
-	},
-	{
-		ID:             "zed",
-		Label:          "Zed",
-		Icon:           "⚡",
-		Description:    "统一账号台账、路径和额度预警配置。",
-		Category:       "editor",
-		ManagementMode: "generic",
-		Supports: PlatformSupport{
-			MultiAccount:   true,
-			Instances:      false,
-			Wakeup:         false,
-			QuotaTracking:  true,
-			LaunchProfiles: false,
-		},
-	},
-	{
-		ID:             "workbuddy",
-		Label:          "Workbuddy",
-		Icon:           "🧠",
-		Description:    "通用的平台布局与账号视图。",
-		Category:       "ide",
-		ManagementMode: "generic",
-		Supports: PlatformSupport{
-			MultiAccount:   true,
-			Instances:      true,
-			Wakeup:         false,
-			QuotaTracking:  true,
-			LaunchProfiles: true,
 		},
 	},
 }
@@ -295,6 +175,7 @@ type WakeupTask struct {
 type CockpitGeneralSettings struct {
 	Language           string            `json:"language"`
 	Theme              string            `json:"theme"`
+	AccentTheme        string            `json:"accent_theme"`
 	CloseBehavior      string            `json:"close_behavior"`
 	PrivacyMode        bool              `json:"privacy_mode"`
 	AutoRefreshMinutes int               `json:"auto_refresh_minutes"`
@@ -308,36 +189,21 @@ func DefaultCockpitGeneralSettings() CockpitGeneralSettings {
 		"antigravity":    5,
 		"codex":          5,
 		"github-copilot": 10,
-		"windsurf":       10,
 		"kiro":           10,
-		"cursor":         10,
 		"gemini":         10,
-		"codebuddy":      10,
-		"codebuddy-cn":   10,
-		"qoder":          10,
-		"trae":           10,
-		"zed":            10,
-		"workbuddy":      10,
 	}
 	paths := map[string]string{
-		"opencode":     "",
-		"antigravity":  "",
-		"codex":        "",
-		"vscode":       "",
-		"windsurf":     "",
-		"kiro":         "",
-		"cursor":       "",
-		"gemini":       "",
-		"codebuddy":    "",
-		"codebuddy-cn": "",
-		"qoder":        "",
-		"trae":         "",
-		"zed":          "",
-		"workbuddy":    "",
+		"opencode":    "",
+		"antigravity": "",
+		"codex":       "",
+		"vscode":      "",
+		"kiro":        "",
+		"gemini":      "",
 	}
 	return CockpitGeneralSettings{
 		Language:           "zh-CN",
 		Theme:              "system",
+		AccentTheme:        "blue",
 		CloseBehavior:      "ask",
 		PrivacyMode:        false,
 		AutoRefreshMinutes: 5,
@@ -358,6 +224,9 @@ func NormalizeCockpitGeneralSettings(in CockpitGeneralSettings) CockpitGeneralSe
 	}
 	if in.Theme != "" {
 		normalized.Theme = in.Theme
+	}
+	if in.AccentTheme != "" {
+		normalized.AccentTheme = in.AccentTheme
 	}
 	if in.CloseBehavior != "" {
 		normalized.CloseBehavior = in.CloseBehavior

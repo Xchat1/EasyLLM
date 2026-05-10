@@ -30,7 +30,7 @@ func TestSetActiveAccountKeepsExistingActiveWhenTargetMissing(t *testing.T) {
 	store := newCockpitTestStorage(t)
 	active := models.PlatformAccount{
 		ID:       "existing",
-		Platform: "cursor",
+		Platform: "gemini",
 		Email:    "active@example.com",
 		Active:   true,
 		Status:   "active",
@@ -39,12 +39,12 @@ func TestSetActiveAccountKeepsExistingActiveWhenTargetMissing(t *testing.T) {
 		t.Fatalf("seed active account: %v", err)
 	}
 
-	err := store.SetActiveAccount("cursor", "missing")
+	err := store.SetActiveAccount("gemini", "missing")
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}
 
-	current, err := store.GetActiveAccount("cursor")
+	current, err := store.GetActiveAccount("gemini")
 	if err != nil {
 		t.Fatalf("load active account: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestSetActiveAccountKeepsExistingActiveWhenTargetMissing(t *testing.T) {
 
 func TestDeleteAccountReturnsNotFoundForMissingRecord(t *testing.T) {
 	store := newCockpitTestStorage(t)
-	err := store.DeleteAccount("cursor", "missing")
+	err := store.DeleteAccount("gemini", "missing")
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -16,6 +18,13 @@ const (
 	codexAPIServiceDefaultWireAPI  = "responses"
 	codexAPIServiceRequiresAuthKey = "requires_openai_auth"
 )
+
+type CodexLaunchResult struct {
+	RunningBefore bool   `json:"running_before"`
+	Restarted     bool   `json:"restarted"`
+	Started       bool   `json:"started"`
+	Command       string `json:"command"`
+}
 
 // SwitchCodexOAuthAccount writes OAuth tokens to ~/.codex/auth.json
 // and cleans up API-related fields from ~/.codex/config.toml
@@ -163,6 +172,60 @@ func SwitchCodexAPIService(baseURL, apiKey string) error {
 		return fmt.Errorf("failed to write config.toml: %w", err)
 	}
 	return nil
+}
+
+// RestartCodexApp starts Codex after config injection. On macOS it restarts
+// Codex.app so a running UI picks up the newly written ~/.codex config.
+func RestartCodexApp() (*CodexLaunchResult, error) {
+	if runtime.GOOS == "darwin" {
+		return restartCodexDarwin()
+	}
+
+	path, err := exec.LookPath("codex")
+	if err != nil {
+		return nil, fmt.Errorf("Codex executable not found: %w", err)
+	}
+	cmd := exec.Command(path)
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start Codex: %w", err)
+	}
+	return &CodexLaunchResult{Started: true, Command: path}, nil
+}
+
+func restartCodexDarwin() (*CodexLaunchResult, error) {
+	result := &CodexLaunchResult{Command: "open -a Codex"}
+	running := codexDarwinIsRunning()
+	result.RunningBefore = running
+	result.Restarted = running
+
+	if running {
+		_ = exec.Command("/usr/bin/osascript", "-e", `tell application "Codex" to quit`).Run()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) && codexDarwinIsRunning() {
+			time.Sleep(250 * time.Millisecond)
+		}
+		if codexDarwinIsRunning() {
+			_ = exec.Command("/usr/bin/pkill", "-x", "Codex").Run()
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	if err := exec.Command("/usr/bin/open", "-a", "Codex").Run(); err != nil {
+		return nil, fmt.Errorf("failed to start Codex.app: %w", err)
+	}
+	result.Started = true
+	return result, nil
+}
+
+func codexDarwinIsRunning() bool {
+	out, err := exec.Command("/usr/bin/osascript", "-e", `application "Codex" is running`).Output()
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(string(out)), "true")
 }
 
 // RemoveCodexAPIService removes the EasyLLM managed provider from Codex CLI config.

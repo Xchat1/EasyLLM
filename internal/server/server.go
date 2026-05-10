@@ -25,17 +25,16 @@ import (
 
 // App holds all application dependencies
 type App struct {
-	cfg            *config.Config
-	auth           *handlers.AuthHandler
-	openai         *handlers.OpenAIHandler
-	cursor         *handlers.CursorHandler
-	antigravity    *handlers.AntigravityHandler
-	settings       *handlers.SettingsHandler
-	cockpit        *handlers.CockpitHandler
-	codexProxy     *proxy.CodexProxy
-	sessionScanner *proxy.SessionScanner
-	openaiStore    *storage.OpenAIStorage
-	router         *gin.Engine
+	cfg         *config.Config
+	auth        *handlers.AuthHandler
+	openai      *handlers.OpenAIHandler
+	antigravity *handlers.AntigravityHandler
+	settings    *handlers.SettingsHandler
+	cockpit     *handlers.CockpitHandler
+	platformExt *handlers.PlatformExtHandler
+	codexProxy  *proxy.CodexProxy
+	openaiStore *storage.OpenAIStorage
+	router      *gin.Engine
 }
 
 // New creates a new App with all dependencies initialized
@@ -53,7 +52,6 @@ func New(cfg *config.Config) (*App, error) {
 	// Initialize storages
 	openaiStore := storage.NewOpenAIStorage(db)
 	codexStore := storage.NewCodexStorage(db)
-	cursorStore := storage.NewCursorStorage(db)
 	antigravityStore := storage.NewAntigravityStorage(db)
 	cockpitStore := storage.NewCockpitStorage(db)
 	if err := cockpitStore.MigrateLegacyPlatformAccounts(); err != nil {
@@ -72,21 +70,17 @@ func New(cfg *config.Config) (*App, error) {
 		codexProxy.SetEnabled(false)
 	}
 
-	// Session scanner: imports Codex CLI session logs into dashboard
-	sessionScanner := proxy.NewSessionScanner(codexStore)
-
 	// Build handlers
 	app := &App{
-		cfg:            cfg,
-		auth:           handlers.NewAuthHandler(),
-		openai:         handlers.NewOpenAIHandler(openaiStore, codexStore),
-		cursor:         handlers.NewCursorHandler(cursorStore),
-		antigravity:    handlers.NewAntigravityHandler(antigravityStore),
-		settings:       handlers.NewSettingsHandler(),
-		cockpit:        handlers.NewCockpitHandler(cockpitStore, openaiStore, codexStore),
-		codexProxy:     codexProxy,
-		sessionScanner: sessionScanner,
-		openaiStore:    openaiStore,
+		cfg:         cfg,
+		auth:        handlers.NewAuthHandler(),
+		openai:      handlers.NewOpenAIHandler(openaiStore, codexStore),
+		antigravity: handlers.NewAntigravityHandler(antigravityStore),
+		settings:    handlers.NewSettingsHandler(),
+		cockpit:     handlers.NewCockpitHandler(cockpitStore, openaiStore, codexStore),
+		platformExt: handlers.NewPlatformExtHandler(cockpitStore, dataDir),
+		codexProxy:  codexProxy,
+		openaiStore: openaiStore,
 	}
 
 	// Initialize default password if configured
@@ -140,10 +134,10 @@ func (a *App) setupRouter() {
 
 	a.auth.RegisterProtectedRoutes(protected)
 	a.openai.RegisterRoutes(protected)
-	a.cursor.RegisterRoutes(protected)
 	a.antigravity.RegisterRoutes(protected)
 	a.settings.RegisterRoutes(protected)
 	a.cockpit.RegisterRoutes(protected)
+	a.platformExt.RegisterRoutes(protected)
 
 	// Legacy API endpoint (compatible with original ATM API)
 	legacy := r.Group("/api")
@@ -406,11 +400,6 @@ func (a *App) Run() error {
 		WriteTimeout: 120 * time.Second,
 	}
 
-	// Start session scanner
-	if a.sessionScanner != nil {
-		a.sessionScanner.Start()
-	}
-
 	// Start server in goroutine
 	go func() {
 		log.Printf("EasyLLM server started on http://%s", addr)
@@ -427,9 +416,6 @@ func (a *App) Run() error {
 	<-quit
 
 	log.Println("Shutting down server...")
-	if a.sessionScanner != nil {
-		a.sessionScanner.Stop()
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -465,9 +451,6 @@ func loadPersistedSettings(cfg *config.Config) {
 		cfg.Proxy.Password = v
 	}
 
-	if v, ok := settings["log_enabled"]; ok {
-		cfg.Log.Enabled = v == "true"
-	}
 	if v, ok := settings["ip_blacklist_enabled"]; ok {
 		cfg.IPBlacklist.Enabled = v == "true"
 	}
@@ -491,12 +474,7 @@ func parseInt(s string) int {
 }
 
 func conditionalLogger(cfg *config.Config) gin.HandlerFunc {
-	ginLogger := gin.Logger()
 	return func(c *gin.Context) {
-		if cfg.Log.Enabled {
-			ginLogger(c)
-			return
-		}
 		c.Next()
 	}
 }

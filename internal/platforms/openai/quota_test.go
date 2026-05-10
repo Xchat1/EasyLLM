@@ -6,7 +6,9 @@ import (
 )
 
 func TestParseQuotaFromUsageClassifiesWeeklyPrimaryWindow(t *testing.T) {
+	plan := "chatgpt_plus"
 	usage := &usageResponse{
+		PlanType: &plan,
 		RateLimit: &rateLimitInfo{
 			PrimaryWindow: &windowInfo{
 				UsedPercent:        intPtr(12),
@@ -30,6 +32,9 @@ func TestParseQuotaFromUsageClassifiesWeeklyPrimaryWindow(t *testing.T) {
 	if info.Codex5hUsedPercent != nil {
 		t.Fatalf("expected 5h slot to stay empty when response only contains weekly windows, got %#v", info.Codex5hUsedPercent)
 	}
+	if info.PlanType == nil || *info.PlanType != "plus" {
+		t.Fatalf("expected plus plan to be normalized from usage payload, got %#v", info.PlanType)
+	}
 }
 
 func TestParseCodexHeadersClassifiesSingleWeeklyPrimaryWindow(t *testing.T) {
@@ -49,6 +54,7 @@ func TestParseCodexHeadersClassifiesSingleWeeklyPrimaryWindow(t *testing.T) {
 }
 
 func TestMergeQuotaInfoFillsMissing5hFromCodexHeaders(t *testing.T) {
+	plan := "plus"
 	usageInfo := &QuotaInfo{
 		Codex7dUsedPercent:   floatPtr(18),
 		Codex7dResetSeconds:  int64Ptr(603188),
@@ -57,6 +63,7 @@ func TestMergeQuotaInfoFillsMissing5hFromCodexHeaders(t *testing.T) {
 		Used:                 18,
 		Remaining:            82,
 		ResetAt:              "6d23h",
+		PlanType:             &plan,
 	}
 	headerInfo := &QuotaInfo{
 		Codex5hUsedPercent:   floatPtr(64),
@@ -70,6 +77,9 @@ func TestMergeQuotaInfoFillsMissing5hFromCodexHeaders(t *testing.T) {
 	}
 	if merged.Codex7dUsedPercent == nil || *merged.Codex7dUsedPercent != 18 {
 		t.Fatalf("expected 7d quota to stay from usage payload, got %#v", merged.Codex7dUsedPercent)
+	}
+	if merged.PlanType == nil || *merged.PlanType != "plus" {
+		t.Fatalf("expected plan to stay from usage payload, got %#v", merged.PlanType)
 	}
 }
 

@@ -7,7 +7,7 @@
       <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
         <div class="space-y-3 max-w-3xl">
           <div class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
-            <span>{{ platform.icon }}</span>
+            <PlatformIcon :platform="platform" size="xs" />
             <span>{{ platform.category }}</span>
             <span class="text-gray-500">/</span>
             <span>{{ platform.managementMode === 'legacy' ? 'legacy flow' : '通用流程' }}</span>
@@ -99,6 +99,7 @@
             />
             <button class="btn btn-secondary" @click="exportAccounts">导出 JSON</button>
             <button class="btn btn-secondary" @click="openImportModal">导入 JSON</button>
+            <button v-if="supportsOAuth" class="btn btn-secondary" @click="openOAuthModal">OAuth 授权</button>
             <button class="btn btn-primary" @click="openAccountModal()">新增账号</button>
           </div>
         </div>
@@ -336,6 +337,7 @@
           />
         </div>
         <div class="modal-footer">
+          <button class="btn btn-secondary mr-auto" @click="downloadImportExample">下载示例</button>
           <button class="btn btn-secondary" @click="closeImportModal">取消</button>
           <button class="btn btn-primary" @click="importAccounts">开始导入</button>
         </div>
@@ -421,6 +423,80 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" @click="closeAccountModal">取消</button>
           <button class="btn btn-primary" @click="saveAccount">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- OAuth Modal -->
+    <div v-if="showOAuthModal" class="modal-overlay" @click.self="closeOAuthModal">
+      <div class="modal-content max-w-md">
+        <div class="modal-header">
+          <h3 class="text-white">{{ platform.label }} OAuth 授权</h3>
+          <button class="text-gray-500 hover:text-white" @click="closeOAuthModal">✕</button>
+        </div>
+        <div class="modal-body space-y-4">
+          <div v-if="oauthState.error" class="rounded-lg bg-red-500/10 border border-red-500/30 p-3 text-sm text-red-300">
+            {{ oauthState.error }}
+          </div>
+
+          <div v-if="!oauthState.authUrl && !oauthState.loading">
+            <p class="text-sm text-gray-400 mb-4">点击下方按钮开始 OAuth 授权流程</p>
+            <button class="btn btn-primary w-full" @click="startOAuth">开始授权</button>
+          </div>
+
+          <div v-else-if="oauthState.loading && !oauthState.authUrl">
+            <div class="flex items-center justify-center py-8">
+              <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+              <span class="ml-3 text-gray-400">准备授权...</span>
+            </div>
+          </div>
+
+          <div v-else-if="oauthState.authUrl" class="space-y-4">
+            <div class="rounded-lg bg-blue-500/10 border border-blue-500/30 p-3 text-sm text-blue-300">
+              请在浏览器中完成授权，完成后会自动添加账号。若浏览器没有自动跳回本机端口，可粘贴回调地址继续。
+            </div>
+
+            <div>
+              <label class="label">授权链接</label>
+              <div class="flex flex-wrap gap-2">
+                <input readonly :value="oauthState.authUrl" class="input min-w-0 flex-1 text-xs font-mono" />
+                <button @click="copyAuthUrl" class="btn btn-secondary text-xs px-3">复制</button>
+                <button @click="openAuthUrl" class="btn btn-secondary text-xs px-3">打开</button>
+              </div>
+            </div>
+
+            <!-- Device Code for GitHub Copilot -->
+            <div v-if="oauthState.userCode">
+              <label class="label">设备码（需要在授权页面输入）</label>
+              <div class="flex gap-2">
+                <input readonly :value="oauthState.userCode" class="input flex-1 text-center text-2xl font-bold tracking-widest" />
+                <button @click="copyUserCode" class="btn btn-secondary text-xs px-3">复制</button>
+              </div>
+            </div>
+
+            <div v-if="oauthState.manualCallback" class="space-y-2">
+              <label class="label">手动回调地址</label>
+              <div class="flex flex-wrap gap-2">
+                <input v-model="oauthState.callbackUrl" class="input min-w-0 flex-1 text-xs font-mono" placeholder="粘贴完整回调地址或 ?code=...&state=..." />
+                <button @click="submitOAuthCallback" :disabled="oauthState.callbackSubmitting || !oauthState.callbackUrl.trim()" class="btn btn-secondary text-xs px-3">
+                  {{ oauthState.callbackSubmitting ? '提交中...' : '提交' }}
+                </button>
+              </div>
+              <p v-if="oauthState.callbackHint" class="text-xs text-gray-500">{{ oauthState.callbackHint }}</p>
+            </div>
+
+            <div v-if="oauthState.waiting" class="flex items-center justify-center py-4">
+              <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
+              <span class="ml-3 text-gray-400">等待授权完成...</span>
+            </div>
+
+            <div v-if="oauthState.success" class="rounded-lg bg-green-500/10 border border-green-500/30 p-3 text-sm text-green-300">
+              ✓ 授权成功！账号已添加
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="closeOAuthModal">{{ oauthState.success ? '关闭' : '取消' }}</button>
         </div>
       </div>
     </div>
@@ -555,6 +631,7 @@
 <script setup>
 import { computed, inject, ref, watch } from 'vue'
 import { cockpitAPI } from '@/api'
+import PlatformIcon from '@/components/PlatformIcon.vue'
 import { getPlatformMeta } from '@/lib/platforms'
 
 const props = defineProps({
@@ -582,6 +659,7 @@ const showAccountModal = ref(false)
 const showInstanceModal = ref(false)
 const showWakeupModal = ref(false)
 const showImportModal = ref(false)
+const showOAuthModal = ref(false)
 
 const editingAccount = ref(null)
 const editingInstance = ref(null)
@@ -591,6 +669,26 @@ const accountForm = ref(createAccountForm())
 const instanceForm = ref(createInstanceForm())
 const wakeupForm = ref(createWakeupForm(props.platformId))
 const importJson = ref('')
+
+const oauthState = ref({
+  loading: false,
+  authUrl: '',
+  userCode: '',
+  deviceCode: '',
+  loginId: '',
+  callbackUrl: '',
+  callbackSubmitting: false,
+  manualCallback: false,
+  callbackHint: '',
+  waiting: false,
+  success: false,
+  error: '',
+})
+
+const supportsOAuth = computed(() => {
+  // Platforms that support OAuth
+  return ['antigravity', 'kiro', 'github-copilot', 'gemini'].includes(props.platformId)
+})
 
 const activeAccount = computed(() => accounts.value.find((item) => item.active))
 const runningInstances = computed(() => instances.value.filter((item) => item.state === 'running'))
@@ -772,6 +870,12 @@ async function importAccounts() {
   }
 }
 
+function downloadImportExample() {
+  const payload = platformImportExamples[props.platformId] || platformImportExamples.default
+  downloadJSON(payload, `${props.platformId}-accounts-example.json`)
+  notify?.('示例 JSON 已下载', 'success')
+}
+
 async function exportAccounts() {
   try {
     const payload = await cockpitAPI.exportPlatformAccounts(props.platformId)
@@ -791,6 +895,352 @@ async function deleteAccount(account) {
   } catch (error) {
     notify?.(error.message || '删除失败', 'error')
   }
+}
+
+// OAuth functions
+function openOAuthModal() {
+  showOAuthModal.value = true
+  resetOAuthState()
+}
+
+function closeOAuthModal() {
+  const pendingOAuth = {
+    platformId: props.platformId,
+    loginId: oauthState.value.loginId,
+    deviceCode: oauthState.value.deviceCode,
+    success: oauthState.value.success,
+  }
+  showOAuthModal.value = false
+  if (!pendingOAuth.success && (pendingOAuth.loginId || pendingOAuth.deviceCode)) {
+    cancelOAuth(pendingOAuth)
+  }
+  resetOAuthState()
+}
+
+function resetOAuthState() {
+  oauthState.value = {
+    loading: false,
+    authUrl: '',
+    userCode: '',
+    deviceCode: '',
+    loginId: '',
+    callbackUrl: '',
+    callbackSubmitting: false,
+    manualCallback: false,
+    callbackHint: '',
+    waiting: false,
+    success: false,
+    error: '',
+  }
+}
+
+async function startOAuth() {
+  oauthState.value.loading = true
+  oauthState.value.error = ''
+
+  try {
+    if (props.platformId === 'antigravity') {
+      await startAntigravityOAuth()
+    } else if (props.platformId === 'kiro') {
+      await startKiroOAuth()
+    } else if (props.platformId === 'github-copilot') {
+      await startGitHubCopilotOAuth()
+    } else if (props.platformId === 'gemini') {
+      await startGeminiOAuth()
+    } else {
+      throw new Error('当前平台暂不支持 OAuth')
+    }
+  } catch (error) {
+    oauthState.value.loading = false
+    oauthState.value.error = error.message || '启动 OAuth 失败'
+    notify?.(oauthState.value.error, 'error')
+  }
+}
+
+async function startAntigravityOAuth() {
+  const { antigravityOAuthAPI } = await import('@/api')
+  const result = await antigravityOAuthAPI.startLogin()
+
+  oauthState.value.authUrl = result.auth_url || result.verification_uri
+  oauthState.value.loginId = result.login_id
+  oauthState.value.loading = false
+  oauthState.value.waiting = true
+  oauthState.value.manualCallback = true
+  oauthState.value.callbackHint = result.callback_url ? `回调监听地址：${result.callback_url}` : ''
+
+  if (oauthState.value.authUrl) {
+    window.open(oauthState.value.authUrl, '_blank')
+  }
+
+  completeAntigravityOAuth()
+}
+
+async function startKiroOAuth() {
+  const { kiroOAuthAPI } = await import('@/api')
+  const result = await kiroOAuthAPI.startLogin()
+
+  oauthState.value.authUrl = result.verification_uri_complete || result.verification_uri
+  oauthState.value.loginId = result.login_id
+  oauthState.value.loading = false
+  oauthState.value.waiting = true
+
+  // Auto open browser
+  if (oauthState.value.authUrl) {
+    window.open(oauthState.value.authUrl, '_blank')
+  }
+
+  // Start polling for completion
+  completeKiroOAuth()
+}
+
+async function startGitHubCopilotOAuth() {
+  const { githubCopilotOAuthAPI } = await import('@/api')
+  const result = await githubCopilotOAuthAPI.startLogin()
+
+  oauthState.value.authUrl = result.verification_uri_complete || result.verification_uri
+  oauthState.value.userCode = result.user_code
+  oauthState.value.deviceCode = result.device_code
+  oauthState.value.loading = false
+  oauthState.value.waiting = true
+
+  // Auto open browser
+  if (oauthState.value.authUrl) {
+    window.open(oauthState.value.authUrl, '_blank')
+  }
+
+  // Start polling for completion
+  pollGitHubCopilotOAuth()
+}
+
+async function startGeminiOAuth() {
+  const { geminiOAuthAPI } = await import('@/api')
+  const result = await geminiOAuthAPI.startLogin()
+
+  oauthState.value.authUrl = result.auth_url || result.verification_uri
+  oauthState.value.loginId = result.login_id
+  oauthState.value.loading = false
+  oauthState.value.waiting = true
+  oauthState.value.manualCallback = true
+  oauthState.value.callbackHint = result.callback_url ? `回调监听地址：${result.callback_url}` : ''
+
+  // Auto open browser
+  if (oauthState.value.authUrl) {
+    window.open(oauthState.value.authUrl, '_blank')
+  }
+
+  // Start polling for completion
+  completeGeminiOAuth()
+}
+
+async function completeAntigravityOAuth() {
+  if (!oauthState.value.loginId) return
+
+  try {
+    const { antigravityOAuthAPI } = await import('@/api')
+    await antigravityOAuthAPI.completeLogin(oauthState.value.loginId, 600)
+
+    oauthState.value.waiting = false
+    oauthState.value.success = true
+    notify?.('OAuth 授权成功，账号已添加', 'success')
+
+    await loadData()
+
+    setTimeout(() => {
+      if (showOAuthModal.value) {
+        closeOAuthModal()
+      }
+    }, 2000)
+  } catch (error) {
+    oauthState.value.waiting = false
+    oauthState.value.error = error.message || 'OAuth 授权失败'
+    notify?.(oauthState.value.error, 'error')
+  }
+}
+
+async function completeKiroOAuth() {
+  if (!oauthState.value.loginId) return
+
+  try {
+    const { kiroOAuthAPI } = await import('@/api')
+    await kiroOAuthAPI.completeLogin(oauthState.value.loginId, 300)
+
+    oauthState.value.waiting = false
+    oauthState.value.success = true
+    notify?.('OAuth 授权成功，账号已添加', 'success')
+
+    await loadData()
+
+    setTimeout(() => {
+      if (showOAuthModal.value) {
+        closeOAuthModal()
+      }
+    }, 2000)
+  } catch (error) {
+    oauthState.value.waiting = false
+    oauthState.value.error = error.message || 'OAuth 授权失败'
+    notify?.(oauthState.value.error, 'error')
+  }
+}
+
+async function completeGeminiOAuth() {
+  if (!oauthState.value.loginId) return
+
+  try {
+    const { geminiOAuthAPI } = await import('@/api')
+    await geminiOAuthAPI.completeLogin(oauthState.value.loginId, 300)
+
+    oauthState.value.waiting = false
+    oauthState.value.success = true
+    notify?.('OAuth 授权成功，账号已添加', 'success')
+
+    await loadData()
+
+    setTimeout(() => {
+      if (showOAuthModal.value) {
+        closeOAuthModal()
+      }
+    }, 2000)
+  } catch (error) {
+    oauthState.value.waiting = false
+    oauthState.value.error = error.message || 'OAuth 授权失败'
+    notify?.(oauthState.value.error, 'error')
+  }
+}
+
+async function pollGitHubCopilotOAuth() {
+  if (!oauthState.value.deviceCode) return
+
+  const maxAttempts = 60 // 5 minutes with 5s interval
+  let attempts = 0
+
+  const poll = async () => {
+    if (!showOAuthModal.value || !oauthState.value.waiting) return
+
+    try {
+      const { githubCopilotOAuthAPI } = await import('@/api')
+      const result = await githubCopilotOAuthAPI.pollToken(oauthState.value.deviceCode)
+      if (result?.status === 'pending') {
+        attempts++
+        if (attempts >= maxAttempts) {
+          oauthState.value.waiting = false
+          oauthState.value.error = '授权超时，请重试'
+          notify?.(oauthState.value.error, 'error')
+          return
+        }
+        setTimeout(poll, 5000)
+        return
+      }
+
+      oauthState.value.waiting = false
+      oauthState.value.success = true
+      notify?.('OAuth 授权成功，账号已添加', 'success')
+
+      await loadData()
+
+      setTimeout(() => {
+        if (showOAuthModal.value) {
+          closeOAuthModal()
+        }
+      }, 2000)
+    } catch (error) {
+      attempts++
+      if (attempts >= maxAttempts) {
+        oauthState.value.waiting = false
+        oauthState.value.error = '授权超时，请重试'
+        notify?.(oauthState.value.error, 'error')
+        return
+      }
+
+      // Continue polling if authorization_pending
+      if (error.message?.includes('pending') || error.message?.includes('等待')) {
+        setTimeout(poll, 5000)
+      } else {
+        oauthState.value.waiting = false
+        oauthState.value.error = error.message || 'OAuth 授权失败'
+        notify?.(oauthState.value.error, 'error')
+      }
+    }
+  }
+
+  poll()
+}
+
+async function completeOAuth() {
+  // Deprecated - use platform-specific methods
+  if (props.platformId === 'antigravity') {
+    await completeAntigravityOAuth()
+  } else if (props.platformId === 'kiro') {
+    await completeKiroOAuth()
+  } else if (props.platformId === 'github-copilot') {
+    await pollGitHubCopilotOAuth()
+  } else if (props.platformId === 'gemini') {
+    await completeGeminiOAuth()
+  }
+}
+
+async function cancelOAuth(pendingOAuth = null) {
+  const platformId = pendingOAuth?.platformId || props.platformId
+  const loginId = pendingOAuth?.loginId || oauthState.value.loginId
+
+  try {
+    if (platformId === 'antigravity' && loginId) {
+      const { antigravityOAuthAPI } = await import('@/api')
+      await antigravityOAuthAPI.cancelLogin(loginId)
+    } else if (platformId === 'kiro' && loginId) {
+      const { kiroOAuthAPI } = await import('@/api')
+      await kiroOAuthAPI.cancelLogin(loginId)
+    } else if (platformId === 'github-copilot') {
+      const { githubCopilotOAuthAPI } = await import('@/api')
+      await githubCopilotOAuthAPI.cancelLogin()
+    } else if (platformId === 'gemini' && loginId) {
+      const { geminiOAuthAPI } = await import('@/api')
+      await geminiOAuthAPI.cancelLogin(loginId)
+    }
+  } catch (error) {
+    console.error('Cancel OAuth failed:', error)
+  }
+}
+
+async function submitOAuthCallback() {
+  const callbackUrl = oauthState.value.callbackUrl.trim()
+  if (!callbackUrl || !oauthState.value.loginId) return
+
+  oauthState.value.callbackSubmitting = true
+  oauthState.value.error = ''
+  try {
+    if (props.platformId === 'antigravity') {
+      const { antigravityOAuthAPI } = await import('@/api')
+      await antigravityOAuthAPI.submitCallback(oauthState.value.loginId, callbackUrl)
+    } else if (props.platformId === 'gemini') {
+      const { geminiOAuthAPI } = await import('@/api')
+      await geminiOAuthAPI.submitCallback(oauthState.value.loginId, callbackUrl)
+    } else {
+      throw new Error('当前平台不支持手动回调')
+    }
+    notify?.('回调地址已提交，正在交换令牌', 'success')
+  } catch (error) {
+    oauthState.value.error = error.message || '提交回调失败'
+    notify?.(oauthState.value.error, 'error')
+  } finally {
+    oauthState.value.callbackSubmitting = false
+  }
+}
+
+function copyAuthUrl() {
+  if (!oauthState.value.authUrl) return
+  navigator.clipboard.writeText(oauthState.value.authUrl)
+  notify?.('授权链接已复制', 'success')
+}
+
+function copyUserCode() {
+  if (!oauthState.value.userCode) return
+  navigator.clipboard.writeText(oauthState.value.userCode)
+  notify?.('设备码已复制', 'success')
+}
+
+function openAuthUrl() {
+  if (!oauthState.value.authUrl) return
+  window.open(oauthState.value.authUrl, '_blank')
 }
 
 function openInstanceModal(instance = null) {
@@ -967,6 +1417,63 @@ function scheduleText(task) {
   const type = task.schedule_type || 'daily'
   const value = task.schedule_value || '未定义'
   return `${type} · ${value}`
+}
+
+const platformImportExamples = {
+  antigravity: [
+    {
+      email: 'antigravity-user@example.com',
+      display_name: 'Antigravity User',
+      access_token: 'ya29.access_token_here',
+      refresh_token: 'refresh_token_here',
+      plan: 'pro',
+      active: true,
+      metadata_json: '{"project_id":"your-project-id","auth_source":"manual"}',
+    },
+  ],
+  'github-copilot': [
+    {
+      email: 'github-user@example.com',
+      display_name: 'GitHub User',
+      access_token: 'gho_github_access_token_here',
+      plan: 'copilot',
+      active: true,
+      metadata_json: '{"github_login":"your-github-login","github_access_token":"gho_github_access_token_here","auth_source":"manual"}',
+    },
+  ],
+  kiro: [
+    {
+      email: 'kiro-user@example.com',
+      display_name: 'Kiro User',
+      access_token: 'kiro_access_token_here',
+      refresh_token: 'kiro_refresh_token_here',
+      plan: 'builder',
+      active: true,
+      metadata_json: '{"profile_arn":"arn:aws:sso:::profile/your-profile","idc_region":"us-east-1","auth_source":"manual"}',
+    },
+  ],
+  gemini: [
+    {
+      email: 'gemini-user@gmail.com',
+      display_name: 'Gemini User',
+      access_token: 'ya29.gemini_access_token_here',
+      refresh_token: 'gemini_refresh_token_here',
+      plan: 'free-tier',
+      active: true,
+      metadata_json: '{"project_id":"your-google-cloud-project","auth_source":"manual"}',
+    },
+  ],
+  default: [
+    {
+      email: 'user@example.com',
+      display_name: 'Example User',
+      access_token: 'access_token_here',
+      refresh_token: 'refresh_token_here',
+      plan: 'pro',
+      active: true,
+      metadata_json: '{"auth_source":"manual"}',
+    },
+  ],
 }
 
 function downloadJSON(payload, filename) {

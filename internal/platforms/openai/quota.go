@@ -34,6 +34,7 @@ type QuotaInfo struct {
 	Codex7dResetSeconds  *int64   // 7d reset countdown (seconds)
 	Codex7dWindowMinutes *int64   // 7d window duration (minutes)
 
+	PlanType    *string
 	IsForbidden bool // 402/403 response
 }
 
@@ -203,6 +204,11 @@ func fetchCodexHeadersQuota(client *http.Client, accessToken, chatgptAccountID s
 // primary_window or secondary_window, so we classify by window duration first.
 func parseQuotaFromUsage(usage *usageResponse) *QuotaInfo {
 	info := &QuotaInfo{}
+	if usage != nil && usage.PlanType != nil {
+		if plan := NormalizePlanType(*usage.PlanType); plan != "" {
+			info.PlanType = &plan
+		}
+	}
 
 	applyWindow := func(w *windowInfo) {
 		if w == nil {
@@ -271,9 +277,41 @@ func mergeQuotaInfo(base, extra *QuotaInfo) *QuotaInfo {
 	if base.ResetAt == "" {
 		base.ResetAt = extra.ResetAt
 	}
+	if base.PlanType == nil {
+		base.PlanType = extra.PlanType
+	}
 	base.IsForbidden = base.IsForbidden || extra.IsForbidden
 
 	return base
+}
+
+func NormalizePlanType(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return ""
+	}
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	normalized = strings.Join(strings.Fields(normalized), "-")
+	switch {
+	case strings.Contains(normalized, "team"):
+		return "team"
+	case strings.Contains(normalized, "enterprise"):
+		return "enterprise"
+	case strings.Contains(normalized, "business"):
+		return "business"
+	case strings.Contains(normalized, "pro-max"), strings.Contains(normalized, "promax"):
+		return "promax"
+	case strings.Contains(normalized, "pro-lite"), strings.Contains(normalized, "prolite"):
+		return "prolite"
+	case normalized == "pro" || strings.Contains(normalized, "chatgpt-pro"):
+		return "pro"
+	case strings.Contains(normalized, "plus"):
+		return "plus"
+	case strings.Contains(normalized, "free"):
+		return "free"
+	default:
+		return normalized
+	}
 }
 
 func assignQuotaWindow(info *QuotaInfo, used *float64, reset *int64, minutes *int64) {

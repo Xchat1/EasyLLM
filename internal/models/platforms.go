@@ -5,34 +5,6 @@ import "time"
 const AppVersion = "2.0.0"
 const AppGitRepo = "https://github.com/libaxuan/EasyLLM"
 
-// CursorAccount represents a Cursor IDE account
-type CursorAccount struct {
-	ID          string    `json:"id" gorm:"primaryKey"`
-	Email       string    `json:"email"`
-	AccessToken string    `json:"access_token"`
-	CookieToken *string   `json:"cookie_token,omitempty"`
-	Name        *string   `json:"name,omitempty"`
-	Plan        *string   `json:"plan,omitempty"`
-	Active      bool      `json:"active" gorm:"default:false"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	TagName     *string   `json:"tag_name,omitempty"`
-	TagColor    *string   `json:"tag_color,omitempty"`
-}
-
-// WindsurfAccount represents a Windsurf IDE account
-type WindsurfAccount struct {
-	ID          string    `json:"id" gorm:"primaryKey"`
-	Email       string    `json:"email"`
-	AccessToken string    `json:"access_token"`
-	Name        *string   `json:"name,omitempty"`
-	Active      bool      `json:"active" gorm:"default:false"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	TagName     *string   `json:"tag_name,omitempty"`
-	TagColor    *string   `json:"tag_color,omitempty"`
-}
-
 // AugmentToken 占位模型，用于 GORM 迁移与既有 augment 表兼容（字段随 AutoMigrate 补齐）.
 type AugmentToken struct {
 	ID        string    `json:"id" gorm:"primaryKey"`

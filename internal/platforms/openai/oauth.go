@@ -40,7 +40,10 @@ type IDTokenClaims struct {
 
 type OpenAIAuthClaims struct {
 	ChatGPTAccountID *string   `json:"chatgpt_account_id"`
+	AccountID        *string   `json:"account_id"`
 	ChatGPTUserID    *string   `json:"chatgpt_user_id"`
+	ChatGPTPlanType  *string   `json:"chatgpt_plan_type"`
+	OrganizationID   *string   `json:"organization_id"`
 	Organizations    []OrgInfo `json:"organizations"`
 }
 
@@ -55,6 +58,7 @@ type UserInfo struct {
 	ChatGPTAccountID *string
 	ChatGPTUserID    *string
 	OrganizationID   *string
+	PlanType         *string
 }
 
 // GenerateState generates a random hex state string
@@ -203,14 +207,18 @@ func ParseIDToken(idToken string) *UserInfo {
 	}
 
 	if claims.OpenAIAuth != nil {
-		info.ChatGPTAccountID = claims.OpenAIAuth.ChatGPTAccountID
+		info.ChatGPTAccountID = firstNonEmptyStringPtr(claims.OpenAIAuth.ChatGPTAccountID, claims.OpenAIAuth.AccountID)
 		info.ChatGPTUserID = claims.OpenAIAuth.ChatGPTUserID
+		info.PlanType = claims.OpenAIAuth.ChatGPTPlanType
+		info.OrganizationID = firstNonEmptyStringPtr(claims.OpenAIAuth.OrganizationID)
 
 		// Find default org
-		for _, org := range claims.OpenAIAuth.Organizations {
-			if org.IsDefault != nil && *org.IsDefault {
-				info.OrganizationID = org.ID
-				break
+		if info.OrganizationID == nil {
+			for _, org := range claims.OpenAIAuth.Organizations {
+				if org.IsDefault != nil && *org.IsDefault {
+					info.OrganizationID = org.ID
+					break
+				}
 			}
 		}
 		if info.OrganizationID == nil && len(claims.OpenAIAuth.Organizations) > 0 {
@@ -219,6 +227,15 @@ func ParseIDToken(idToken string) *UserInfo {
 	}
 
 	return info
+}
+
+func firstNonEmptyStringPtr(values ...*string) *string {
+	for _, value := range values {
+		if value != nil && strings.TrimSpace(*value) != "" {
+			return value
+		}
+	}
+	return nil
 }
 
 // ExtractOpenAIAuthJSON extracts the openai auth claims as JSON string

@@ -96,7 +96,6 @@ func (h *SettingsHandler) SystemInfo(c *gin.Context) {
 		"server_port":          cfg.Server.Port,
 		"server_host":          cfg.Server.Host,
 		"proxy_enabled":        cfg.Proxy.Enabled,
-		"log_enabled":          cfg.Log.Enabled,
 		"ip_blacklist_enabled": cfg.IPBlacklist.Enabled,
 		"debug":                cfg.App.Debug,
 		"accounts":             counts,
@@ -124,7 +123,6 @@ func getAccountCounts() gin.H {
 	counts := gin.H{}
 	tables := map[string]string{
 		"openai":      "open_ai_accounts",
-		"cursor":      "cursor_accounts",
 		"antigravity": "antigravity_accounts",
 		"codex_pool":  "codex_accounts",
 		"instances":   "platform_instances",
@@ -148,11 +146,11 @@ func getAccountCounts() gin.H {
 }
 
 func (h *SettingsHandler) GetAPIServerStatus(c *gin.Context) {
-	port := config.Get().Server.Port
+	cfg := config.Get()
 	c.JSON(http.StatusOK, gin.H{
 		"running": true,
-		"port":    port,
-		"address": "http://0.0.0.0:" + strconv.Itoa(port),
+		"port":    cfg.Server.Port,
+		"address": "http://" + cfg.Server.Host + ":" + strconv.Itoa(cfg.Server.Port),
 	})
 }
 
@@ -168,9 +166,6 @@ func (h *SettingsHandler) GetSettings(c *gin.Context) {
 		"database": gin.H{
 			"type": cfg.Database.Type,
 			"dsn":  maskDSN(cfg.Database.DSN),
-		},
-		"log": gin.H{
-			"enabled": cfg.Log.Enabled,
 		},
 		"ip_blacklist": gin.H{
 			"enabled": cfg.IPBlacklist.Enabled,
@@ -211,7 +206,6 @@ func (h *SettingsHandler) UpdateSettings(c *gin.Context) {
 func (h *SettingsHandler) GetSwitches(c *gin.Context) {
 	cfg := config.Get()
 	c.JSON(http.StatusOK, gin.H{
-		"log_enabled":          cfg.Log.Enabled,
 		"ip_blacklist_enabled": cfg.IPBlacklist.Enabled,
 		"proxy_enabled":        cfg.Proxy.Enabled,
 	})
@@ -219,7 +213,6 @@ func (h *SettingsHandler) GetSwitches(c *gin.Context) {
 
 func (h *SettingsHandler) UpdateSwitches(c *gin.Context) {
 	var req struct {
-		LogEnabled         *bool `json:"log_enabled"`
 		IPBlacklistEnabled *bool `json:"ip_blacklist_enabled"`
 		ProxyEnabled       *bool `json:"proxy_enabled"`
 	}
@@ -229,10 +222,6 @@ func (h *SettingsHandler) UpdateSwitches(c *gin.Context) {
 	}
 
 	cfg := config.Get()
-	if req.LogEnabled != nil {
-		cfg.Log.Enabled = *req.LogEnabled
-		storage.SaveSetting("log_enabled", strconv.FormatBool(*req.LogEnabled))
-	}
 	if req.IPBlacklistEnabled != nil {
 		cfg.IPBlacklist.Enabled = *req.IPBlacklistEnabled
 		storage.SaveSetting("ip_blacklist_enabled", strconv.FormatBool(*req.IPBlacklistEnabled))
@@ -397,7 +386,7 @@ func toString(v interface{}) string {
 
 func isSupportedSettingsUpdateKey(key string) bool {
 	switch key {
-	case "proxy_enabled", "proxy_host", "proxy_port", "proxy_username", "proxy_password", "db_type", "db_dsn", "log_enabled", "ip_blacklist_enabled":
+	case "proxy_enabled", "proxy_host", "proxy_port", "proxy_username", "proxy_password", "db_type", "db_dsn", "ip_blacklist_enabled":
 		return true
 	default:
 		return false

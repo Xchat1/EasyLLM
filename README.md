@@ -12,14 +12,13 @@
 
 **多平台账号管理**
 - **OpenAI / Codex** — OAuth 账号管理、API Key 配置、Token 刷新、配额查询、Codex CLI 一键切换
-- **Cursor** — 多账号管理，一键切换活跃账号
 - **Antigravity** — 账号管理与激活
 
 **Codex 代理池**
 - OpenAI 兼容 API（`/v1/responses`），多账号自动负载均衡
 - 支持 round_robin / random / least_used 三种策略
 - WebSocket 代理支持（Codex CLI wss 连接）
-- 请求日志与 Token 用量统计看板
+- 不保留 API 调用日志，避免敏感提示词和响应内容落盘
 - API Key 鉴权保护
 
 **系统能力**
@@ -67,7 +66,22 @@ docker compose up -d
 
 访问 http://localhost:8022
 
-### 方式三：一键启动脚本（推荐）
+### 方式三：macOS App
+
+保留现有 Web 项目和 Go 后端，同时可以封装成原生 macOS App：
+
+```bash
+./scripts/build-macos-app.sh
+open build/macos/EasyLLM.app
+```
+
+App 会内置后端二进制和 `web/dist`，运行数据保存在：
+
+```text
+~/Library/Application Support/EasyLLM/
+```
+
+### 方式四：一键启动脚本（推荐）
 
 自动检测并释放被占用的端口，无需手动杀进程：
 
@@ -120,7 +134,6 @@ scripts\start.bat --prod
 | `PROXY_ENABLED` | `false` | HTTP 代理开关 |
 | `PROXY_HOST` | - | 代理主机 |
 | `PROXY_PORT` | - | 代理端口 |
-| `LOG_ENABLED` | `true` | 请求日志开关 |
 
 ## Git 推送前隐私保护
 

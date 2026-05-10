@@ -11,8 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // poolEntry is a unified proxy pool entry from any source
@@ -176,7 +174,7 @@ func (p *CodexProxy) GetPoolStatus() *models.CodexPoolStatus {
 		accts[i] = models.CodexAccount{
 			ID:           e.id,
 			Email:        e.email,
-			AccessToken:  e.accessToken,
+			AccessToken:  "",
 			Enabled:      true,
 			RequestCount: cnt,
 		}
@@ -578,36 +576,8 @@ func (p *CodexProxy) saveRateLimits(entry *poolEntry, resp *http.Response) {
 	_ = p.openaiDB.Save(acc)
 }
 
-// saveLog persists a request log entry.
+// saveLog is intentionally a no-op. EasyLLM does not retain API call logs.
 func (p *CodexProxy) saveLog(entry *poolEntry, requestBody []byte, requestPath, lastSSEData string, statusCode int, durationMs int64, userAgent string) {
-	if p.codexDB == nil {
-		return
-	}
-	var reqData map[string]interface{}
-	json.Unmarshal(requestBody, &reqData) //nolint:errcheck
-	model := ""
-	if m, ok := reqData["model"].(string); ok {
-		model = m
-	}
-
-	var inputTokens, outputTokens int64
-	if lastSSEData != "" {
-		inputTokens, outputTokens = extractUsageFromSSE(lastSSEData)
-	}
-
-	p.codexDB.SaveLog(&models.CodexLog{
-		ID:           uuid.New().String(),
-		AccountID:    entry.id,
-		AccountEmail: entry.email,
-		RequestPath:  requestPath,
-		Model:        model,
-		Platform:     parsePlatform(userAgent),
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		Duration:     durationMs,
-		StatusCode:   statusCode,
-		CreatedAt:    time.Now(),
-	})
 }
 
 // atomicAddInt64 is a helper that wraps atomic.AddInt64 for cleaner call sites.

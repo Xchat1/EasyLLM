@@ -1,5 +1,5 @@
 <template>
-  <div class="docs-page p-4 sm:p-6 w-full max-w-7xl mx-auto space-y-6">
+  <div class="docs-page p-5 sm:p-6 w-full max-w-none space-y-6">
     <!-- Header -->
     <div class="mb-8">
       <h1 class="text-3xl font-bold text-white mb-2">📖 使用文档</h1>
@@ -30,7 +30,7 @@
           <div class="bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-lg p-4">
             <div class="text-2xl mb-2">🤖</div>
             <div class="text-sm font-semibold text-white mb-1">多平台账号管理</div>
-            <div class="text-xs text-gray-400">OpenAI / Codex、Cursor、Antigravity 统一Web界面管理</div>
+            <div class="text-xs text-gray-400">OpenAI / Codex、Antigravity、GitHub Copilot、Kiro、Gemini CLI 统一管理</div>
           </div>
           <div class="bg-gradient-to-br from-green-500/10 to-teal-500/10 border border-green-500/20 rounded-lg p-4">
             <div class="text-2xl mb-2">⚡</div>
@@ -40,7 +40,7 @@
           <div class="bg-gradient-to-br from-orange-500/10 to-red-500/10 border border-orange-500/20 rounded-lg p-4">
             <div class="text-2xl mb-2">🔒</div>
             <div class="text-sm font-semibold text-white mb-1">安全可靠</div>
-            <div class="text-xs text-gray-400">API Key 鉴权、IP 黑名单、请求日志监控</div>
+            <div class="text-xs text-gray-400">API Key 鉴权、IP 黑名单、敏感配置本地保存</div>
           </div>
         </div>
         <div class="flex flex-wrap gap-2 text-xs">
@@ -56,7 +56,7 @@
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">🖥️</span> Codex CLI 接入
         </h2>
-        <p class="text-sm text-gray-400 mb-5">将 EasyLLM 作为 Codex CLI 的代理，实现多账号轮询、请求日志记录和本机配置注入。</p>
+        <p class="text-sm text-gray-400 mb-5">将 EasyLLM 作为 Codex CLI 的代理，实现多账号轮询、本机配置注入和账号集合调度。</p>
 
         <!-- Method 1 -->
         <div class="mb-5 p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg">
@@ -128,7 +128,7 @@ wire_api = "chat"</pre>
 
         <div class="space-y-4">
           <div>
-            <h3 class="text-sm font-semibold text-white mb-2">Chat Completions（流式）</h3>
+            <h3 class="text-sm font-semibold text-white mb-2">Responses（流式）</h3>
             <div class="doc-code">
               <div class="doc-code-header">bash</div>
               <pre>curl http://localhost:{{ port }}/v1/responses \
@@ -169,7 +169,7 @@ wire_api = "chat"</pre>
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">🐍</span> Python 调用
         </h2>
-        <p class="text-sm text-gray-400 mb-4">使用 OpenAI Python SDK 通过 EasyLLM 代理池发送请求。</p>
+        <p class="text-sm text-gray-400 mb-4">使用 OpenAI Python SDK 通过 EasyLLM 的 OpenAI 兼容接口发送请求。</p>
 
         <div class="doc-code">
           <div class="doc-code-header">python</div>
@@ -382,7 +382,7 @@ const sections = [
 const faqs = [
   { q: 'Codex CLI 报 "Token data is not available." 怎么办？', a: '确保 auth.json 中 last_refresh 在顶层而非 tokens 内部。在 EasyLLM 中重新点击"切换"即可自动修复。' },
   { q: '代理池请求返回 401 Unauthorized', a: '检查是否在服务配置中设置了 API Key。如果设置了，所有 /v1/* 请求都需要在 Header 中携带 Authorization: Bearer YOUR_KEY。' },
-  { q: 'Token 过期了怎么办？', a: '在 OpenAI 账号列表中点击"刷新 Token"按钮，或使用"刷新全部"一键刷新所有 OAuth 账号。' },
+  { q: 'Token 过期了怎么办？', a: '在 OpenAI 账号列表中点击"刷新 Token"按钮，或使用"刷新所有 Token"一键刷新所有 OAuth 账号；刷新完成后会自动触发账号导出。' },
   { q: '配额查询显示 Forbidden', a: '该账号可能没有 Codex 访问权限（需要 ChatGPT Plus/Pro 订阅），或 Token 已失效。' },
   { q: '如何更改数据库？', a: '在设置 → 数据库页面切换为 PostgreSQL 并填写 DSN，保存后重启服务即可。' },
   { q: '如何在公网暴露服务？', a: '建议在前面加 Nginx 反向代理并启用 HTTPS。同时务必设置代理池 API Key 和 IP 黑名单来保护端点。' },
@@ -454,9 +454,36 @@ print(response.output_text)`,
     restart: unless-stopped`,
 }
 
-function copyCurl(key) {
+async function copyCurl(key) {
   const text = (curlSnippets[key] || '').replace(/PORT/g, port.value)
-  navigator.clipboard.writeText(text).then(() => notify('已复制', 'success'))
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      fallbackCopy(text)
+    }
+    notify?.('已复制', 'success')
+  } catch {
+    try {
+      fallbackCopy(text)
+      notify?.('已复制', 'success')
+    } catch {
+      notify?.('复制失败，请手动选择代码内容', 'error')
+    }
+  }
+}
+
+function fallbackCopy(text) {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const ok = document.execCommand('copy')
+  document.body.removeChild(textarea)
+  if (!ok) throw new Error('copy failed')
 }
 
 function scrollTo(id) {
@@ -479,23 +506,36 @@ function scrollTo(id) {
   grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
 }
 .code {
-  @apply bg-gray-800 text-blue-400 px-1.5 py-0.5 rounded text-xs font-mono;
+  @apply px-1.5 py-0.5 rounded text-xs font-mono;
+  background: var(--app-accent-tint);
+  color: var(--app-accent);
 }
 .doc-code {
-  @apply bg-gray-950 border border-gray-800 rounded-lg overflow-hidden relative max-w-full;
+  @apply border rounded-lg overflow-hidden relative max-w-full;
+  background: var(--app-surface-muted);
+  border-color: var(--app-border);
   min-width: 0;
 }
 .doc-code-header {
-  @apply bg-gray-900 pl-3 pr-16 py-1.5 text-xs text-gray-500 border-b border-gray-800 font-mono truncate;
+  @apply pl-3 pr-16 py-1.5 text-xs border-b font-mono truncate;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+  color: var(--app-text-muted);
 }
 .doc-code pre {
-  @apply px-4 py-3 text-xs text-gray-300 font-mono overflow-x-auto whitespace-pre leading-relaxed;
+  @apply px-4 py-3 text-xs font-mono overflow-x-auto whitespace-pre leading-relaxed;
+  color: var(--app-text-secondary);
   max-width: 100%;
   min-width: 0;
 }
 .doc-code-copy {
-  @apply absolute top-1.5 right-2 text-xs text-gray-500 hover:text-white bg-gray-800 hover:bg-gray-700
-         px-2 py-0.5 rounded transition-colors;
+  @apply absolute top-1.5 right-2 text-xs px-2 py-0.5 rounded transition-colors;
+  background: var(--app-control-bg);
+  color: var(--app-text-muted);
+}
+.doc-code-copy:hover {
+  background: var(--app-control-hover-bg);
+  color: var(--app-text);
 }
 @media (max-width: 640px) {
   .docs-nav-grid {

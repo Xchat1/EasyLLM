@@ -235,50 +235,7 @@ func (s *CockpitStorage) CountWakeupTasks(platform string, enabledOnly bool) (in
 }
 
 func (s *CockpitStorage) MigrateLegacyPlatformAccounts() error {
-	if err := s.migrateCursorAccounts(); err != nil {
-		return err
-	}
 	return s.migrateAntigravityAccounts()
-}
-
-func (s *CockpitStorage) migrateCursorAccounts() error {
-	if !s.db.Migrator().HasTable(&models.CursorAccount{}) {
-		return nil
-	}
-	var existing int64
-	if err := s.db.Model(&models.PlatformAccount{}).Where("platform = ?", "cursor").Count(&existing).Error; err != nil {
-		return err
-	}
-	if existing > 0 {
-		return nil
-	}
-
-	var legacy []models.CursorAccount
-	if err := s.db.Order("created_at desc").Find(&legacy).Error; err != nil {
-		return err
-	}
-	for _, item := range legacy {
-		accessToken := item.AccessToken
-		account := models.PlatformAccount{
-			ID:          item.ID,
-			Platform:    "cursor",
-			Email:       item.Email,
-			DisplayName: item.Name,
-			AccessToken: &accessToken,
-			CookieToken: item.CookieToken,
-			Plan:        item.Plan,
-			Status:      "active",
-			Active:      item.Active,
-			TagName:     item.TagName,
-			TagColor:    item.TagColor,
-			CreatedAt:   item.CreatedAt,
-			UpdatedAt:   item.UpdatedAt,
-		}
-		if err := s.db.Save(&account).Error; err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *CockpitStorage) migrateAntigravityAccounts() error {

@@ -1,14 +1,12 @@
 package proxy
 
 import (
-	"easyllm/internal/models"
 	"encoding/json"
 	"log"
 	"net/http"
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -108,32 +106,16 @@ func (p *CodexProxy) ProxyWebSocket(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(entry.requests, 1)
 	}
 
-	startTime := time.Now()
-	var logModel string
-	var inputTokens, outputTokens int64
-	var lastStatusCode = 200
-
 	done := make(chan struct{})
 
-	// upstream → client (server messages: responses, events)
+	// upstream → client (server messages: responses, events). Messages are
+	// streamed directly; EasyLLM does not retain API call logs.
 	go func() {
 		defer close(done)
 		for {
 			msgType, msg, err := upConn.ReadMessage()
 			if err != nil {
 				break
-			}
-			if msgType == websocket.TextMessage {
-				model, inTok, outTok := extractWSUsage(msg)
-				if model != "" {
-					logModel = model
-				}
-				if inTok > 0 {
-					inputTokens = inTok
-				}
-				if outTok > 0 {
-					outputTokens = outTok
-				}
 			}
 			if err := clientConn.WriteMessage(msgType, msg); err != nil {
 				break
@@ -150,11 +132,6 @@ func (p *CodexProxy) ProxyWebSocket(w http.ResponseWriter, r *http.Request) {
 					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 				break
 			}
-			if msgType == websocket.TextMessage && logModel == "" {
-				if m := extractModelFromClientMsg(msg); m != "" {
-					logModel = m
-				}
-			}
 			if err := upConn.WriteMessage(msgType, msg); err != nil {
 				break
 			}
@@ -162,23 +139,6 @@ func (p *CodexProxy) ProxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	<-done
-	duration := time.Since(startTime).Milliseconds()
-
-	if p.codexDB != nil {
-		p.codexDB.SaveLog(&models.CodexLog{
-			ID:           uuid.New().String(),
-			AccountID:    entry.id,
-			AccountEmail: entry.email,
-			RequestPath:  r.URL.Path,
-			Model:        logModel,
-			Platform:     parsePlatform(r.UserAgent()),
-			InputTokens:  inputTokens,
-			OutputTokens: outputTokens,
-			Duration:     duration,
-			StatusCode:   lastStatusCode,
-			CreatedAt:    time.Now(),
-		})
-	}
 }
 
 func extractWSUsage(msg []byte) (model string, inputTokens, outputTokens int64) {

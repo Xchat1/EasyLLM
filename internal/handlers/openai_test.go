@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -34,6 +35,19 @@ func setupOpenAIHandlerTestDB(t *testing.T) *gorm.DB {
 	}
 	storage.DB = db
 	return db
+}
+
+func testUnsignedJWT(t *testing.T, payload map[string]interface{}) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]string{"alg": "none", "typ": "JWT"})
+	if err != nil {
+		t.Fatalf("marshal jwt header: %v", err)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal jwt payload: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(body)
 }
 
 func TestMergeOpenAIAccountUpdatePreservesManagedFields(t *testing.T) {
@@ -216,8 +230,15 @@ func TestImportByTokenFilesSupportsBundledNDJSON(t *testing.T) {
 		t.Fatalf("create form file: %v", err)
 	}
 
+	plusToken := testUnsignedJWT(t, map[string]interface{}{
+		"email": "one@example.com",
+		"https://api.openai.com/auth": map[string]interface{}{
+			"account_id":        "acc-1",
+			"chatgpt_plan_type": "chatgpt_plus",
+		},
+	})
 	content := strings.Join([]string{
-		`{"email":"one@example.com","access_token":"at1","refresh_token":"rt1","account_id":"acc-1","type":"codex"}`,
+		`{"email":"one@example.com","access_token":"at1","refresh_token":"rt1","id_token":"` + plusToken + `","account_id":"acc-1","type":"codex"}`,
 		`{"email":"two@example.com","access_token":"at2","refresh_token":"rt2","account_id":"acc-2","type":"codex"}`,
 	}, "\n")
 	if _, err := part.Write([]byte(content)); err != nil {
@@ -257,6 +278,16 @@ func TestImportByTokenFilesSupportsBundledNDJSON(t *testing.T) {
 	}
 	if len(accounts) != 2 {
 		t.Fatalf("expected 2 accounts imported, got %d", len(accounts))
+	}
+	var plusAccount *models.OpenAIAccount
+	for i := range accounts {
+		if accounts[i].Email == "one@example.com" {
+			plusAccount = &accounts[i]
+			break
+		}
+	}
+	if plusAccount == nil || plusAccount.Plan == nil || *plusAccount.Plan != "plus" {
+		t.Fatalf("expected plus plan to be persisted from id_token, got %#v", plusAccount)
 	}
 }
 
@@ -434,6 +465,294 @@ func TestImportFromCockpitToolsImportsOAuthAccount(t *testing.T) {
 		derefStr(accounts[0].ChatGPTAccountID) != "acct-1" ||
 		accounts[0].ExpiresAt == nil {
 		t.Fatalf("unexpected imported account: %+v", accounts[0])
+	}
+}
+
+func TestImportFromCockpitToolsKeepsTeamAccountSeparateByTokenAccountID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	now := time.Now()
+	personalID := "personal-account"
+	if err := handler.storage.Save(&models.OpenAIAccount{
+		ID:               "existing-personal",
+		Email:            "same@example.com",
+		AccountType:      models.OpenAIAccountTypeOAuth,
+		Status:           "active",
+		ChatGPTAccountID: &personalID,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatalf("seed personal account: %v", err)
+	}
+
+	idToken := testUnsignedJWT(t, map[string]interface{}{
+		"email": "same@example.com",
+		"https://api.openai.com/auth": map[string]interface{}{
+			"account_id":        "team-account",
+			"chatgpt_user_id":   "team-user",
+			"chatgpt_plan_type": "team",
+			"organization_id":   "team-org",
+		},
+	})
+	body, err := json.Marshal([]map[string]interface{}{
+		{
+			"id":                "cockpit-team-row",
+			"email":             "same@example.com",
+			"id_token":          idToken,
+			"access_token":      "at-team",
+			"refresh_token":     "rt-team",
+			"account_structure": "team",
+			"type":              "codex",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", bytes.NewReader(body))
+
+	handler.ImportFromCockpitTools(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("expected personal and team accounts to coexist, got %d: %+v", len(accounts), accounts)
+	}
+
+	var team *models.OpenAIAccount
+	for i := range accounts {
+		if derefStr(accounts[i].ChatGPTAccountID) == "team-account" {
+			team = &accounts[i]
+			break
+		}
+	}
+	if team == nil {
+		t.Fatalf("expected imported team account with account_id from id_token")
+	}
+	if team.Plan == nil || *team.Plan != "team" {
+		t.Fatalf("expected team plan to be persisted, got %#v", team.Plan)
+	}
+}
+
+func TestImportFromCockpitToolsKeepsTeamOrganizationsSeparateWithSameAccountID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	body, err := json.Marshal([]map[string]interface{}{
+		{
+			"id":                "workspace-a",
+			"email":             "same@example.com",
+			"account_id":        "shared-account",
+			"organization_id":   "org-a",
+			"account_name":      "Workspace A",
+			"access_token":      "at-a",
+			"refresh_token":     "rt-a",
+			"plan_type":         "team",
+			"account_structure": "team",
+			"type":              "codex",
+		},
+		{
+			"id":                "workspace-b",
+			"email":             "same@example.com",
+			"account_id":        "shared-account",
+			"organization_id":   "org-b",
+			"account_name":      "Workspace B",
+			"access_token":      "at-b",
+			"refresh_token":     "rt-b",
+			"plan_type":         "team",
+			"account_structure": "team",
+			"type":              "codex",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", bytes.NewReader(body))
+
+	handler.ImportFromCockpitTools(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("expected two team organizations to coexist, got %d: %+v", len(accounts), accounts)
+	}
+
+	seen := map[string]bool{}
+	for _, account := range accounts {
+		if derefStr(account.ChatGPTAccountID) != "shared-account" {
+			t.Fatalf("expected shared chatgpt account id, got %+v", account)
+		}
+		if account.Plan == nil || *account.Plan != "team" {
+			t.Fatalf("expected team plan to be persisted, got %#v", account.Plan)
+		}
+		seen[derefStr(account.OrganizationID)] = true
+	}
+	if !seen["org-a"] || !seen["org-b"] {
+		t.Fatalf("expected org-a and org-b, got %+v", seen)
+	}
+}
+
+func TestImportFromCockpitToolsKeepsTeamAccountSeparateWithoutAccountID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	now := time.Now()
+	if err := handler.storage.Save(&models.OpenAIAccount{
+		ID:          "existing-personal",
+		Email:       "same@example.com",
+		AccountType: models.OpenAIAccountTypeOAuth,
+		Status:      "active",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed personal account: %v", err)
+	}
+
+	idToken := testUnsignedJWT(t, map[string]interface{}{
+		"email": "same@example.com",
+		"https://api.openai.com/auth": map[string]interface{}{
+			"chatgpt_plan_type": "team",
+		},
+	})
+	body, err := json.Marshal([]map[string]interface{}{
+		{
+			"id":          "cockpit-team-row-without-account-id",
+			"email":       "same@example.com",
+			"id_token":    idToken,
+			"accessToken": "ignored-camel-token",
+			"tokens": map[string]string{
+				"access_token":  "at-team-without-account-id",
+				"refresh_token": "rt-team-without-account-id",
+			},
+			"accountStructure": "team",
+			"planType":         "team",
+			"type":             "codex",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", bytes.NewReader(body))
+
+	handler.ImportFromCockpitTools(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("expected personal and account-id-less team accounts to coexist, got %d: %+v", len(accounts), accounts)
+	}
+
+	var team *models.OpenAIAccount
+	for i := range accounts {
+		if accounts[i].ID != "existing-personal" {
+			team = &accounts[i]
+			break
+		}
+	}
+	if team == nil || !strings.HasPrefix(derefStr(team.ChatGPTAccountID), "cockpit-tools-team-") {
+		t.Fatalf("expected synthetic team account id, got %#v", team)
+	}
+	if team.Plan == nil || *team.Plan != "team" {
+		t.Fatalf("expected team plan to be persisted, got %#v", team.Plan)
+	}
+}
+
+func TestImportFromCockpitToolsSupportsCamelCaseTokenFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	idToken := testUnsignedJWT(t, map[string]interface{}{
+		"email": "camel@example.com",
+		"https://api.openai.com/auth": map[string]interface{}{
+			"account_id":        "camel-account",
+			"chatgpt_plan_type": "team",
+		},
+	})
+	body, err := json.Marshal([]map[string]interface{}{
+		{
+			"id":    "nested-camel",
+			"email": "camel@example.com",
+			"tokens": map[string]string{
+				"idToken":      idToken,
+				"accessToken":  "at-camel",
+				"refreshToken": "rt-camel",
+			},
+			"accountStructure": "team",
+			"planType":         "team",
+		},
+		{
+			"id":           "top-level-camel",
+			"email":        "topcamel@example.com",
+			"idToken":      idToken,
+			"accessToken":  "at-top-camel",
+			"refreshToken": "rt-top-camel",
+			"accountId":    "top-camel-account",
+			"planType":     "plus",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", bytes.NewReader(body))
+
+	handler.ImportFromCockpitTools(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Total   int `json:"total"`
+		Success int `json:"success"`
+		Failed  int `json:"failed"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Total != 2 || payload.Success != 2 || payload.Failed != 0 {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("expected 2 camel-case accounts imported, got %d", len(accounts))
 	}
 }
 

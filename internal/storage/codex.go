@@ -77,45 +77,32 @@ func (s *CodexStorage) DeleteAccount(id string) error {
 	return nil
 }
 
-// SaveLog records a Codex request log
+// SaveLog intentionally does not persist per-request API logs.
 func (s *CodexStorage) SaveLog(log *models.CodexLog) error {
-	return s.db.Create(log).Error
+	return nil
 }
 
-// GetLogs returns recent Codex logs with pagination
+// GetLogs returns no entries because EasyLLM does not retain API call logs.
 func (s *CodexStorage) GetLogs(limit, offset int) ([]models.CodexLog, int64, error) {
-	var logs []models.CodexLog
-	var total int64
-
-	s.db.Model(&models.CodexLog{}).Count(&total)
-	err := s.db.Order("created_at desc").Limit(limit).Offset(offset).Find(&logs).Error
-	return logs, total, err
+	return []models.CodexLog{}, 0, nil
 }
 
-// GetLogsSince returns all logs created after since.
+// GetLogsSince returns no entries because EasyLLM does not retain API call logs.
 func (s *CodexStorage) GetLogsSince(since time.Time) ([]models.CodexLog, error) {
-	var logs []models.CodexLog
-	err := s.db.Where("created_at >= ?", since).Order("created_at desc").Find(&logs).Error
-	return logs, err
+	return []models.CodexLog{}, nil
 }
 
-// BackfillPlatform sets platform for all logs that have an empty platform field.
+// BackfillPlatform is kept for compatibility with older callers.
 func (s *CodexStorage) BackfillPlatform(platform string) int64 {
-	r := s.db.Model(&models.CodexLog{}).Where("platform = '' OR platform IS NULL").Update("platform", platform)
-	return r.RowsAffected
+	return 0
 }
 
-// GetSessionLogPaths returns all request_path values that start with "session:".
-// Used by SessionScanner to avoid re-importing already-seen sessions.
+// GetSessionLogPaths returns no paths because session scanning is disabled.
 func (s *CodexStorage) GetSessionLogPaths() []string {
-	var paths []string
-	s.db.Model(&models.CodexLog{}).
-		Where("request_path LIKE ?", "session:%").
-		Pluck("request_path", &paths)
-	return paths
+	return []string{}
 }
 
-// ClearLogs removes all Codex logs
+// ClearLogs removes any legacy log table left from older versions.
 func (s *CodexStorage) ClearLogs() error {
-	return s.db.Where("1 = 1").Delete(&models.CodexLog{}).Error
+	return PurgeCodexLogs()
 }

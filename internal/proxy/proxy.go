@@ -19,8 +19,8 @@ import (
 //
 // Passthrough mode: when the incoming request carries an Authorization token
 // that matches a known managed account, the proxy forwards the request as-is
-// (no pool rotation) but still logs the request. This enables Codex CLI to
-// route through the proxy for logging while keeping its own auth.
+// (no pool rotation). This enables Codex CLI to route through the proxy while
+// keeping its own auth; EasyLLM does not retain API call logs.
 func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	// Try passthrough first: match the incoming token to a managed account
 	entry := p.matchIncomingToken(r)
@@ -81,9 +81,6 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 	setCodexCLIHeaders(upstreamReq)
 
-	shouldLog := r.Method == http.MethodPost
-
-	startTime := time.Now()
 	resp, err := p.httpClient.Do(upstreamReq)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("Upstream request failed: %v", err), "upstream_error")
@@ -120,11 +117,9 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	copyResponseHeaders(w, resp)
 	w.WriteHeader(resp.StatusCode)
 
-	// Stream the response body; capture the last SSE "data:" line for token usage.
+	// Stream the response body without retaining request or response content.
 	flusher, canFlush := w.(http.Flusher)
 	buf := make([]byte, 8192)
-	var lastDataLine string
-	var streamBuf strings.Builder
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
@@ -132,35 +127,10 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 			if canFlush {
 				flusher.Flush()
 			}
-			if shouldLog {
-				streamBuf.Write(buf[:n])
-				remaining := streamBuf.String()
-				for {
-					idx := strings.Index(remaining, "\n")
-					if idx < 0 {
-						break
-					}
-					line := strings.TrimSpace(remaining[:idx])
-					remaining = remaining[idx+1:]
-					if strings.HasPrefix(line, "data: ") {
-						lastDataLine = line[6:]
-					}
-				}
-				streamBuf.Reset()
-				if remaining != "" {
-					streamBuf.WriteString(remaining)
-				}
-			}
 		}
 		if readErr != nil {
 			break
 		}
-	}
-
-	duration := time.Since(startTime).Milliseconds()
-
-	if shouldLog {
-		p.saveLog(entry, body, r.URL.Path, lastDataLine, resp.StatusCode, duration, r.UserAgent())
 	}
 }
 

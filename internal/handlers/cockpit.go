@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"easyllm/internal/models"
+	"easyllm/internal/proxy"
 	"easyllm/internal/storage"
 	"encoding/json"
 	"errors"
@@ -35,7 +36,6 @@ func (h *CockpitHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.GET("/accounts", h.ListAllAccounts)
 	g.GET("/definitions", h.Definitions)
 	g.GET("/overview", h.Overview)
-	g.GET("/instances", h.ListAllInstances)
 	g.GET("/wakeup/tasks", h.ListWakeupTasks)
 	g.POST("/wakeup/tasks", h.CreateWakeupTask)
 	g.PUT("/wakeup/tasks/:id", h.UpdateWakeupTask)
@@ -325,15 +325,6 @@ func (h *CockpitHandler) ExportInstances(c *gin.Context) {
 		return
 	}
 	instances, err := h.storage.ListInstances(platform)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, instances)
-}
-
-func (h *CockpitHandler) ListAllInstances(c *gin.Context) {
-	instances, err := h.storage.ListInstances("")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
@@ -708,6 +699,15 @@ func (h *CockpitHandler) buildProxyOverview() models.CodexProxyOverview {
 	}
 	if v, ok := storage.GetSetting("proxy_strategy"); ok && v != "" {
 		overview.Strategy = v
+	}
+	if status := proxy.GetProxy(); status != nil {
+		pool := status.GetPoolStatus()
+		if pool != nil {
+			overview.Accounts = pool.TotalAccounts
+			overview.EnabledAccounts = pool.EnabledAccounts
+			overview.TotalRequests = pool.TotalRequests
+			return overview
+		}
 	}
 	if h.codexStore == nil {
 		return overview

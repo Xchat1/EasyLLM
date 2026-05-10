@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"easyllm/internal/models"
 	openaiplatform "easyllm/internal/platforms/openai"
 	"easyllm/internal/proxy"
@@ -20,7 +21,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,8 +139,8 @@ func (h *OpenAIHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.POST("/codex/accounts/:id/toggle", h.ToggleCodexAccount)
 	g.GET("/codex/pool", h.GetCodexPoolStatus)
 	g.POST("/codex/pool/refresh", h.RefreshCodexPool)
-	g.GET("/codex/logs", h.GetCodexLogs)
-	g.DELETE("/codex/logs", h.ClearCodexLogs)
+	g.GET("/codex/logs", h.GetCodexLogs)      // legacy compatibility: returns no retained logs
+	g.DELETE("/codex/logs", h.ClearCodexLogs) // clears legacy log storage if present
 
 	// Quota check
 	g.POST("/accounts/fetch-quotas", h.FetchQuotas)
@@ -367,7 +367,6 @@ func (h *OpenAIHandler) RefreshAccountToken(c *gin.Context) {
 	}
 
 	if err := h.refreshOAuthAccountTokens(account); err != nil {
-		fmt.Printf("[OpenAI] Refresh token failed for account id=%s email=%s: %v\n", account.ID, account.Email, err)
 		if isReauthRequiredError(err) {
 			c.JSON(http.StatusConflict, models.APIError{Error: err.Error(), Code: "REAUTH_REQUIRED"})
 			return
@@ -421,7 +420,6 @@ func (h *OpenAIHandler) RefreshAllTokens(c *gin.Context) {
 			defer func() { <-sem }()
 
 			if err := h.refreshOAuthAccountTokens(&acc); err != nil {
-				fmt.Printf("[OpenAI] Refresh all failed for account id=%s email=%s: %v\n", acc.ID, acc.Email, err)
 				mu.Lock()
 				results = append(results, result{ID: acc.ID, Email: acc.Email, Success: false, Error: err.Error()})
 				mu.Unlock()
@@ -548,6 +546,7 @@ func (h *OpenAIHandler) importSingleTokenFile(data *tokenFileData, existingAccou
 			account.ChatGPTAccountID = userInfo.ChatGPTAccountID
 			account.ChatGPTUserID = userInfo.ChatGPTUserID
 			account.OrganizationID = userInfo.OrganizationID
+			account.Plan = normalizedOpenAIPlanPtr(userInfo.PlanType)
 		}
 		if j := openaiplatform.ExtractOpenAIAuthJSON(data.IDToken); j != "" {
 			account.OpenAIAuthJSON = sPtr(j)
@@ -784,21 +783,58 @@ func (h *OpenAIHandler) ImportByScanDir(c *gin.Context) {
 	})
 }
 
-func findMatchingOAuthAccountIndex(existingAccounts []models.OpenAIAccount, email string, chatgptAccountID *string) int {
-	targetID := strings.TrimSpace(derefStr(chatgptAccountID))
+func findMatchingOAuthAccountIndex(existingAccounts []models.OpenAIAccount, incoming *models.OpenAIAccount) int {
+	if incoming == nil {
+		return -1
+	}
+
+	targetID := strings.TrimSpace(derefStr(incoming.ChatGPTAccountID))
+	targetOrgID := strings.TrimSpace(derefStr(incoming.OrganizationID))
 	if targetID != "" {
+		emptyOrgIdx := -1
+		firstScopedIdx := -1
+		firstScopedOrgID := ""
+		hasMultipleScopedOrgs := false
+
 		for i := range existingAccounts {
 			existing := existingAccounts[i]
 			if existing.AccountType != models.OpenAIAccountTypeOAuth {
 				continue
 			}
 			if strings.TrimSpace(derefStr(existing.ChatGPTAccountID)) == targetID {
-				return i
+				existingOrgID := strings.TrimSpace(derefStr(existing.OrganizationID))
+				if targetOrgID != "" {
+					if existingOrgID == targetOrgID {
+						return i
+					}
+					if existingOrgID == "" && emptyOrgIdx < 0 {
+						emptyOrgIdx = i
+					}
+					continue
+				}
+
+				if existingOrgID == "" {
+					return i
+				}
+				if firstScopedIdx < 0 {
+					firstScopedIdx = i
+					firstScopedOrgID = existingOrgID
+				} else if existingOrgID != firstScopedOrgID {
+					hasMultipleScopedOrgs = true
+				}
 			}
 		}
+
+		if targetOrgID != "" {
+			return emptyOrgIdx
+		}
+		if firstScopedIdx >= 0 && !hasMultipleScopedOrgs {
+			return firstScopedIdx
+		}
+		return -1
 	}
 
-	targetEmail := strings.TrimSpace(email)
+	targetEmail := strings.TrimSpace(incoming.Email)
 	if targetEmail == "" {
 		return -1
 	}
@@ -810,10 +846,7 @@ func findMatchingOAuthAccountIndex(existingAccounts []models.OpenAIAccount, emai
 		if !strings.EqualFold(existing.Email, targetEmail) {
 			continue
 		}
-		existingID := strings.TrimSpace(derefStr(existing.ChatGPTAccountID))
-		if targetID == "" || existingID == "" || existingID == targetID {
-			return i
-		}
+		return i
 	}
 
 	return -1
@@ -858,7 +891,7 @@ func (h *OpenAIHandler) upsertImportedOAuthAccount(incoming *models.OpenAIAccoun
 		incomingStatus = "active"
 	}
 
-	if idx := findMatchingOAuthAccountIndex(*existingAccounts, incoming.Email, incoming.ChatGPTAccountID); idx >= 0 {
+	if idx := findMatchingOAuthAccountIndex(*existingAccounts, incoming); idx >= 0 {
 		existing := &(*existingAccounts)[idx]
 		if incoming.Email != "" {
 			existing.Email = incoming.Email
@@ -888,6 +921,9 @@ func (h *OpenAIHandler) upsertImportedOAuthAccount(incoming *models.OpenAIAccoun
 		}
 		if incoming.OpenAIAuthJSON != nil && *incoming.OpenAIAuthJSON != "" {
 			existing.OpenAIAuthJSON = incoming.OpenAIAuthJSON
+		}
+		if incoming.Plan != nil && *incoming.Plan != "" {
+			existing.Plan = incoming.Plan
 		}
 		if incoming.ProxyEnabled {
 			existing.ProxyEnabled = true
@@ -1034,6 +1070,7 @@ func (h *OpenAIHandler) ImportByRefreshTokens(c *gin.Context) {
 			// Step 2: Parse id_token to get email and account info
 			var email string
 			var chatgptAccountID, chatgptUserID, orgID *string
+			var plan *string
 			var openaiAuthJSON string
 
 			if tokenResp.IDToken != "" {
@@ -1044,6 +1081,7 @@ func (h *OpenAIHandler) ImportByRefreshTokens(c *gin.Context) {
 					chatgptAccountID = userInfo.ChatGPTAccountID
 					chatgptUserID = userInfo.ChatGPTUserID
 					orgID = userInfo.OrganizationID
+					plan = normalizedOpenAIPlanPtr(userInfo.PlanType)
 				}
 				openaiAuthJSON = openaiplatform.ExtractOpenAIAuthJSON(tokenResp.IDToken)
 			}
@@ -1077,6 +1115,7 @@ func (h *OpenAIHandler) ImportByRefreshTokens(c *gin.Context) {
 				ChatGPTAccountID: chatgptAccountID,
 				ChatGPTUserID:    chatgptUserID,
 				OrganizationID:   orgID,
+				Plan:             plan,
 				CreatedAt:        now,
 				UpdatedAt:        now,
 			}
@@ -1139,6 +1178,7 @@ func (h *OpenAIHandler) ImportOAuthAccountByRefreshToken(refreshToken string) (*
 	}
 	var email string
 	var chatgptAccountID, chatgptUserID, orgID *string
+	var plan *string
 	var openaiAuthJSON string
 	if tokenResp.IDToken != "" {
 		if userInfo := openaiplatform.ParseIDToken(tokenResp.IDToken); userInfo != nil {
@@ -1148,6 +1188,7 @@ func (h *OpenAIHandler) ImportOAuthAccountByRefreshToken(refreshToken string) (*
 			chatgptAccountID = userInfo.ChatGPTAccountID
 			chatgptUserID = userInfo.ChatGPTUserID
 			orgID = userInfo.OrganizationID
+			plan = normalizedOpenAIPlanPtr(userInfo.PlanType)
 		}
 		openaiAuthJSON = openaiplatform.ExtractOpenAIAuthJSON(tokenResp.IDToken)
 	}
@@ -1173,6 +1214,7 @@ func (h *OpenAIHandler) ImportOAuthAccountByRefreshToken(refreshToken string) (*
 		ChatGPTAccountID: chatgptAccountID,
 		ChatGPTUserID:    chatgptUserID,
 		OrganizationID:   orgID,
+		Plan:             plan,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
@@ -1330,6 +1372,7 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 
 	var email string
 	var chatgptAccountID, chatgptUserID, orgID *string
+	var plan *string
 	var openaiAuthJSON string
 
 	if tokenResp.IDToken != "" {
@@ -1340,6 +1383,7 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 			chatgptAccountID = userInfo.ChatGPTAccountID
 			chatgptUserID = userInfo.ChatGPTUserID
 			orgID = userInfo.OrganizationID
+			plan = normalizedOpenAIPlanPtr(userInfo.PlanType)
 		}
 		openaiAuthJSON = openaiplatform.ExtractOpenAIAuthJSON(tokenResp.IDToken)
 	}
@@ -1367,6 +1411,7 @@ func (h *OpenAIHandler) ExchangeCode(c *gin.Context) {
 		ChatGPTAccountID: chatgptAccountID,
 		ChatGPTUserID:    chatgptUserID,
 		OrganizationID:   orgID,
+		Plan:             plan,
 		ProxyEnabled:     true,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -1868,6 +1913,7 @@ func (h *OpenAIHandler) GetCodexPoolStatus(c *gin.Context) {
 	accts := make([]models.CodexAccount, len(accounts))
 	for i, a := range accounts {
 		accts[i] = *a
+		accts[i].AccessToken = ""
 	}
 	c.JSON(http.StatusOK, models.CodexPoolStatus{
 		TotalAccounts:   len(accounts),
@@ -1897,27 +1943,23 @@ func (h *OpenAIHandler) GetCodexLogs(c *gin.Context) {
 			perPage = pp
 		}
 	}
-	offset := (page - 1) * perPage
-	logs, total, err := h.codexStorage.GetLogs(perPage, offset)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
 	c.JSON(http.StatusOK, gin.H{
-		"logs":        logs,
-		"total":       total,
+		"logs":        []models.CodexLog{},
+		"total":       0,
 		"page":        page,
 		"per_page":    perPage,
-		"total_pages": totalPages,
+		"total_pages": 0,
 	})
 }
 
 func (h *OpenAIHandler) ClearCodexLogs(c *gin.Context) {
-	if err := h.codexStorage.ClearLogs(); err != nil {
+	if h.codexStorage != nil {
+		if err := h.codexStorage.ClearLogs(); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+			return
+		}
+	}
+	if err := storage.PurgeCodexLogs(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
@@ -2273,8 +2315,11 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 
 type cockpitToolsTokenSet struct {
 	IDToken      string `json:"id_token"`
+	IDTokenCamel string `json:"idToken"`
 	AccessToken  string `json:"access_token"`
+	AccessCamel  string `json:"accessToken"`
 	RefreshToken string `json:"refresh_token"`
+	RefreshCamel string `json:"refreshToken"`
 }
 
 type cockpitToolsQuota struct {
@@ -2288,22 +2333,39 @@ type cockpitToolsAccount struct {
 	ID                      string                 `json:"id"`
 	Email                   string                 `json:"email"`
 	AuthMode                string                 `json:"auth_mode"`
+	AuthModeCamel           string                 `json:"authMode"`
 	IDToken                 string                 `json:"id_token"`
+	IDTokenCamel            string                 `json:"idToken"`
 	AccessToken             string                 `json:"access_token"`
+	AccessTokenCamel        string                 `json:"accessToken"`
 	RefreshToken            string                 `json:"refresh_token"`
+	RefreshTokenCamel       string                 `json:"refreshToken"`
 	OpenAIAPIKey            string                 `json:"openai_api_key"`
+	OpenAIAPIKeyCamel       string                 `json:"openaiApiKey"`
 	APIBaseURL              string                 `json:"api_base_url"`
+	APIBaseURLCamel         string                 `json:"apiBaseUrl"`
 	APIProviderMode         string                 `json:"api_provider_mode"`
+	APIProviderModeCamel    string                 `json:"apiProviderMode"`
 	APIProviderID           string                 `json:"api_provider_id"`
+	APIProviderIDCamel      string                 `json:"apiProviderId"`
 	APIProviderName         string                 `json:"api_provider_name"`
+	APIProviderNameCamel    string                 `json:"apiProviderName"`
 	UserID                  string                 `json:"user_id"`
+	UserIDCamel             string                 `json:"userId"`
 	PlanType                string                 `json:"plan_type"`
+	PlanTypeCamel           string                 `json:"planType"`
 	AuthFilePlanType        string                 `json:"auth_file_plan_type"`
+	AuthFilePlanTypeCamel   string                 `json:"authFilePlanType"`
 	AccountID               string                 `json:"account_id"`
+	AccountIDCamel          string                 `json:"accountId"`
 	ChatGPTAccountID        string                 `json:"chatgpt_account_id"`
+	ChatGPTAccountIDCamel   string                 `json:"chatgptAccountId"`
 	OrganizationID          string                 `json:"organization_id"`
+	OrganizationIDCamel     string                 `json:"organizationId"`
 	AccountName             string                 `json:"account_name"`
+	AccountNameCamel        string                 `json:"accountName"`
 	AccountStructure        string                 `json:"account_structure"`
+	AccountStructureCamel   string                 `json:"accountStructure"`
 	Expired                 string                 `json:"expired"`
 	ExpiresAt               string                 `json:"expires_at"`
 	LastRefresh             string                 `json:"last_refresh"`
@@ -2433,7 +2495,7 @@ func parseCockpitToolsAccounts(raw []byte) ([]cockpitToolsAccount, error) {
 }
 
 func cockpitToolsAccountLabel(a cockpitToolsAccount) string {
-	for _, value := range []string{a.Email, a.AccountName, a.APIProviderName, a.APIProviderID, a.ID, a.AccountID} {
+	for _, value := range []string{a.Email, cockpitToolsAccountName(a), cockpitToolsAPIProviderName(a), cockpitToolsAPIProviderID(a), a.ID, cockpitToolsRawAccountID(a)} {
 		if text := strings.TrimSpace(value); text != "" {
 			return text
 		}
@@ -2441,14 +2503,178 @@ func cockpitToolsAccountLabel(a cockpitToolsAccount) string {
 	return "(unknown)"
 }
 
-func cockpitToolsPlan(a cockpitToolsAccount) *string {
-	if text := strings.TrimSpace(a.PlanType); text != "" {
-		return sPtr(text)
+func cockpitToolsFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if text := strings.TrimSpace(value); text != "" {
+			return text
+		}
 	}
-	if text := strings.TrimSpace(a.AuthFilePlanType); text != "" {
-		return sPtr(text)
+	return ""
+}
+
+func cockpitToolsPlanType(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.PlanType, a.PlanTypeCamel)
+}
+
+func cockpitToolsAuthMode(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.AuthMode, a.AuthModeCamel)
+}
+
+func cockpitToolsAPIKey(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.OpenAIAPIKey, a.OpenAIAPIKeyCamel)
+}
+
+func cockpitToolsAPIBaseURL(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.APIBaseURL, a.APIBaseURLCamel)
+}
+
+func cockpitToolsAPIProviderID(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.APIProviderID, a.APIProviderIDCamel)
+}
+
+func cockpitToolsAPIProviderName(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.APIProviderName, a.APIProviderNameCamel)
+}
+
+func cockpitToolsAuthFilePlanType(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.AuthFilePlanType, a.AuthFilePlanTypeCamel)
+}
+
+func cockpitToolsAccountName(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.AccountName, a.AccountNameCamel)
+}
+
+func cockpitToolsAccountStructure(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.AccountStructure, a.AccountStructureCamel)
+}
+
+func cockpitToolsRawAccountID(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.ChatGPTAccountID, a.ChatGPTAccountIDCamel, a.AccountID, a.AccountIDCamel)
+}
+
+func cockpitToolsOrganizationID(a cockpitToolsAccount) string {
+	return cockpitToolsFirstNonEmpty(a.OrganizationID, a.OrganizationIDCamel)
+}
+
+func cockpitToolsPlan(a cockpitToolsAccount) *string {
+	for _, text := range []string{
+		cockpitToolsPlanType(a),
+		cockpitToolsTokenPlan(cockpitToolsIDToken(a)),
+		cockpitToolsTokenPlan(cockpitToolsAccessToken(a)),
+		cockpitToolsAuthFilePlanType(a),
+		cockpitToolsStructurePlan(cockpitToolsAccountStructure(a)),
+	} {
+		if normalized := normalizeCockpitToolsPlan(text); normalized != "" {
+			return sPtr(normalized)
+		}
 	}
 	return nil
+}
+
+func cockpitToolsTokenPlan(token string) string {
+	payload := decodeJWTPayloadMap(token)
+	if payload == nil {
+		return ""
+	}
+	if plan := jsonStringField(payload, "chatgpt_plan_type"); plan != "" {
+		return plan
+	}
+	if plan := jsonStringField(payload, "plan_type"); plan != "" {
+		return plan
+	}
+	if plan := jsonStringField(payload, "plan"); plan != "" {
+		return plan
+	}
+	auth, _ := payload["https://api.openai.com/auth"].(map[string]interface{})
+	return jsonStringField(auth, "chatgpt_plan_type")
+}
+
+func cockpitToolsStructurePlan(structure string) string {
+	normalized := strings.ToLower(strings.TrimSpace(structure))
+	switch {
+	case strings.Contains(normalized, "team"):
+		return "team"
+	case strings.Contains(normalized, "business"):
+		return "business"
+	case strings.Contains(normalized, "enterprise"):
+		return "enterprise"
+	default:
+		return ""
+	}
+}
+
+func normalizeCockpitToolsPlan(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return ""
+	}
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	normalized = strings.Join(strings.Fields(normalized), "-")
+	switch {
+	case strings.Contains(normalized, "team"):
+		return "team"
+	case strings.Contains(normalized, "enterprise"):
+		return "enterprise"
+	case strings.Contains(normalized, "business"):
+		return "business"
+	case strings.Contains(normalized, "pro-max"), strings.Contains(normalized, "promax"):
+		return "promax"
+	case strings.Contains(normalized, "pro-lite"), strings.Contains(normalized, "prolite"):
+		return "prolite"
+	case normalized == "pro" || strings.Contains(normalized, "chatgpt-pro"):
+		return "pro"
+	case strings.Contains(normalized, "plus"):
+		return "plus"
+	case strings.Contains(normalized, "free"):
+		return "free"
+	default:
+		return normalized
+	}
+}
+
+func decodeJWTPayloadMap(token string) map[string]interface{} {
+	token = strings.TrimSpace(token)
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload := parts[1]
+		switch len(payload) % 4 {
+		case 2:
+			payload += "=="
+		case 3:
+			payload += "="
+		}
+		decoded, err = base64.URLEncoding.DecodeString(payload)
+		if err != nil {
+			return nil
+		}
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(decoded, &payload); err != nil {
+		return nil
+	}
+	return payload
+}
+
+func jsonStringField(object map[string]interface{}, key string) string {
+	if object == nil {
+		return ""
+	}
+	value, ok := object[key]
+	if !ok {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case fmt.Stringer:
+		return strings.TrimSpace(v.String())
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
 }
 
 func cockpitToolsStatus(a cockpitToolsAccount) string {
@@ -2461,30 +2687,69 @@ func cockpitToolsStatus(a cockpitToolsAccount) string {
 	return "active"
 }
 
-func cockpitToolsTokenValue(primary string, fallback string) string {
-	if text := strings.TrimSpace(primary); text != "" {
-		return text
-	}
-	return strings.TrimSpace(fallback)
-}
-
 func cockpitToolsIDToken(a cockpitToolsAccount) string {
-	return cockpitToolsTokenValue(a.IDToken, a.Tokens.IDToken)
+	return cockpitToolsFirstNonEmpty(a.IDToken, a.IDTokenCamel, a.Tokens.IDToken, a.Tokens.IDTokenCamel)
 }
 
 func cockpitToolsAccessToken(a cockpitToolsAccount) string {
-	return cockpitToolsTokenValue(a.AccessToken, a.Tokens.AccessToken)
+	return cockpitToolsFirstNonEmpty(a.AccessToken, a.AccessTokenCamel, a.Tokens.AccessToken, a.Tokens.AccessCamel)
 }
 
 func cockpitToolsRefreshToken(a cockpitToolsAccount) string {
-	return cockpitToolsTokenValue(a.RefreshToken, a.Tokens.RefreshToken)
+	return cockpitToolsFirstNonEmpty(a.RefreshToken, a.RefreshTokenCamel, a.Tokens.RefreshToken, a.Tokens.RefreshCamel)
 }
 
 func cockpitToolsAccountID(a cockpitToolsAccount) string {
-	if text := strings.TrimSpace(a.ChatGPTAccountID); text != "" {
+	if text := cockpitToolsRawAccountID(a); text != "" {
 		return text
 	}
-	return strings.TrimSpace(a.AccountID)
+	for _, token := range []string{cockpitToolsIDToken(a), cockpitToolsAccessToken(a)} {
+		payload := decodeJWTPayloadMap(token)
+		if payload == nil {
+			continue
+		}
+		auth, _ := payload["https://api.openai.com/auth"].(map[string]interface{})
+		for _, object := range []map[string]interface{}{auth, payload} {
+			for _, key := range []string{"chatgpt_account_id", "account_id"} {
+				if text := jsonStringField(object, key); text != "" {
+					return text
+				}
+			}
+		}
+	}
+	if isCockpitToolsTeamLike(a) {
+		return cockpitToolsStableSyntheticAccountID(a)
+	}
+	return ""
+}
+
+func isCockpitToolsTeamLike(a cockpitToolsAccount) bool {
+	for _, value := range []string{
+		cockpitToolsPlanType(a),
+		cockpitToolsAuthFilePlanType(a),
+		cockpitToolsTokenPlan(cockpitToolsIDToken(a)),
+		cockpitToolsTokenPlan(cockpitToolsAccessToken(a)),
+		cockpitToolsAccountStructure(a),
+	} {
+		switch normalizeCockpitToolsPlan(value) {
+		case "team", "business", "enterprise":
+			return true
+		}
+	}
+	return false
+}
+
+func cockpitToolsStableSyntheticAccountID(a cockpitToolsAccount) string {
+	seed := cockpitToolsFirstNonEmpty(
+		a.ID,
+		cockpitToolsAccountName(a),
+		cockpitToolsAccessToken(a),
+		cockpitToolsRefreshToken(a),
+		cockpitToolsIDToken(a),
+		a.Email,
+	)
+	sum := sha256.Sum256([]byte(seed))
+	return "cockpit-tools-team-" + base64.RawURLEncoding.EncodeToString(sum[:12])
 }
 
 func cockpitToolsExpiresAt(a cockpitToolsAccount) *time.Time {
@@ -2553,14 +2818,16 @@ func (h *OpenAIHandler) buildOAuthAccountFromCockpitTools(a cockpitToolsAccount,
 		RefreshToken:     sPtr(refreshToken),
 		ExpiresAt:        cockpitToolsExpiresAt(a),
 		ChatGPTAccountID: sPtr(cockpitToolsAccountID(a)),
-		ChatGPTUserID:    sPtr(strings.TrimSpace(a.UserID)),
-		OrganizationID:   sPtr(strings.TrimSpace(a.OrganizationID)),
+		ChatGPTUserID:    sPtr(cockpitToolsFirstNonEmpty(a.UserID, a.UserIDCamel)),
+		OrganizationID:   sPtr(cockpitToolsOrganizationID(a)),
 		Plan:             cockpitToolsPlan(a),
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
 	if len(a.Tags) > 0 && strings.TrimSpace(a.Tags[0]) != "" {
 		account.TagName = sPtr(strings.TrimSpace(a.Tags[0]))
+	} else if name := cockpitToolsAccountName(a); name != "" {
+		account.TagName = sPtr(name)
 	}
 	if idToken != "" {
 		account.IDToken = sPtr(idToken)
@@ -2584,24 +2851,27 @@ func (h *OpenAIHandler) buildOAuthAccountFromCockpitTools(a cockpitToolsAccount,
 }
 
 func (h *OpenAIHandler) buildAPIAccountFromCockpitTools(a cockpitToolsAccount, now time.Time) (*models.OpenAIAccount, error) {
-	apiKey := strings.TrimSpace(a.OpenAIAPIKey)
+	apiKey := cockpitToolsAPIKey(a)
 	if apiKey == "" {
 		return nil, fmt.Errorf("api key 为空")
 	}
-	provider := strings.TrimSpace(a.APIProviderID)
+	provider := cockpitToolsAPIProviderID(a)
 	if provider == "" {
-		provider = strings.TrimSpace(a.APIProviderName)
+		provider = cockpitToolsAPIProviderName(a)
 	}
 	if provider == "" {
 		provider = "openai"
 	}
-	baseURL := strings.TrimSpace(a.APIBaseURL)
+	baseURL := cockpitToolsAPIBaseURL(a)
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
 	label := strings.TrimSpace(a.Email)
 	if label == "" {
 		label = strings.TrimSpace(a.AccountName)
+		if label == "" {
+			label = cockpitToolsAccountName(a)
+		}
 	}
 	if label == "" {
 		label = provider
@@ -2637,8 +2907,8 @@ func (h *OpenAIHandler) ImportFromCockpitTools(c *gin.Context) {
 
 	for _, item := range cockpitToolsAccounts {
 		label := cockpitToolsAccountLabel(item)
-		authMode := strings.ToLower(strings.TrimSpace(item.AuthMode))
-		isAPIKey := authMode == "apikey" || strings.TrimSpace(item.OpenAIAPIKey) != ""
+		authMode := strings.ToLower(strings.TrimSpace(cockpitToolsAuthMode(item)))
+		isAPIKey := authMode == "apikey" || cockpitToolsAPIKey(item) != ""
 		if isAPIKey {
 			account, err := h.buildAPIAccountFromCockpitTools(item, now)
 			if err != nil {
@@ -3061,7 +3331,6 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 			accessToken := derefStr(account.AccessToken)
 			if accessToken == "" && derefStr(account.RefreshToken) != "" {
 				if err := h.refreshOAuthAccountTokens(&account); err != nil {
-					fmt.Printf("[OpenAI] Auto refresh before quota failed for account id=%s email=%s: %v\n", account.ID, account.Email, err)
 					if saveErr := h.persistQuotaFailureState(&account, err.Error(), false); saveErr != nil {
 						results[idx] = quotaResult{ID: account.ID, Email: account.Email, Success: false, Error: fmt.Sprintf("persist quota failed: %v", saveErr)}
 						return
@@ -3076,7 +3345,6 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 			info, err := openaiplatform.FetchQuota(accessToken, chatgptID)
 			if err != nil && isQuotaUnauthorized(err) && derefStr(account.RefreshToken) != "" {
 				if refreshErr := h.refreshOAuthAccountTokens(&account); refreshErr != nil {
-					fmt.Printf("[OpenAI] Auto refresh on quota 401 failed for account id=%s email=%s: %v\n", account.ID, account.Email, refreshErr)
 					if saveErr := h.persistQuotaFailureState(&account, refreshErr.Error(), false); saveErr != nil {
 						results[idx] = quotaResult{ID: account.ID, Email: account.Email, Success: false, Error: fmt.Sprintf("persist quota failed: %v", saveErr)}
 						return
@@ -3143,6 +3411,9 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 			account.Quota7dUsedPercent = info.Codex7dUsedPercent
 			account.Quota7dResetSeconds = info.Codex7dResetSeconds
 			account.Quota7dWindowMinutes = info.Codex7dWindowMinutes
+			if plan := normalizedOpenAIPlanPtr(info.PlanType); plan != nil {
+				account.Plan = plan
+			}
 			now := time.Now()
 			account.QuotaUpdatedAt = &now
 			if err := h.storage.Save(&account); err != nil {
@@ -3226,29 +3497,23 @@ func (h *OpenAIHandler) serviceConfigPayload(c *gin.Context) gin.H {
 		}
 	}
 
-	// Log stats from DB
-	var logTotal int64
-	if h.codexStorage != nil {
-		_, logTotal, _ = h.codexStorage.GetLogs(0, 0)
-	}
-
 	proxyCount, _ := h.storage.CountProxyEnabled()
 	v1ProxyMode, _ := storage.GetSetting("v1_proxy_mode")
 	codexAPIBaseURL := buildCodexAPIServiceBaseURL(c)
 
 	return gin.H{
-		"proxy_pool_enabled":  enabled,
-		"strategy":            strategy,
-		"pool_size":           poolSize,
-		"proxy_enabled_count": proxyCount,
-		"total_requests":      totalReqs,
-		"total_logs":          logTotal,
-		"api_key_set":         apiKey != "",
-		"api_key_masked":      maskedKey,
-		"v1_proxy_mode":       v1ProxyMode,
-		"codex_api_service":   enabled && v1ProxyMode == "codex",
-		"codex_api_base_url":  codexAPIBaseURL,
-		"codex_api_port_url":  strings.TrimRight(codexAPIBaseURL, "/") + "/responses",
+		"proxy_pool_enabled":    enabled,
+		"strategy":              strategy,
+		"pool_size":             poolSize,
+		"proxy_enabled_count":   proxyCount,
+		"total_requests":        totalReqs,
+		"request_logs_retained": false,
+		"api_key_set":           apiKey != "",
+		"api_key_masked":        maskedKey,
+		"v1_proxy_mode":         v1ProxyMode,
+		"codex_api_service":     enabled && v1ProxyMode == "codex",
+		"codex_api_base_url":    codexAPIBaseURL,
+		"codex_api_port_url":    strings.TrimRight(codexAPIBaseURL, "/") + "/responses",
 	}
 }
 
@@ -3294,10 +3559,18 @@ func (h *OpenAIHandler) ActivateCodexAPIService(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "LOCAL_ACCESS_ERROR"})
 		return
 	}
+	launchResult, err := openaiplatform.RestartCodexApp()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "CODEX_LAUNCH_FAILED"})
+		return
+	}
 
 	payload := h.serviceConfigPayload(c)
 	payload["codex_config_injected"] = true
 	payload["api_key_generated"] = strings.TrimSpace(apiKeyBefore) == ""
+	payload["codex_app_started"] = launchResult.Started
+	payload["codex_app_restarted"] = launchResult.Restarted
+	payload["codex_app_was_running"] = launchResult.RunningBefore
 	c.JSON(http.StatusOK, payload)
 }
 
@@ -3631,64 +3904,11 @@ func (h *OpenAIHandler) buildCodexLocalAccessStats() models.CodexLocalAccessStat
 }
 
 func (h *OpenAIHandler) buildCodexLocalAccessStatsWindow(since, now time.Time) models.CodexLocalAccessStatsWindow {
-	window := models.CodexLocalAccessStatsWindow{
+	return models.CodexLocalAccessStatsWindow{
 		Since:     since.UTC().Format(time.RFC3339),
 		UpdatedAt: now.UTC().Format(time.RFC3339),
 		Accounts:  []models.CodexLocalAccessAccountStats{},
 	}
-	if h.codexStorage == nil {
-		return window
-	}
-	logs, err := h.codexStorage.GetLogsSince(since)
-	if err != nil {
-		return window
-	}
-	byAccount := make(map[string]*models.CodexLocalAccessAccountStats)
-	for _, item := range logs {
-		if item.CreatedAt.Before(since) {
-			continue
-		}
-		addUsage(&window.Totals, item)
-		accountKey := strings.TrimSpace(item.AccountID)
-		if accountKey == "" {
-			accountKey = strings.TrimSpace(item.AccountEmail)
-		}
-		if accountKey == "" {
-			accountKey = "unknown"
-		}
-		accountStats := byAccount[accountKey]
-		if accountStats == nil {
-			accountStats = &models.CodexLocalAccessAccountStats{
-				AccountID: accountKey,
-				Email:     item.AccountEmail,
-			}
-			byAccount[accountKey] = accountStats
-		}
-		addUsage(&accountStats.Usage, item)
-		if accountStats.UpdatedAt == "" || item.CreatedAt.Format(time.RFC3339) > accountStats.UpdatedAt {
-			accountStats.UpdatedAt = item.CreatedAt.UTC().Format(time.RFC3339)
-		}
-	}
-	for _, accountStats := range byAccount {
-		window.Accounts = append(window.Accounts, *accountStats)
-	}
-	sort.Slice(window.Accounts, func(i, j int) bool {
-		return window.Accounts[i].Usage.RequestCount > window.Accounts[j].Usage.RequestCount
-	})
-	return window
-}
-
-func addUsage(target *models.CodexLocalAccessUsageStats, log models.CodexLog) {
-	target.RequestCount++
-	if log.StatusCode >= 200 && log.StatusCode < 400 {
-		target.SuccessCount++
-	} else {
-		target.FailureCount++
-	}
-	target.TotalLatencyMs += log.Duration
-	target.InputTokens += log.InputTokens
-	target.OutputTokens += log.OutputTokens
-	target.TotalTokens += log.InputTokens + log.OutputTokens
 }
 
 func (h *OpenAIHandler) filterCodexLocalAccessAccountIDs(ids []string, restrictFree bool) ([]string, error) {
@@ -3853,7 +4073,6 @@ func (h *OpenAIHandler) refreshOAuthAccountTokens(account *models.OpenAIAccount)
 
 	tokenResp, err := openaiplatform.RefreshToken(*account.RefreshToken)
 	if err != nil {
-		fmt.Printf("[OpenAI] Upstream refresh request failed for account id=%s email=%s: %v\n", account.ID, account.Email, err)
 		if isRefreshTokenReusedError(err) {
 			h.markOAuthAccountReauthRequired(account)
 			return fmt.Errorf("refresh_token 已轮换失效，需要重新 OAuth 登录或重新导入最新账号")
@@ -3875,6 +4094,9 @@ func (h *OpenAIHandler) refreshOAuthAccountTokens(account *models.OpenAIAccount)
 			account.ChatGPTAccountID = userInfo.ChatGPTAccountID
 			account.ChatGPTUserID = userInfo.ChatGPTUserID
 			account.OrganizationID = userInfo.OrganizationID
+			if plan := normalizedOpenAIPlanPtr(userInfo.PlanType); plan != nil {
+				account.Plan = plan
+			}
 		}
 		if j := openaiplatform.ExtractOpenAIAuthJSON(tokenResp.IDToken); j != "" {
 			account.OpenAIAuthJSON = sPtr(j)
@@ -3886,7 +4108,6 @@ func (h *OpenAIHandler) refreshOAuthAccountTokens(account *models.OpenAIAccount)
 	}
 	account.UpdatedAt = time.Now()
 	if err := h.storage.Save(account); err != nil {
-		fmt.Printf("[OpenAI] Persist refreshed token failed for account id=%s email=%s: %v\n", account.ID, account.Email, err)
 		return fmt.Errorf("persist refreshed token failed: %w", err)
 	}
 	return nil
@@ -3939,12 +4160,20 @@ func (h *OpenAIHandler) markOAuthAccountReauthRequired(account *models.OpenAIAcc
 	now := time.Now()
 	account.UpdatedAt = now
 	account.QuotaUpdatedAt = &now
-	if err := h.storage.Save(account); err != nil {
-		fmt.Printf("[OpenAI] Persist reauth-required status failed for account id=%s email=%s: %v\n", account.ID, account.Email, err)
-	}
+	_ = h.storage.Save(account)
 }
 
 func sPtr(s string) *string { return &s }
+
+func normalizedOpenAIPlanPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	if normalized := openaiplatform.NormalizePlanType(*value); normalized != "" {
+		return sPtr(normalized)
+	}
+	return nil
+}
 
 func derefStr(s *string) string {
 	if s == nil {

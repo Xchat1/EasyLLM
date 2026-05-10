@@ -1,8 +1,8 @@
 <template>
-  <div class="min-h-screen bg-gray-950 flex items-center justify-center px-4">
+  <div class="login-shell flex min-h-screen items-center justify-center px-4">
     <div class="w-full max-w-sm">
       <div class="text-center mb-8">
-        <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center font-bold text-white text-2xl mx-auto mb-4">EL</div>
+        <img :src="logoUrl" alt="" class="mx-auto mb-4 h-16 w-16 rounded-2xl shadow-2xl" />
         <h1 class="text-2xl font-bold text-white">EasyLLM</h1>
         <p class="text-gray-500 text-sm mt-1">{{ isSetup ? '设置访问密码' : '请输入密码' }}</p>
       </div>
@@ -49,6 +49,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { authAPI } from '../api'
+import logoUrl from '@/assets/brand/easyllm-app-icon.png'
 
 const router = useRouter()
 const password = ref('')
@@ -104,3 +105,12 @@ async function handleSubmit() {
   }
 }
 </script>
+
+<style scoped>
+.login-shell {
+  background:
+    radial-gradient(circle at 50% 0%, var(--app-bg-glow), transparent 30rem),
+    var(--app-bg);
+  color: var(--app-text);
+}
+</style>

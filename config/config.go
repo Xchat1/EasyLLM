@@ -26,8 +26,8 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Type     string // "sqlite" or "postgres"
-	DSN      string // postgres: "host=... user=... password=... dbname=... port=5432 sslmode=disable"
+	Type       string // "sqlite" or "postgres"
+	DSN        string // postgres: "host=... user=... password=... dbname=... port=5432 sslmode=disable"
 	SQLitePath string
 }
 
@@ -40,9 +40,9 @@ type ProxyConfig struct {
 }
 
 type AppConfig struct {
-	DataDir        string
-	SecretKey      string
-	Debug          bool
+	DataDir         string
+	SecretKey       string
+	Debug           bool
 	DefaultPassword string
 }
 
@@ -65,7 +65,7 @@ func Load() *Config {
 		instance = &Config{
 			Server: ServerConfig{
 				Port:    getEnvInt("SERVER_PORT", 8022),
-				Host:    getEnv("SERVER_HOST", "0.0.0.0"),
+				Host:    getEnv("SERVER_HOST", "127.0.0.1"),
 				APIPort: getEnvInt("SERVER_PORT", 8022), // same port; APIPort is legacy, kept for struct compat
 			},
 			Database: DatabaseConfig{
@@ -87,7 +87,7 @@ func Load() *Config {
 				DefaultPassword: getEnv("DEFAULT_PASSWORD", ""),
 			},
 			Log: LogConfig{
-				Enabled: getEnvBool("LOG_ENABLED", true),
+				Enabled: false,
 			},
 			IPBlacklist: IPBlacklistConfig{
 				Enabled: getEnvBool("IP_BLACKLIST_ENABLED", false),
@@ -147,9 +147,6 @@ func (c *Config) Update(updates map[string]interface{}) {
 	}
 	if v, ok := updates["db_dsn"].(string); ok {
 		c.Database.DSN = v
-	}
-	if v, ok := updates["log_enabled"].(bool); ok {
-		c.Log.Enabled = v
 	}
 	if v, ok := updates["ip_blacklist_enabled"].(bool); ok {
 		c.IPBlacklist.Enabled = v

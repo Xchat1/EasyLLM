@@ -28,13 +28,37 @@
             <option value="ja">日本語</option>
           </select>
         </div>
-        <div>
-          <label class="label">主题</label>
-          <select v-model="general.theme" class="input">
-            <option value="system">跟随系统</option>
-            <option value="dark">暗色</option>
-            <option value="light">亮色</option>
-          </select>
+        <div class="md:col-span-2">
+          <label class="label">外观模式</label>
+          <div class="theme-segmented">
+            <button
+              v-for="mode in themeModes"
+              :key="mode.id"
+              type="button"
+              class="theme-segmented-option"
+              :class="{ 'theme-segmented-option-active': general.theme === mode.id }"
+              @click="setThemeModePreference(mode.id)"
+            >
+              {{ mode.label }}
+            </button>
+          </div>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Apple 风格强调色</label>
+          <div class="accent-theme-grid">
+            <button
+              v-for="accent in accentThemes"
+              :key="accent.id"
+              type="button"
+              class="accent-theme-option"
+              :class="{ 'accent-theme-option-active': general.accent_theme === accent.id }"
+              :style="{ '--accent-swatch': accent.swatch }"
+              @click="setAccentThemePreference(accent.id)"
+            >
+              <span class="accent-theme-dot" />
+              <span>{{ accent.label }}</span>
+            </button>
+          </div>
         </div>
         <div>
           <label class="label">关闭行为</label>
@@ -101,7 +125,7 @@
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <div v-for="platform in cockpitPlatforms" :key="platform.id" class="rounded-2xl border border-gray-800 bg-gray-950/60 p-4">
           <div class="flex items-center gap-2">
-            <span class="text-lg">{{ platform.icon }}</span>
+            <PlatformIcon :platform="platform" size="sm" />
             <span class="font-medium text-white">{{ platform.label }}</span>
           </div>
           <label class="label mt-4">刷新分钟数</label>
@@ -204,14 +228,7 @@
           <p class="mt-1 text-sm text-gray-500">保留 EasyLLM 自身的网络和数据库配置能力。</p>
         </div>
 
-        <div class="grid gap-4 md:grid-cols-3">
-          <label class="flex items-center justify-between rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
-            <div>
-              <div class="text-sm font-medium text-white">日志记录</div>
-              <div class="mt-1 text-xs text-gray-500">记录代理请求与管理操作。</div>
-            </div>
-            <input v-model="switches.log_enabled" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
-          </label>
+        <div class="grid gap-4 md:grid-cols-2">
           <label class="flex items-center justify-between rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
             <div>
               <div class="text-sm font-medium text-white">IP 黑名单</div>
@@ -298,9 +315,15 @@
 <script setup>
 import { computed, inject, onMounted, ref } from 'vue'
 import { authAPI, cockpitAPI, settingsAPI } from '@/api'
+import PlatformIcon from '@/components/PlatformIcon.vue'
+import { ACCENT_THEMES, DEFAULT_APPEARANCE, THEME_MODES } from '@/config/theme'
+import { useAppearance } from '@/composables/useAppearance'
 import { cockpitPlatforms } from '@/lib/platforms'
 
 const notify = inject('notify')
+const { setAppearance } = useAppearance()
+const themeModes = THEME_MODES
+const accentThemes = ACCENT_THEMES
 
 const tabs = [
   { id: 'experience', label: '通用体验' },
@@ -315,22 +338,14 @@ const pathEntries = [
   { key: 'antigravity', label: 'Antigravity 路径', placeholder: '/Applications/Antigravity.app' },
   { key: 'codex', label: 'Codex 路径', placeholder: '/Applications/Codex.app' },
   { key: 'vscode', label: 'VS Code 路径', placeholder: '/Applications/Visual Studio Code.app' },
-  { key: 'windsurf', label: 'Windsurf 路径', placeholder: '/Applications/Windsurf.app' },
   { key: 'kiro', label: 'Kiro 路径', placeholder: '/Applications/Kiro.app' },
-  { key: 'cursor', label: 'Cursor 路径', placeholder: '/Applications/Cursor.app' },
   { key: 'gemini', label: 'Gemini CLI 路径', placeholder: '/usr/local/bin/gemini' },
-  { key: 'codebuddy', label: 'CodeBuddy 路径', placeholder: '/Applications/CodeBuddy.app' },
-  { key: 'codebuddy-cn', label: 'CodeBuddy CN 路径', placeholder: '/Applications/CodeBuddyCN.app' },
-  { key: 'qoder', label: 'Qoder 路径', placeholder: '/Applications/Qoder.app' },
-  { key: 'trae', label: 'Trae 路径', placeholder: '/Applications/Trae.app' },
-  { key: 'zed', label: 'Zed 路径', placeholder: '/Applications/Zed.app' },
-  { key: 'workbuddy', label: 'Workbuddy 路径', placeholder: '/Applications/Workbuddy.app' },
 ]
 
 const activeTab = ref('experience')
 
 const general = ref(defaultGeneralSettings())
-const switches = ref({ log_enabled: true, ip_blacklist_enabled: false, proxy_enabled: false })
+const switches = ref({ ip_blacklist_enabled: false, proxy_enabled: false })
 const proxy = ref({ enabled: false, host: '', port: 0, username: '', password: '' })
 const database = ref({ type: 'sqlite', sqlite_path: './data/easyllm.db', dsn: '' })
 const sysInfo = ref({})
@@ -368,6 +383,7 @@ async function loadSettings() {
       authAPI.check(),
     ])
     general.value = mergeGeneralSettings(generalData)
+    applyAppearanceFromSettings()
     switches.value = switchData
     proxy.value = { ...proxy.value, ...proxyData }
     database.value = { ...database.value, ...databaseData }
@@ -382,7 +398,8 @@ async function loadSettings() {
 function defaultGeneralSettings() {
   return {
     language: 'zh-CN',
-    theme: 'system',
+    theme: DEFAULT_APPEARANCE.mode,
+    accent_theme: DEFAULT_APPEARANCE.accent,
     close_behavior: 'ask',
     privacy_mode: false,
     auto_refresh_minutes: 5,
@@ -401,6 +418,8 @@ function mergeGeneralSettings(data) {
   return {
     ...defaults,
     ...data,
+    theme: data?.theme || defaults.theme,
+    accent_theme: data?.accent_theme || defaults.accent_theme,
     refresh_intervals: {
       ...defaults.refresh_intervals,
       ...(data?.refresh_intervals || {}),
@@ -419,10 +438,28 @@ function mergeGeneralSettings(data) {
 async function saveGeneralSettings() {
   try {
     general.value = mergeGeneralSettings(await cockpitAPI.updateGeneralSettings(general.value))
+    applyAppearanceFromSettings()
     notify?.('设置已保存', 'success')
   } catch (error) {
     notify?.(error.message || '保存失败', 'error')
   }
+}
+
+function setThemeModePreference(mode) {
+  general.value.theme = mode
+  applyAppearanceFromSettings()
+}
+
+function setAccentThemePreference(accent) {
+  general.value.accent_theme = accent
+  applyAppearanceFromSettings()
+}
+
+function applyAppearanceFromSettings() {
+  setAppearance({
+    mode: general.value.theme,
+    accent: general.value.accent_theme,
+  })
 }
 
 async function saveSwitches() {
@@ -489,3 +526,55 @@ async function savePassword() {
   }
 }
 </script>
+
+<style scoped>
+.theme-segmented {
+  @apply grid grid-cols-3 gap-1 rounded-2xl border p-1;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+}
+
+.theme-segmented-option {
+  @apply rounded-xl px-3 py-2 text-sm font-medium transition-colors;
+  color: var(--app-text-secondary);
+}
+
+.theme-segmented-option:hover {
+  background: var(--app-control-hover-bg);
+  color: var(--app-text);
+}
+
+.theme-segmented-option-active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--app-accent), var(--app-accent-strong));
+  box-shadow: 0 10px 24px var(--app-accent-shadow);
+}
+
+.accent-theme-grid {
+  @apply grid gap-2 sm:grid-cols-2 xl:grid-cols-5;
+}
+
+.accent-theme-option {
+  @apply flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm transition-colors;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+  color: var(--app-text-secondary);
+}
+
+.accent-theme-option:hover {
+  background: var(--app-control-hover-bg);
+  color: var(--app-text);
+}
+
+.accent-theme-option-active {
+  border-color: var(--app-accent-soft);
+  color: var(--app-text);
+  box-shadow: inset 0 0 0 1px var(--app-accent-soft);
+}
+
+.accent-theme-dot {
+  @apply h-3.5 w-3.5 rounded-full;
+  background: var(--accent-swatch);
+  box-shadow: 0 0 0 3px var(--app-surface-muted);
+}
+</style>

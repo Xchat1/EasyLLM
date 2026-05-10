@@ -10,7 +10,7 @@ const api = axios.create({
 
 const longApi = axios.create({
   baseURL: '/api/v1',
-  timeout: 120000,
+  timeout: 660000,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -74,21 +74,8 @@ export const openaiAPI = {
   toggleCodex: (id) => api.post(`/openai/codex/accounts/${id}/toggle`),
   getCodexPool: () => api.get('/openai/codex/pool'),
   refreshCodexPool: () => api.post('/openai/codex/pool/refresh'),
-  getCodexLogs: (params) => api.get('/openai/codex/logs', { params }),
-  clearCodexLogs: () => api.delete('/openai/codex/logs'),
   getAvailableModels: (refresh = false) =>
     api.get('/openai/available-models', { params: refresh ? { refresh: '1' } : {} }),
-}
-
-// Cursor API
-export const cursorAPI = {
-  list: () => api.get('/cursor/accounts'),
-  add: (data) => api.post('/cursor/accounts', data),
-  update: (id, data) => api.put(`/cursor/accounts/${id}`, data),
-  delete: (id) => api.delete(`/cursor/accounts/${id}`),
-  deleteMany: (ids) => api.delete('/cursor/accounts', { data: { ids } }),
-  activate: (id) => api.post(`/cursor/accounts/${id}/activate`),
-  import: (accounts) => api.post('/cursor/import', accounts),
 }
 
 // Antigravity API
@@ -131,7 +118,9 @@ export const cockpitAPI = {
   deleteManyPlatformAccounts: (platform, ids) =>
     api.delete(`/cockpit/platforms/${platform}/accounts`, { data: { ids } }),
   activatePlatformAccount: (platform, id) => api.post(`/cockpit/platforms/${platform}/accounts/${id}/activate`),
-  listAllInstances: () => api.get('/cockpit/instances'),
+  // Platform-specific refresh (Kiro, Gemini, GitHub Copilot)
+  refreshPlatformAccount: (platform, id) =>
+    longApi.post(`/cockpit/platforms/${platform}/accounts/${id}/refresh`),
   listPlatformInstances: (platform) => api.get(`/cockpit/platforms/${platform}/instances`),
   exportPlatformInstances: (platform) => api.get(`/cockpit/platforms/${platform}/instances/export`),
   addPlatformInstance: (platform, data) => api.post(`/cockpit/platforms/${platform}/instances`, data),
@@ -147,6 +136,53 @@ export const cockpitAPI = {
   toggleWakeupTask: (id) => api.post(`/cockpit/wakeup/tasks/${id}/toggle`),
   getGeneralSettings: () => api.get('/cockpit/settings/general'),
   updateGeneralSettings: (data) => api.put('/cockpit/settings/general', data),
+}
+
+// Antigravity-specific API
+export const antigravityExtAPI = {
+  wakeup: (id, data) => longApi.post(`/cockpit/platforms/antigravity/accounts/${id}/wakeup`, data),
+  getSwitchHistory: () => api.get('/cockpit/platforms/antigravity/switch-history'),
+  clearSwitchHistory: () => api.delete('/cockpit/platforms/antigravity/switch-history'),
+}
+
+// Antigravity OAuth API
+export const antigravityOAuthAPI = {
+  startLogin: () => api.post('/cockpit/platforms/antigravity/oauth/start'),
+  completeLogin: (loginId, timeoutSec = 600) =>
+    longApi.post('/cockpit/platforms/antigravity/oauth/complete', { login_id: loginId, timeout_sec: timeoutSec }),
+  submitCallback: (loginId, callbackUrl) =>
+    api.post('/cockpit/platforms/antigravity/oauth/submit-callback', { login_id: loginId, callback_url: callbackUrl }),
+  cancelLogin: (loginId) => api.post('/cockpit/platforms/antigravity/oauth/cancel', { login_id: loginId }),
+}
+
+// GitHub Copilot OAuth API
+export const githubCopilotOAuthAPI = {
+  startLogin: () => api.post('/cockpit/platforms/github-copilot/oauth/start'),
+  pollToken: (deviceCode) =>
+    api.post('/cockpit/platforms/github-copilot/oauth/complete', { device_code: deviceCode }),
+  cancelLogin: () => api.post('/cockpit/platforms/github-copilot/oauth/cancel'),
+  importToken: (githubAccessToken) =>
+    longApi.post('/cockpit/platforms/github-copilot/accounts/import-token', {
+      github_access_token: githubAccessToken,
+    }),
+}
+
+// Kiro OAuth API
+export const kiroOAuthAPI = {
+  startLogin: () => api.post('/cockpit/platforms/kiro/oauth/start'),
+  completeLogin: (loginId, timeoutSec = 300) =>
+    longApi.post('/cockpit/platforms/kiro/oauth/complete', { login_id: loginId, timeout_sec: timeoutSec }),
+  cancelLogin: (loginId) => api.post('/cockpit/platforms/kiro/oauth/cancel', { login_id: loginId }),
+}
+
+// Gemini OAuth API
+export const geminiOAuthAPI = {
+  startLogin: () => api.post('/cockpit/platforms/gemini/oauth/start'),
+  completeLogin: (loginId, timeoutSec = 300) =>
+    longApi.post('/cockpit/platforms/gemini/oauth/complete', { login_id: loginId, timeout_sec: timeoutSec }),
+  submitCallback: (loginId, callbackUrl) =>
+    api.post('/cockpit/platforms/gemini/oauth/submit-callback', { login_id: loginId, callback_url: callbackUrl }),
+  cancelLogin: (loginId) => api.post('/cockpit/platforms/gemini/oauth/cancel', { login_id: loginId }),
 }
 
 export { longApi }
