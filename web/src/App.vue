@@ -20,7 +20,7 @@
               />
               <div class="min-w-0">
                 <div class="truncate font-semibold text-white">EasyLLM</div>
-            <div class="truncate text-xs text-gray-500">让每一位开发者快速上手AI Coding</div>
+            <div class="truncate text-xs text-gray-500">EasyAI Coding</div>
               </div>
             </div>
             <button

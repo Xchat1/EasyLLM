@@ -111,25 +111,19 @@
                 placeholder="搜索账号"
                 title="按账号标识或账号 ID 搜索"
               />
+              <select
+                v-model="planGroupFilter"
+                @change="setPlanGroupFilter(planGroupFilter)"
+                class="toolbar-select toolbar-select--plan"
+                title="按套餐分组过滤"
+              >
+                <option v-for="group in planGroups" :key="group.id" :value="group.id">
+                  {{ group.label }}（{{ group.count }}）
+                </option>
+              </select>
             </div>
 
             <div class="toolbar-section toolbar-section--view">
-              <select
-                v-model="activeGroupFilter"
-                @change="persistActiveGroupFilter"
-                class="toolbar-select toolbar-select--group"
-                title="按账号分组过滤"
-              >
-                <option value="all">全部分组</option>
-                <option v-for="group in accountGroups" :key="group.id" :value="group.id">{{ group.name }}（{{ group.account_ids.length }}）</option>
-              </select>
-              <button
-                @click="showGroupManager = true"
-                class="toolbar-btn toolbar-btn-neutral"
-                title="管理账号分组"
-              >
-                分组
-              </button>
               <button
                 @click="toggleAccountLayout"
                 class="toolbar-btn toolbar-btn--layout"
@@ -1410,6 +1404,7 @@ const togglingProxyAll = ref(false)
 const fetchingQuotas = ref(false)
 const fetchingQuotaIds = ref([])
 const quotaLastFetched = ref('')
+const planGroupFilter = ref('all')
 const quotaFilter = ref('all') // all | 200 | 401 | 403 | 429
 const searchQuery = ref('') // search by email
 const apiSearchQuery = ref('')
@@ -1561,19 +1556,25 @@ const oauthAccounts = computed(() => accounts.value.filter(a => !a.account_type 
 const apiAccounts = computed(() => accounts.value.filter(a => a.account_type === 'api'))
 const proxyEnabledCount = computed(() => oauthAccounts.value.filter(a => a.proxy_enabled).length)
 const proxyAllOn = computed(() => oauthAccounts.value.length > 0 && proxyEnabledCount.value === oauthAccounts.value.length)
+const planGroups = computed(() => [
+  { id: 'all', label: 'all', count: oauthAccounts.value.length },
+  { id: 'team', label: 'team', count: countOAuthAccountsByPlan('team') },
+  { id: 'plus', label: 'plus', count: countOAuthAccountsByPlan('plus') },
+  { id: 'free', label: 'free', count: countOAuthAccountsByPlan('free') },
+])
 const activeGroup = computed(() => accountGroups.value.find(g => g.id === activeGroupFilter.value) || null)
 const activeGroupAccountIDs = computed(() => new Set(activeGroup.value?.account_ids || []))
 const localAccessSelectedCount = computed(() => localAccessSelectedIds.value.length)
 
 const filteredOAuthAccounts = computed(() => {
   let list = oauthAccounts.value
+  if (planGroupFilter.value !== 'all') {
+    list = list.filter(a => accountPlanType(a) === planGroupFilter.value)
+  }
   // Search filter
   const q = searchQuery.value.trim().toLowerCase()
   if (q) {
     list = list.filter(a => (a.email || '').toLowerCase().includes(q) || (a.chatgpt_account_id || '').toLowerCase().includes(q))
-  }
-  if (activeGroup.value) {
-    list = list.filter(a => activeGroupAccountIDs.value.has(accountId(a.id)))
   }
   // Quota status filter
   const f = quotaFilter.value
@@ -1696,6 +1697,13 @@ function toggleAccountLayout() {
   oauthPage.value = 1
   apiPage.value = 1
   writeStoredOption('easyllm.openai.accountLayout', accountLayout.value)
+}
+
+function setPlanGroupFilter(groupID) {
+  const allowed = ['all', 'team', 'plus', 'free']
+  planGroupFilter.value = allowed.includes(groupID) ? groupID : 'all'
+  oauthPage.value = 1
+  clearOAuthSelection()
 }
 
 function normalizeAccountGroup(group) {
@@ -3400,6 +3408,10 @@ function accountPlanType(account) {
   return persistedPlan || jwtPlanType(account) || ''
 }
 
+function countOAuthAccountsByPlan(plan) {
+  return oauthAccounts.value.filter(account => accountPlanType(account) === plan).length
+}
+
 function planBadge(account) {
   const plan = accountPlanType(account)
   if (!plan) return null
@@ -3692,11 +3704,17 @@ onBeforeUnmount(() => {
 .toolbar-search {
   @apply w-full min-w-[116px];
 }
+.account-toolbar--oauth .toolbar-search {
+  @apply w-[132px] min-w-[116px] max-w-[132px];
+}
 .toolbar-select {
   @apply w-[86px] min-w-[86px] max-w-[86px] shrink-0 truncate;
 }
 .toolbar-select--group {
   @apply w-[112px] min-w-[112px] max-w-[160px];
+}
+.toolbar-select--plan {
+  @apply w-[88px] min-w-[88px] max-w-[96px];
 }
 .toolbar-select--quota {
   @apply w-[76px] min-w-[76px] max-w-[76px];
@@ -3725,6 +3743,9 @@ onBeforeUnmount(() => {
   }
   .toolbar-section--search .toolbar-search {
     @apply max-w-none;
+  }
+  .account-toolbar--oauth .toolbar-search {
+    @apply w-full max-w-none;
   }
 }
 .stable-tabs {
