@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -79,10 +81,15 @@ jobs:
         run: |
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $tag = "${{ inputs.version }}"
-          } else {
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
             $tag = "${{ github.ref_name }}"
+          } else {
+            $tag = "dev-${{ github.sha }}"
           }
           $version = $tag -replace '^v', ''
+          if ($version.Length -gt 16 -and $version.StartsWith("dev-")) {
+            $version = $version.Substring(0, 16)
+          }
           "EASYLLM_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
           "GOARCH=amd64" | Out-File -FilePath $env:GITHUB_ENV -Append
 
@@ -143,8 +150,10 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             tag="${{ inputs.version }}"
-          else
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
+          else
+            tag="dev-${GITHUB_SHA::12}"
           fi
           echo "EASYLLM_VERSION=${tag#v}" >> "$GITHUB_ENV"
           echo "EASYLLM_PACKAGE_ARCH=${{ matrix.arch }}" >> "$GITHUB_ENV"
@@ -172,6 +181,7 @@ jobs:
     needs:
       - windows
       - macos
+    if: github.event_name == 'workflow_dispatch' || github.ref_type == 'tag'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
