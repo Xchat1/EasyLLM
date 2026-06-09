@@ -84,7 +84,7 @@ match_secret_line() {
 			return 0
 		fi
 
-		if printf '%s\n' "$line" | grep -Eiq '(^|[^[:alnum:]_])(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,})([^[:alnum:]_]|$)'; then
+		if printf '%s\n' "$line" | grep -Eiq '(^|[^[:alnum:]_])(sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,})([^[:alnum:]_]|$)'; then
 			printf '%s\n' "$line"
 			return 0
 		fi

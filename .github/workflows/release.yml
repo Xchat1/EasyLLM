@@ -93,6 +93,10 @@ jobs:
         shell: pwsh
         run: .\scripts\package-windows.ps1
 
+      - name: Privacy-check Windows package
+        shell: bash
+        run: scripts/check-release-archives.sh build/release/*.zip
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
@@ -147,6 +151,9 @@ jobs:
       - name: Package macOS App
         run: ./scripts/build-macos-app.sh --package
 
+      - name: Privacy-check macOS package
+        run: scripts/check-release-archives.sh build/release/*.zip
+
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
@@ -169,6 +176,9 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: Privacy-check release assets
+        run: scripts/check-release-archives.sh dist/*.zip
 
       - name: Generate checksums
         working-directory: dist
