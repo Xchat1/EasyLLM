@@ -67,6 +67,13 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Setup MinGW for CGO
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc
+
       - name: Resolve version
         shell: pwsh
         run: |
@@ -83,10 +90,8 @@ jobs:
         shell: pwsh
         run: |
           $mingw = "C:\msys64\mingw64\bin"
-          if (Test-Path $mingw) {
-            $env:PATH = "$mingw;$env:PATH"
-            $mingw | Out-File -FilePath $env:GITHUB_PATH -Append
-          }
+          $env:PATH = "$mingw;$env:PATH"
+          $mingw | Out-File -FilePath $env:GITHUB_PATH -Append
           gcc --version
 
       - name: Package Windows

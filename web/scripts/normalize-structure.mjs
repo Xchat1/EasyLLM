@@ -63,10 +63,16 @@ for (const item of syncedFiles) {
   }
 }
 
+const canGenerateIcons = await hasCommand('sips')
 for (const icon of generatedIconFiles) {
   const source = resolve(webRoot, 'src/assets/brand/easyllm-app-icon.png')
   const target = resolve(webRoot, icon.to)
-  await execFile('sips', ['-z', String(icon.size), String(icon.size), source, '--out', target])
+  if (canGenerateIcons) {
+    await execFile('sips', ['-z', String(icon.size), String(icon.size), source, '--out', target])
+  } else if (!(await exists(target))) {
+    console.error(`Missing generated icon ${relativeToWebRoot(target)} and 'sips' is not available to create it.`)
+    process.exitCode = 1
+  }
 }
 
 for (const file of deprecatedFiles) {
@@ -106,6 +112,16 @@ async function exists(path) {
   } catch (error) {
     if (error?.code === 'ENOENT') return false
     throw error
+  }
+}
+
+async function hasCommand(command) {
+  const lookup = process.platform === 'win32' ? 'where' : 'which'
+  try {
+    await execFile(lookup, [command])
+    return true
+  } catch {
+    return false
   }
 }
 
