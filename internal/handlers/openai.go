@@ -2920,22 +2920,28 @@ func (h *OpenAIHandler) activateCodexLocalAccess(c *gin.Context) error {
 	if p == nil {
 		return errors.New("Codex proxy is not initialized")
 	}
+	if h.storage == nil {
+		return errors.New("OpenAI storage is not initialized")
+	}
 
 	ids := readCodexLocalAccessAccountIDs()
-	if len(ids) == 0 && !codexLocalAccessAccountIDsConfigured() {
-		accounts, err := h.storage.List()
+	accounts, err := h.storage.List()
+	if err != nil {
+		return err
+	}
+	restrictFree := readBoolSetting(codexLocalAccessRestrictFreeAccountsKey, true)
+	if codexLocalAccessAccountIDsConfigured() {
+		ids, err = h.filterCodexLocalAccessAccountIDs(ids, restrictFree)
 		if err != nil {
 			return err
 		}
-		restrictFree := readBoolSetting(codexLocalAccessRestrictFreeAccountsKey, true)
+		if err := saveCodexLocalAccessAccountIDs(ids); err != nil {
+			return err
+		}
+	} else {
+		ids = []string{}
 		for _, account := range accounts {
-			if account.AccountType != models.OpenAIAccountTypeOAuth {
-				continue
-			}
-			if derefStr(account.AccessToken) == "" {
-				continue
-			}
-			if restrictFree && strings.EqualFold(strings.TrimSpace(derefStr(account.Plan)), "free") {
+			if !isCodexLocalAccessEligibleAccount(account, restrictFree) {
 				continue
 			}
 			ids = append(ids, account.ID)
@@ -2947,7 +2953,7 @@ func (h *OpenAIHandler) activateCodexLocalAccess(c *gin.Context) error {
 		}
 	}
 	if len(ids) == 0 {
-		return errors.New("没有可用 OAuth 账号，请先导入账号")
+		return errors.New("没有 200 成功的 OAuth 账号，请先查询配额")
 	}
 	if h.storage != nil {
 		_, _ = h.storage.SetProxyForIDs(ids, true)
@@ -3112,13 +3118,32 @@ func (h *OpenAIHandler) filterCodexLocalAccessAccountIDs(ids []string, restrictF
 		if !ok {
 			return nil, fmt.Errorf("账号不存在: %s", id)
 		}
-		if restrictFree && strings.EqualFold(strings.TrimSpace(derefStr(account.Plan)), "free") {
+		if !isCodexLocalAccessEligibleAccount(account, restrictFree) {
 			continue
 		}
 		result = append(result, id)
 		seen[id] = true
 	}
 	return result, nil
+}
+
+func isCodexLocalAccessEligibleAccount(account models.OpenAIAccount, restrictFree bool) bool {
+	if account.AccountType != models.OpenAIAccountTypeOAuth {
+		return false
+	}
+	if derefStr(account.AccessToken) == "" {
+		return false
+	}
+	if account.QuotaIsForbidden {
+		return false
+	}
+	if account.QuotaHTTPStatus == nil || *account.QuotaHTTPStatus != http.StatusOK {
+		return false
+	}
+	if restrictFree && strings.EqualFold(strings.TrimSpace(derefStr(account.Plan)), "free") {
+		return false
+	}
+	return true
 }
 
 func readCodexLocalAccessAccountIDs() []string {

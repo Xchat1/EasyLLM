@@ -105,6 +105,7 @@
                 <option value="401">401（失效/未授权）</option>
                 <option value="403">403（地区受限/禁止）</option>
                 <option value="429">429（限流）</option>
+                <option value="503">503（服务不可用）</option>
               </select>
             </div>
 
@@ -1238,22 +1239,25 @@
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <div class="text-xs font-medium text-gray-300">API 服务账号集合</div>
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-[11px] text-gray-500">{{ localAccessSelectedCount }}/{{ oauthAccounts.length }}</span>
-                    <button @click="selectAllLocalAccessAccounts" :disabled="localAccessBusy || oauthAccounts.length === 0" class="btn btn-xs btn-secondary">全选</button>
+                    <span class="text-[11px] text-gray-500">{{ localAccessSelectedCount }}/{{ localAccessEligibleCount }}</span>
+                    <button @click="selectAllLocalAccessAccounts" :disabled="localAccessBusy || localAccessEligibleCount === 0" class="btn btn-xs btn-secondary">全选成功</button>
                     <button @click="clearLocalAccessAccounts" :disabled="localAccessBusy || localAccessSelectedCount === 0" class="btn btn-xs btn-secondary">清空</button>
-                    <button @click="saveAllLocalAccessAccounts" :disabled="localAccessBusy || oauthAccounts.length === 0" class="btn btn-xs btn-primary">全选加入</button>
+                    <button @click="saveAllLocalAccessAccounts" :disabled="localAccessBusy || localAccessEligibleCount === 0" class="btn btn-xs btn-primary">加入 200</button>
                     <button @click="saveLocalAccessAccounts" :disabled="localAccessBusy" class="btn btn-xs btn-primary">保存集合</button>
                   </div>
                 </div>
                 <div class="max-h-36 overflow-y-auto rounded-lg border border-gray-700 bg-gray-900/60 p-2 space-y-1">
-                  <label v-for="account in oauthAccounts" :key="account.id" class="flex items-center gap-2 rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-800">
+                  <label v-for="account in oauthAccounts" :key="account.id" class="flex items-center gap-2 rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-800" :class="{ 'opacity-50': !isLocalAccessEligibleAccount(account) }">
                     <input
                       type="checkbox"
-                      :checked="localAccessSelectedIds.includes(accountId(account.id))"
+                      :checked="localAccessSelectedIds.includes(accountId(account.id)) && isLocalAccessEligibleAccount(account)"
+                      :disabled="!isLocalAccessEligibleAccount(account)"
                       @change="toggleLocalAccessAccount(account.id)"
                     />
                     <span class="truncate flex-1" :title="accountDisplayTitle(account)">{{ accountDisplayLabel(account) }}</span>
                     <span v-if="account.plan" class="text-gray-500">{{ account.plan }}</span>
+                    <span v-if="Number(account._quota_http_status) === 200 && !account.quota_is_forbidden" class="text-green-400">200</span>
+                    <span v-else class="text-gray-600">{{ account._quota_http_status || '未查' }}</span>
                   </label>
                   <div v-if="oauthAccounts.length === 0" class="text-xs text-gray-500 px-2 py-3 text-center">暂无 OAuth 账号</div>
                 </div>
@@ -1439,7 +1443,7 @@ const fetchingQuotas = ref(false)
 const fetchingQuotaIds = ref([])
 const quotaLastFetched = ref('')
 const planGroupFilter = ref('all')
-const quotaFilter = ref('all') // all | 200 | 401 | 403 | 429
+const quotaFilter = ref('all') // all | 200 | 401 | 403 | 429 | 503
 const searchQuery = ref('') // search by email
 const apiSearchQuery = ref('')
 const bulkDeleting = ref(false)
@@ -1473,6 +1477,7 @@ const showGroupManager = ref(false)
 const newGroupName = ref('')
 
 const quotaFilterLabel = computed(() => {
+  if (quotaFilter.value === '503') return '503（服务不可用）'
   if (quotaFilter.value === '429') return '429（限流）'
   if (quotaFilter.value === '403') return '403（地区受限/禁止）'
   if (quotaFilter.value === '401') return '401（失效/未授权）'
@@ -1610,7 +1615,10 @@ const planGroups = computed(() => [
 ])
 const activeGroup = computed(() => accountGroups.value.find(g => g.id === activeGroupFilter.value) || null)
 const activeGroupAccountIDs = computed(() => new Set(activeGroup.value?.account_ids || []))
-const localAccessSelectedCount = computed(() => localAccessSelectedIds.value.length)
+const localAccessEligibleAccounts = computed(() => oauthAccounts.value.filter(isLocalAccessEligibleAccount))
+const localAccessEligibleIDSet = computed(() => new Set(localAccessEligibleAccounts.value.map(account => accountId(account.id))))
+const localAccessSelectedCount = computed(() => localAccessSelectedIds.value.filter(id => localAccessEligibleIDSet.value.has(id)).length)
+const localAccessEligibleCount = computed(() => localAccessEligibleAccounts.value.length)
 
 const filteredOAuthAccounts = computed(() => {
   let list = oauthAccounts.value
@@ -3026,6 +3034,10 @@ async function activateCodexAPIService() {
 
 function toggleLocalAccessAccount(id) {
   const key = accountId(id)
+  const account = oauthAccounts.value.find(item => accountId(item.id) === key)
+  if (!isLocalAccessEligibleAccount(account)) {
+    return
+  }
   if (localAccessSelectedIds.value.includes(key)) {
     localAccessSelectedIds.value = localAccessSelectedIds.value.filter(item => item !== key)
   } else {
@@ -3033,8 +3045,12 @@ function toggleLocalAccessAccount(id) {
   }
 }
 
+function isLocalAccessEligibleAccount(account) {
+  return Number(account?._quota_http_status) === 200 && !account?.quota_is_forbidden
+}
+
 function selectAllLocalAccessAccounts() {
-  localAccessSelectedIds.value = oauthAccounts.value.map(account => accountId(account.id)).filter(Boolean)
+  localAccessSelectedIds.value = localAccessEligibleAccounts.value.map(account => accountId(account.id)).filter(Boolean)
 }
 
 function clearLocalAccessAccounts() {
@@ -3044,7 +3060,7 @@ function clearLocalAccessAccounts() {
 async function saveAllLocalAccessAccounts() {
   selectAllLocalAccessAccounts()
   if (localAccessSelectedIds.value.length === 0) {
-    showToast('暂无可加入的 OAuth 账号', 'error')
+    showToast('暂无 200 成功的 OAuth 账号，请先查询配额', 'error')
     return
   }
   await saveLocalAccessAccounts()
@@ -3160,10 +3176,11 @@ function oauthAccountPriority(account) {
   const code = Number(account?._quota_http_status || 0)
   if (code === 200 && !account?.quota_is_forbidden) return 0
   if (code === 429) return 1
-  if (code === 403) return 2
-  if (code === 401) return 3
-  if (account?.status === 'reauth_required') return 4
-  return 5
+  if (code === 503) return 2
+  if (code === 403) return 3
+  if (code === 401) return 4
+  if (account?.status === 'reauth_required') return 5
+  return 6
 }
 
 function reorderOAuthAccounts() {
