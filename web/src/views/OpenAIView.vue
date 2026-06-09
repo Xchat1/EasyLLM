@@ -237,7 +237,7 @@
               </span>
               <span v-if="account.is_codex_active" class="shrink-0 text-[10px] font-bold text-blue-300 bg-blue-600/30 px-1.5 py-0.5 rounded">Codex</span>
               <span v-if="account.status === 'reauth_required'" class="shrink-0 text-[10px] font-bold text-red-300 bg-red-600/20 px-1.5 py-0.5 rounded">重登</span>
-              <span v-if="account._quota_http_status && account._quota_http_status !== 200" class="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded" :class="account._quota_http_status === 403 ? 'text-red-300 bg-red-600/20' : account._quota_http_status === 401 ? 'text-orange-300 bg-orange-600/20' : 'text-yellow-300 bg-yellow-600/20'">{{ account._quota_http_status }}</span>
+              <span v-if="account._quota_http_status && account._quota_http_status !== 200" class="quota-status-badge shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded" :class="quotaStatusBadgeClass(account._quota_http_status)">{{ account._quota_http_status }}</span>
             </div>
             <div v-if="accountLayout !== 'dense' && (accountGroupNames(account).length || account.tag_name)" class="flex flex-wrap gap-1 mb-2">
               <span v-for="name in accountGroupNames(account)" :key="name" class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-200">
@@ -3049,6 +3049,17 @@ function isLocalAccessEligibleAccount(account) {
   return Number(account?._quota_http_status) === 200 && !account?.quota_is_forbidden
 }
 
+function quotaStatusBadgeClass(status) {
+  const code = Number(status)
+  if (code === 401) return 'quota-status-badge--401'
+  if (code === 403) return 'quota-status-badge--403'
+  if (code === 429) return 'quota-status-badge--429'
+  if (code === 503) return 'quota-status-badge--503'
+  if (code >= 500) return 'quota-status-badge--5xx'
+  if (code >= 400) return 'quota-status-badge--4xx'
+  return 'quota-status-badge--other'
+}
+
 function selectAllLocalAccessAccounts() {
   localAccessSelectedIds.value = localAccessEligibleAccounts.value.map(account => accountId(account.id)).filter(Boolean)
 }
@@ -3794,6 +3805,37 @@ onBeforeUnmount(() => {
 .account-card-compact--selected {
   border-color: rgba(255, 59, 48, 0.44);
   box-shadow: inset 0 0 0 1px rgba(255, 59, 48, 0.28);
+}
+.quota-status-badge {
+  border: 1px solid transparent;
+  letter-spacing: 0.02em;
+}
+.quota-status-badge--401 {
+  background: #c2410c !important;
+  border-color: #9a3412 !important;
+  color: #fff7ed !important;
+}
+.quota-status-badge--403 {
+  background: #dc2626 !important;
+  border-color: #b91c1c !important;
+  color: #fef2f2 !important;
+}
+.quota-status-badge--429 {
+  background: #7e22ce !important;
+  border-color: #6b21a8 !important;
+  color: #faf5ff !important;
+}
+.quota-status-badge--503,
+.quota-status-badge--5xx {
+  background: #b45309 !important;
+  border-color: #92400e !important;
+  color: #fffbeb !important;
+}
+.quota-status-badge--4xx,
+.quota-status-badge--other {
+  background: #475569 !important;
+  border-color: #334155 !important;
+  color: #f8fafc !important;
 }
 .account-card-compact--api:hover {
   border-color: rgba(52, 199, 89, 0.44);
