@@ -12,12 +12,15 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct{}
+
+const minPasswordLength = 8
 
 func NewAuthHandler() *AuthHandler {
 	return &AuthHandler{}
@@ -28,6 +31,9 @@ func (h *AuthHandler) InitializeDefaultPassword() error {
 	defaultPwd := config.Get().App.DefaultPassword
 	if defaultPwd == "" {
 		return nil // No default password configured
+	}
+	if !passwordMeetsMinimum(defaultPwd) {
+		return fmt.Errorf("DEFAULT_PASSWORD must be at least %d characters", minPasswordLength)
 	}
 
 	// Check if password is already set
@@ -77,10 +83,10 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 	}
 
 	var req struct {
-		Password string `json:"password" binding:"required,min=4"`
+		Password string `json:"password" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "Password must be at least 4 characters", Code: "INVALID_REQUEST"})
+	if err := c.ShouldBindJSON(&req); err != nil || !passwordMeetsMinimum(req.Password) {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: fmt.Sprintf("Password must be at least %d characters", minPasswordLength), Code: "INVALID_REQUEST"})
 		return
 	}
 
@@ -140,10 +146,14 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	var req struct {
 		OldPassword string `json:"old_password" binding:"required"`
-		NewPassword string `json:"new_password" binding:"required,min=4"`
+		NewPassword string `json:"new_password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "Old password and new password (min 4 chars) are required", Code: "INVALID_REQUEST"})
+		c.JSON(http.StatusBadRequest, models.APIError{Error: fmt.Sprintf("Old password and new password (min %d chars) are required", minPasswordLength), Code: "INVALID_REQUEST"})
+		return
+	}
+	if !passwordMeetsMinimum(req.NewPassword) {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: fmt.Sprintf("New password must be at least %d characters", minPasswordLength), Code: "INVALID_REQUEST"})
 		return
 	}
 
@@ -190,6 +200,10 @@ func AuthMiddleware() gin.HandlerFunc {
 	}
 }
 
+func passwordMeetsMinimum(password string) bool {
+	return utf8.RuneCountInString(password) >= minPasswordLength
+}
+
 // Simple JWT implementation using HMAC-SHA256 (no external dependency needed)
 
 type jwtHeader struct {
@@ -211,8 +225,14 @@ func generateJWT(secret string) (string, error) {
 		Exp: time.Now().Add(7 * 24 * time.Hour).Unix(),
 	}
 
-	headerJSON, _ := json.Marshal(header)
-	payloadJSON, _ := json.Marshal(payload)
+	headerJSON, err := json.Marshal(header)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal jwt header: %w", err)
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal jwt payload: %w", err)
+	}
 
 	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
 	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadJSON)

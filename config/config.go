@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 )
@@ -26,8 +27,6 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Type       string // "sqlite" or "postgres"
-	DSN        string // postgres: "host=... user=... password=... dbname=... port=5432 sslmode=disable"
 	SQLitePath string
 }
 
@@ -62,6 +61,9 @@ var (
 
 func Load() *Config {
 	once.Do(func() {
+		dataDir := getEnv("DATA_DIR", defaultDataDir())
+		sqlitePath := getEnv("DB_SQLITE_PATH", filepath.Join(dataDir, "easyllm.db"))
+
 		instance = &Config{
 			Server: ServerConfig{
 				Port:    getEnvInt("SERVER_PORT", 8022),
@@ -69,9 +71,7 @@ func Load() *Config {
 				APIPort: getEnvInt("SERVER_PORT", 8022), // same port; APIPort is legacy, kept for struct compat
 			},
 			Database: DatabaseConfig{
-				Type:       getEnv("DB_TYPE", "sqlite"),
-				DSN:        getEnv("DB_DSN", ""),
-				SQLitePath: getEnv("DB_SQLITE_PATH", "./data/easyllm.db"),
+				SQLitePath: sqlitePath,
 			},
 			Proxy: ProxyConfig{
 				Enabled:  getEnvBool("PROXY_ENABLED", false),
@@ -81,7 +81,7 @@ func Load() *Config {
 				Password: getEnv("PROXY_PASSWORD", ""),
 			},
 			App: AppConfig{
-				DataDir:         getEnv("DATA_DIR", "./data"),
+				DataDir:         dataDir,
 				SecretKey:       getEnv("SECRET_KEY", ""),
 				Debug:           getEnvBool("DEBUG", false),
 				DefaultPassword: getEnv("DEFAULT_PASSWORD", ""),
@@ -100,6 +100,13 @@ func Load() *Config {
 		log.Println("[WARNING] No SECRET_KEY set — generated a random one for this session. Set SECRET_KEY env var for persistent sessions.")
 	}
 	return instance
+}
+
+func defaultDataDir() string {
+	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "EasyLLM", "data")
+	}
+	return "./data"
 }
 
 // generateRandomSecretKey generates a 32-byte random hex string.
@@ -142,11 +149,8 @@ func (c *Config) Update(updates map[string]interface{}) {
 	if v, ok := updates["proxy_password"].(string); ok {
 		c.Proxy.Password = v
 	}
-	if v, ok := updates["db_type"].(string); ok {
-		c.Database.Type = v
-	}
-	if v, ok := updates["db_dsn"].(string); ok {
-		c.Database.DSN = v
+	if v, ok := updates["db_sqlite_path"].(string); ok {
+		c.Database.SQLitePath = v
 	}
 	if v, ok := updates["ip_blacklist_enabled"].(bool); ok {
 		c.IPBlacklist.Enabled = v

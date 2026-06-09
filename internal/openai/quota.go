@@ -406,20 +406,6 @@ func formatResetSeconds(seconds int64) string {
 	return strings.Join(parts, "")
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // ParseCodexHeaders extracts quota info from x-codex-* response headers.
 // Used by proxy to parse quota from upstream responses.
 func ParseCodexHeaders(h http.Header) *QuotaInfo {

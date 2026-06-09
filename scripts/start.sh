@@ -123,7 +123,7 @@ case "${MODE}" in
       exit 1
     fi
     echo
-    echo "→ 启动生产二进制"
+    echo "→ 启动本地二进制"
     print_info
     exec ./easyllm
     ;;

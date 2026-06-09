@@ -3,6 +3,7 @@ easyllm
 easyllm_new
 *.exe
 build/
+dist/
 *.app
 
 # Environment
@@ -14,6 +15,9 @@ build/
 
 # Data
 data/
+auth/
+exports/
+backups/
 *.db
 *.db-*
 *.sqlite
@@ -25,6 +29,16 @@ data/
 auth/*.json
 cred.json
 big_token.json
+token*.json
+*token*.json
+*tokens*.json
+*refresh*.json
+*cpa*.json
+*backup*.json
+*export*.json
+easyllm-accounts-*.json
+easyllm_accounts_*.json
+codex_tokens_*.json
 *.pem
 *.key
 *.p12
@@ -41,6 +55,12 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.claude/
+.codex/
+.agents/
+.cursor/
+.kilo/
+.opencode/
 
 # Node
 web/node_modules/
@@ -50,6 +70,7 @@ web/dist/
 logs/
 *.log
 *.bak
+*.backup
 *.tmp
 *.tmp2
 *.swp

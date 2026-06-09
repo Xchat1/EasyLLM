@@ -7,16 +7,49 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 APP_NAME="EasyLLM"
 BUILD_DIR="${ROOT_DIR}/build/macos"
+RELEASE_DIR="${ROOT_DIR}/build/release"
 APP_DIR="${BUILD_DIR}/${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+VERSION="${EASYLLM_VERSION:-2.0.0}"
+PACKAGE_RELEASE=0
+PACKAGE_ARCH="${EASYLLM_PACKAGE_ARCH:-}"
 export GOCACHE="${GOCACHE:-${BUILD_DIR}/go-cache}"
 SWIFT_MODULE_CACHE="${BUILD_DIR}/swift-module-cache"
 export CLANG_MODULE_CACHE_PATH="${BUILD_DIR}/clang-module-cache"
 ICONSET_DIR="${BUILD_DIR}/${APP_NAME}.iconset"
 ICON_BUILDER="${BUILD_DIR}/make-app-icon"
 APP_ICON_SOURCE="${ROOT_DIR}/web/src/assets/brand/easyllm-app-icon.png"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --package)
+      PACKAGE_RELEASE=1
+      ;;
+    --version)
+      VERSION="${2:?缺少 --version 参数}"
+      shift
+      ;;
+    --arch-label)
+      PACKAGE_ARCH="${2:?缺少 --arch-label 参数}"
+      shift
+      ;;
+    *)
+      echo "未知参数: $1"
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+if [[ -z "${PACKAGE_ARCH}" ]]; then
+  case "$(uname -m)" in
+    x86_64) PACKAGE_ARCH="amd64" ;;
+    arm64) PACKAGE_ARCH="arm64" ;;
+    *) PACKAGE_ARCH="$(uname -m)" ;;
+  esac
+fi
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -32,6 +65,8 @@ require_command swiftc
 cd "${ROOT_DIR}"
 
 echo "=== Building EasyLLM macOS App ==="
+echo "Version: ${VERSION}"
+echo "Arch:    ${PACKAGE_ARCH}"
 
 echo "→ 构建前端 web/dist"
 if [[ ! -d "${ROOT_DIR}/web/node_modules" ]]; then
@@ -69,7 +104,7 @@ swiftc \
   "${ROOT_DIR}/macos/EasyLLMApp.swift" \
   -o "${MACOS_DIR}/${APP_NAME}"
 
-cat > "${CONTENTS_DIR}/Info.plist" <<'PLIST'
+cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -91,9 +126,9 @@ cat > "${CONTENTS_DIR}/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>2.0.0</string>
+  <string>${VERSION}</string>
   <key>CFBundleVersion</key>
-  <string>2.0.0</string>
+  <string>${VERSION}</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.developer-tools</string>
   <key>LSMinimumSystemVersion</key>
@@ -122,3 +157,13 @@ echo
 echo "=== macOS App Build Complete ==="
 echo "App: ${APP_DIR}"
 echo "Run: open \"${APP_DIR}\""
+
+if [[ "${PACKAGE_RELEASE}" == "1" ]]; then
+  PACKAGE_NAME="${APP_NAME}-${VERSION}-macos-${PACKAGE_ARCH}"
+  ZIP_PATH="${RELEASE_DIR}/${PACKAGE_NAME}.zip"
+  mkdir -p "${RELEASE_DIR}"
+  rm -f "${ZIP_PATH}"
+  echo "→ 生成 release zip"
+  ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "${ZIP_PATH}"
+  echo "Package: ${ZIP_PATH}"
+fi

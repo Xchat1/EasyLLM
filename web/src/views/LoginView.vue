@@ -12,7 +12,7 @@
           <input
             v-model="password"
             :type="showPassword ? 'text' : 'password'"
-            :placeholder="isSetup ? '设置密码（至少 4 位）' : '输入密码'"
+            :placeholder="isSetup ? `设置密码（至少 ${minPasswordLength} 位）` : '输入密码'"
             class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
             autofocus
           />
@@ -50,6 +50,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { authAPI } from '../api'
 import logoUrl from '@/assets/brand/easyllm-app-icon.png'
+import { defaultHomePath } from '@/lib/runtime'
 
 const router = useRouter()
 const password = ref('')
@@ -58,6 +59,7 @@ const showPassword = ref(false)
 const loading = ref(false)
 const error = ref('')
 const isSetup = ref(false)
+const minPasswordLength = 8
 
 onMounted(async () => {
   try {
@@ -71,8 +73,8 @@ onMounted(async () => {
 async function handleSubmit() {
   error.value = ''
 
-  if (!password.value || password.value.length < 4) {
-    error.value = '密码至少 4 位'
+  if (passwordLength(password.value) < minPasswordLength) {
+    error.value = `密码至少 ${minPasswordLength} 位`
     return
   }
 
@@ -85,7 +87,7 @@ async function handleSubmit() {
     try {
       const data = await authAPI.setup(password.value)
       localStorage.setItem('easyllm_token', data.token)
-      router.replace('/dashboard')
+      router.replace(defaultHomePath())
     } catch (e) {
       error.value = e.message || '设置失败'
     } finally {
@@ -96,13 +98,17 @@ async function handleSubmit() {
     try {
       const data = await authAPI.login(password.value)
       localStorage.setItem('easyllm_token', data.token)
-      router.replace('/dashboard')
+      router.replace(defaultHomePath())
     } catch (e) {
       error.value = '密码错误'
     } finally {
       loading.value = false
     }
   }
+}
+
+function passwordLength(value) {
+  return Array.from(value || '').length
 }
 </script>
 

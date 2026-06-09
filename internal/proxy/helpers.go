@@ -50,8 +50,7 @@ func setCodexCLIHeaders(req *http.Request) {
 }
 
 // buildUpstreamURL maps /v1/* to https://chatgpt.com/backend-api/codex/*
-// which is the real Codex backend. This matches the upstream target used by
-// the original augment-token-mng Tauri app.
+// which is the real Codex backend.
 // client_version is always appended because the chatgpt.com Codex API requires it.
 func buildUpstreamURL(path, query string) string {
 	const base = "https://chatgpt.com"
@@ -93,13 +92,19 @@ func isTokenInvalidated(body []byte) bool {
 }
 
 // isRetryableAuthFailure checks if the upstream error is a retryable auth failure.
-func isRetryableAuthFailure(body []byte) bool {
+func isRetryableAuthFailure(statusCode int, body []byte) bool {
+	if statusCode == http.StatusUnauthorized {
+		return true
+	}
 	if len(body) == 0 {
 		return false
 	}
 	// Try JSON parsing first.
 	var obj map[string]interface{}
 	if err := json.Unmarshal(body, &obj); err == nil {
+		if detail, _ := obj["detail"].(string); strings.EqualFold(strings.TrimSpace(detail), "Unauthorized") {
+			return true
+		}
 		if e, ok := obj["error"].(map[string]interface{}); ok {
 			if code, _ := e["code"].(string); code != "" {
 				switch code {
@@ -113,7 +118,9 @@ func isRetryableAuthFailure(body []byte) bool {
 	return bytes.Contains(body, []byte(`"code":"token_invalidated"`)) ||
 		bytes.Contains(body, []byte(`"code": "token_invalidated"`)) ||
 		bytes.Contains(body, []byte(`"code":"account_deactivated"`)) ||
-		bytes.Contains(body, []byte(`"code": "account_deactivated"`))
+		bytes.Contains(body, []byte(`"code": "account_deactivated"`)) ||
+		bytes.Contains(body, []byte(`"detail":"Unauthorized"`)) ||
+		bytes.Contains(body, []byte(`"detail": "Unauthorized"`))
 }
 
 // buildPromptFromMessages converts a chat messages array into a plain text prompt.
@@ -209,29 +216,6 @@ func disableWebSocketInModels(body []byte) []byte {
 		return body
 	}
 	return out
-}
-
-// parsePlatform detects the client platform from the User-Agent string.
-func parsePlatform(ua string) string {
-	ua = strings.ToLower(ua)
-	switch {
-	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad"):
-		return "iOS"
-	case strings.Contains(ua, "android"):
-		return "Android"
-	case strings.Contains(ua, "macintosh") || strings.Contains(ua, "mac os") || strings.Contains(ua, "darwin"):
-		return "macOS"
-	case strings.Contains(ua, "windows"):
-		return "Windows"
-	case strings.Contains(ua, "linux"):
-		return "Linux"
-	case strings.Contains(ua, "codex_cli"):
-		return "Codex CLI"
-	case ua == "":
-		return ""
-	default:
-		return "Other"
-	}
 }
 
 // extractUsageFromSSE parses token usage from an SSE data payload.

@@ -138,7 +138,7 @@ switch ($mode) {
             Write-Color "✗  未找到二进制文件，请先运行: .\scripts\start.ps1 --build" Red
             exit 1
         }
-        Write-Color "`n→  启动生产二进制" Cyan
+        Write-Color "`n→  启动本地二进制" Cyan
         Print-Info
         & $bin
     }

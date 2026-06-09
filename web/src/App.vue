@@ -37,16 +37,16 @@
 
         <nav class="flex-1 space-y-5 overflow-y-auto px-3 py-4">
           <section>
-            <div class="px-2 pb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">平台</div>
+            <div class="px-2 pb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Codex</div>
             <div class="space-y-1">
               <router-link
-                v-for="item in platformRoutes"
+                v-for="item in codexNavRoutes"
                 :key="item.route"
                 :to="item.route"
                 class="nav-item"
                 :class="{ 'nav-item-active': $route.path === item.route }"
               >
-                <PlatformIcon :platform="item" size="xs" />
+                <CodexIcon :item="item" size="xs" />
                 <span class="truncate">{{ item.label }}</span>
               </router-link>
             </div>
@@ -84,7 +84,7 @@
           </button>
           <div class="rounded-2xl border border-gray-800 bg-gray-950/60 px-3 py-3 text-xs">
             <div class="flex items-center justify-between">
-              <span class="text-gray-500">API Server</span>
+              <span class="text-gray-500">Local API</span>
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full" :class="serverRunning ? 'bg-emerald-400' : 'bg-gray-600'" />
                 <span class="text-gray-300">:{{ serverPort }}</span>
@@ -122,17 +122,42 @@
         ›
       </button>
 
-      <div v-if="notification.show" class="fixed right-4 top-4 z-50 max-w-sm">
+      <div v-if="notification.show" class="fixed right-4 top-4 z-[120] w-[calc(100vw-2rem)] max-w-sm">
         <div
-          class="flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm shadow-2xl"
-          :class="notification.type === 'error'
-            ? 'border-red-700 bg-red-900/90 text-red-100'
-            : notification.type === 'success'
-              ? 'border-emerald-700 bg-emerald-900/90 text-emerald-100'
-              : 'border-sky-700 bg-sky-900/90 text-sky-100'"
+          class="operation-toast"
+          :class="notificationClass"
         >
-          <span>{{ notification.type === 'error' ? '❌' : notification.type === 'success' ? '✅' : 'ℹ️' }}</span>
-          <span>{{ notification.message }}</span>
+          <span class="operation-toast-mark" aria-hidden="true">{{ notificationMark }}</span>
+          <span class="min-w-0 break-words">{{ notification.message }}</span>
+        </div>
+      </div>
+
+      <div
+        v-if="operationConfirm.show"
+        class="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4"
+        @click.self="cancelOperationConfirm"
+      >
+        <div class="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 shadow-2xl">
+          <div class="flex items-start gap-4 border-b border-gray-700 p-6">
+            <div class="operation-confirm-mark" :class="operationConfirmMarkClass" aria-hidden="true">
+              {{ operationConfirmMark }}
+            </div>
+            <div class="min-w-0 flex-1">
+              <h2 class="text-lg font-semibold text-white">{{ operationConfirm.title }}</h2>
+              <p class="mt-2 text-sm leading-6 text-gray-300">{{ operationConfirm.message }}</p>
+              <p v-if="operationConfirm.details" class="mt-3 text-xs leading-5 text-gray-500">
+                {{ operationConfirm.details }}
+              </p>
+            </div>
+          </div>
+          <div class="flex items-center justify-end gap-2 p-6">
+            <button type="button" class="btn btn-secondary" @click="cancelOperationConfirm">
+              {{ operationConfirm.cancelText }}
+            </button>
+            <button type="button" :class="operationConfirmButtonClass" @click="approveOperationConfirm">
+              {{ operationConfirm.confirmText }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -143,17 +168,19 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import PlatformIcon from '@/components/PlatformIcon.vue'
-import { cockpitPlatforms, cockpitSystemRoutes } from '@/lib/platforms'
+import { useRoute, useRouter } from 'vue-router'
+import CodexIcon from '@/components/CodexIcon.vue'
+import { codexRoutes, systemRoutes as appSystemRoutes } from '@/lib/codexRoutes'
 import logoUrl from '@/assets/brand/easyllm-app-icon.png'
 import { useAppearance } from '@/composables/useAppearance'
 import { authAPI, settingsAPI } from './api'
+import { isMacApp, syncMacAppFromRoute } from '@/lib/runtime'
 
 const router = useRouter()
+const route = useRoute()
 
-const platformRoutes = cockpitPlatforms
-const systemRoutes = cockpitSystemRoutes
+const codexNavRoutes = codexRoutes
+const systemRoutes = appSystemRoutes
 
 const serverRunning = ref(false)
 const serverPort = ref(8022)
@@ -176,18 +203,93 @@ const {
 const appearanceButtonTitle = computed(() => `切换外观：${themeModeShortLabel.value} · ${accentThemeLabel.value}`)
 
 const notification = ref({ show: false, message: '', type: 'info' })
+const operationConfirm = ref(createEmptyOperationConfirm())
 let notificationTimer = null
+let operationConfirmResolver = null
 let statusInterval = null
 
 function showNotification(message, type = 'info') {
   if (notificationTimer) clearTimeout(notificationTimer)
-  notification.value = { show: true, message, type }
+  notification.value = { show: true, message, type: normalizeNotificationType(type) }
   notificationTimer = setTimeout(() => {
     notification.value.show = false
   }, 3200)
 }
 
 provide('notify', showNotification)
+provide('confirmOperation', confirmOperation)
+
+const notificationClass = computed(() => {
+  if (notification.value.type === 'error') return 'operation-toast-error'
+  if (notification.value.type === 'success') return 'operation-toast-success'
+  if (notification.value.type === 'warning') return 'operation-toast-warning'
+  return 'operation-toast-info'
+})
+
+const notificationMark = computed(() => {
+  if (notification.value.type === 'error') return '!'
+  if (notification.value.type === 'success') return '✓'
+  if (notification.value.type === 'warning') return '!'
+  return 'i'
+})
+
+const operationConfirmMark = computed(() => ['danger', 'warning'].includes(operationConfirm.value.tone) ? '!' : 'i')
+const operationConfirmMarkClass = computed(() => {
+  if (operationConfirm.value.tone === 'danger') return 'operation-confirm-mark-danger'
+  if (operationConfirm.value.tone === 'warning') return 'operation-confirm-mark-warning'
+  return 'operation-confirm-mark-info'
+})
+const operationConfirmButtonClass = computed(() => operationConfirm.value.tone === 'danger' ? 'btn btn-danger' : 'btn btn-primary')
+
+function normalizeNotificationType(type) {
+  return ['error', 'success', 'warning', 'info'].includes(type) ? type : 'info'
+}
+
+function createEmptyOperationConfirm() {
+  return {
+    show: false,
+    title: '确认操作',
+    message: '',
+    details: '',
+    confirmText: '确认',
+    cancelText: '取消',
+    tone: 'info',
+  }
+}
+
+function confirmOperation(options = {}) {
+  if (operationConfirmResolver) operationConfirmResolver(false)
+  operationConfirm.value = {
+    ...createEmptyOperationConfirm(),
+    ...options,
+    show: true,
+  }
+  return new Promise((resolve) => {
+    operationConfirmResolver = resolve
+  })
+}
+
+function resolveOperationConfirm(confirmed) {
+  if (!operationConfirm.value.show) return
+  const resolver = operationConfirmResolver
+  operationConfirmResolver = null
+  operationConfirm.value = createEmptyOperationConfirm()
+  resolver?.(confirmed)
+}
+
+function cancelOperationConfirm() {
+  resolveOperationConfirm(false)
+}
+
+function approveOperationConfirm() {
+  resolveOperationConfirm(true)
+}
+
+function handleAppKeydown(event) {
+  if (event.key === 'Escape' && operationConfirm.value.show) {
+    cancelOperationConfirm()
+  }
+}
 
 const isLoggedIn = computed(() => !!localStorage.getItem('easyllm_token'))
 
@@ -270,7 +372,19 @@ function stopSidebarResize() {
   window.removeEventListener('pointercancel', stopSidebarResize)
 }
 
-onMounted(() => {
+onMounted(async () => {
+  window.addEventListener('keydown', handleAppKeydown)
+  syncMacAppFromRoute(route)
+  if (!isMacApp()) {
+    try {
+      const info = await settingsAPI.systemInfo()
+      if (info?.mac_app) {
+        sessionStorage.setItem('easyllm_mac_app', '1')
+      }
+    } catch {
+      // ignore
+    }
+  }
   checkServerStatus()
   statusInterval = setInterval(checkServerStatus, 30000)
 })
@@ -278,6 +392,8 @@ onMounted(() => {
 onUnmounted(() => {
   if (statusInterval) clearInterval(statusInterval)
   if (notificationTimer) clearTimeout(notificationTimer)
+  window.removeEventListener('keydown', handleAppKeydown)
+  if (operationConfirmResolver) operationConfirmResolver(false)
   stopSidebarResize()
 })
 </script>
@@ -288,6 +404,52 @@ onUnmounted(() => {
     radial-gradient(circle at 18% 0%, var(--app-bg-glow), transparent 32rem),
     var(--app-bg);
   color: var(--app-text);
+}
+
+.operation-toast {
+  @apply flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm leading-5 shadow-2xl backdrop-blur;
+}
+
+.operation-toast-success {
+  @apply border-emerald-600/40 bg-emerald-950/90 text-emerald-100;
+}
+
+.operation-toast-error {
+  @apply border-red-600/40 bg-red-950/90 text-red-100;
+}
+
+.operation-toast-warning {
+  @apply border-amber-500/40 bg-amber-950/90 text-amber-100;
+}
+
+.operation-toast-info {
+  @apply border-sky-600/40 bg-sky-950/90 text-sky-100;
+}
+
+.operation-toast-mark,
+.operation-confirm-mark {
+  @apply inline-flex shrink-0 items-center justify-center rounded-full font-semibold;
+}
+
+.operation-toast-mark {
+  @apply mt-0.5 h-5 w-5 text-xs;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.operation-confirm-mark {
+  @apply h-10 w-10 border text-base;
+}
+
+.operation-confirm-mark-danger {
+  @apply border-red-500/30 bg-red-500/10 text-red-300;
+}
+
+.operation-confirm-mark-warning {
+  @apply border-amber-500/30 bg-amber-500/10 text-amber-200;
+}
+
+.operation-confirm-mark-info {
+  @apply border-sky-500/30 bg-sky-500/10 text-sky-200;
 }
 
 .app-sidebar {

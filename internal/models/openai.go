@@ -38,7 +38,7 @@ type OpenAIAccount struct {
 	ModelProvider        *string `json:"model_provider,omitempty"`
 	Model                *string `json:"model,omitempty"`
 	ModelReasoningEffort *string `json:"model_reasoning_effort,omitempty"`
-	WireAPI              *string `json:"wire_api,omitempty"` // "responses" or "chat"
+	WireAPI              *string `json:"wire_api,omitempty"` // Codex 0.130+ uses "responses"
 	BaseURL              *string `json:"base_url,omitempty"`
 	APIKey               *string `json:"api_key,omitempty"`
 
@@ -68,16 +68,6 @@ type OpenAIAccount struct {
 	QuotaVerified        bool     `json:"_verified" gorm:"default:false"`
 }
 
-// OpenAIAPIKey represents an OpenAI API key
-type OpenAIAPIKey struct {
-	ID         string     `json:"id" gorm:"primaryKey"`
-	AccountID  string     `json:"account_id"`
-	Name       string     `json:"name"`
-	Key        string     `json:"key"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-}
-
 // CodexAccount represents a Codex account in the pool
 type CodexAccount struct {
 	ID           string     `json:"id" gorm:"primaryKey"`
@@ -89,31 +79,6 @@ type CodexAccount struct {
 	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
-}
-
-// CodexServerConfig holds Codex proxy server configuration
-type CodexServerConfig struct {
-	Enabled        bool   `json:"enabled"`
-	Port           int    `json:"port"`
-	Strategy       string `json:"strategy"` // "round_robin", "random", "least_used"
-	MaxConcurrent  int    `json:"max_concurrent"`
-	RequestTimeout int    `json:"request_timeout"`
-}
-
-// CodexLog represents a Codex request log entry
-type CodexLog struct {
-	ID           string    `json:"id" gorm:"primaryKey"`
-	AccountID    string    `json:"account_id"`
-	AccountEmail string    `json:"account_email"`
-	RequestPath  string    `json:"request_path"`
-	Model        string    `json:"model"`
-	Platform     string    `json:"platform"`
-	InputTokens  int64     `json:"input_tokens"`
-	OutputTokens int64     `json:"output_tokens"`
-	Duration     int64     `json:"duration_ms"`
-	StatusCode   int       `json:"status_code"`
-	Error        *string   `json:"error,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
 }
 
 // CodexPoolStatus represents the current status of the Codex account pool

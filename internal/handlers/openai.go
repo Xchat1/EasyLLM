@@ -3,9 +3,9 @@ package handlers
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
+	"easyllm/config"
 	"easyllm/internal/models"
-	openaiplatform "easyllm/internal/platforms/openai"
+	openaiplatform "easyllm/internal/openai"
 	"easyllm/internal/proxy"
 	"easyllm/internal/storage"
 	"encoding/base64"
@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -52,6 +51,7 @@ type openaiOAuthSession struct {
 }
 
 const (
+	maxImportMultipartMemory       = 100 << 20 // 100 MiB
 	openaiOAuthSessionTTL          = 10 * time.Minute
 	defaultOpenAIOAuthRedirectURI  = "http://localhost:1455/auth/callback"
 	defaultOpenAIOAuthCallbackBase = "http://localhost:1455"
@@ -64,6 +64,10 @@ const (
 	codexLocalAccessRoutingStrategyKey      = "codex_local_access_routing_strategy"
 	codexLocalAccessCreatedAtKey            = "codex_local_access_created_at"
 	codexLocalAccessUpdatedAtKey            = "codex_local_access_updated_at"
+
+	codexAPIAccountPostRestartReapplyDelay = 1500 * time.Millisecond
+	codexAPIAccountGuardReapplyAttempts    = 15
+	codexAPIAccountGuardReapplyInterval    = 1 * time.Second
 )
 
 var (
@@ -79,6 +83,61 @@ func NewOpenAIHandler(s *storage.OpenAIStorage, cs *storage.CodexStorage) *OpenA
 	}
 	go h.cleanExpiredOAuthSessions()
 	return h
+}
+
+func sanitizeOpenAIAccountForResponse(account *models.OpenAIAccount) models.OpenAIAccount {
+	if account == nil {
+		return models.OpenAIAccount{}
+	}
+	out := *account
+	if out.Plan == nil {
+		out.Plan = openAIAccountTokenPlan(account)
+	}
+	out.AccessToken = nil
+	out.RefreshToken = nil
+	out.IDToken = nil
+	out.OpenAIAuthJSON = nil
+	out.APIKey = nil
+	return out
+}
+
+func sanitizeOpenAIAccountsForResponse(accounts []models.OpenAIAccount) []models.OpenAIAccount {
+	out := make([]models.OpenAIAccount, 0, len(accounts))
+	for i := range accounts {
+		out = append(out, sanitizeOpenAIAccountForResponse(&accounts[i]))
+	}
+	return out
+}
+
+func openAIAccountTokenPlan(account *models.OpenAIAccount) *string {
+	if account == nil {
+		return nil
+	}
+	for _, token := range []string{derefStr(account.IDToken), derefStr(account.AccessToken)} {
+		if userInfo := openaiplatform.ParseIDToken(token); userInfo != nil {
+			if plan := normalizedOpenAIPlanPtr(userInfo.PlanType); plan != nil {
+				return plan
+			}
+		}
+	}
+	return nil
+}
+
+func sanitizeCodexAccountForResponse(account *models.CodexAccount) models.CodexAccount {
+	if account == nil {
+		return models.CodexAccount{}
+	}
+	out := *account
+	out.AccessToken = ""
+	return out
+}
+
+func sanitizeCodexAccountsForResponse(accounts []*models.CodexAccount) []models.CodexAccount {
+	out := make([]models.CodexAccount, 0, len(accounts))
+	for i := range accounts {
+		out = append(out, sanitizeCodexAccountForResponse(accounts[i]))
+	}
+	return out
 }
 
 // cleanExpiredOAuthSessions periodically removes OAuth sessions older than 10 minutes.
@@ -113,11 +172,10 @@ func (h *OpenAIHandler) RegisterRoutes(rg *gin.RouterGroup) {
 
 	// Batch import: token JSON files (no API call needed, parse directly)
 	g.POST("/import/token-files", h.ImportByTokenFiles)       // upload multiple JSON files
-	g.POST("/import/scan-dir", h.ImportByScanDir)             // scan local directory path
+	g.POST("/import/auto-files", h.ImportByAutoFiles)         // 上传单个/多个 JSON，自动识别格式导入
 	g.POST("/import/refresh-tokens", h.ImportByRefreshTokens) // legacy: refresh_token list
+	g.POST("/import/cpa", h.ImportCPA)                        // CPA / *-cpa.json 单文件或多文件
 	g.POST("/import/from-export", h.ImportFromExport)         // re-import from exported backup JSON (no API calls)
-	g.POST("/import/sub2api", h.ImportFromSub2API)            // import from sub2api format
-	g.POST("/import/cockpit-tools", h.ImportFromCockpitTools)
 	g.GET("/export", h.ExportAccounts)
 
 	// OAuth flow
@@ -130,6 +188,7 @@ func (h *OpenAIHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.POST("/api-accounts", h.AddAPIAccount)
 	g.PUT("/api-accounts/:id", h.UpdateAPIAccount)
 	g.POST("/api-accounts/:id/switch", h.SwitchAPIAccount)
+	g.POST("/api-accounts/:id/test", h.TestAPIAccount)
 
 	// Codex proxy pool
 	g.GET("/codex/accounts", h.ListCodexAccounts)
@@ -139,8 +198,6 @@ func (h *OpenAIHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.POST("/codex/accounts/:id/toggle", h.ToggleCodexAccount)
 	g.GET("/codex/pool", h.GetCodexPoolStatus)
 	g.POST("/codex/pool/refresh", h.RefreshCodexPool)
-	g.GET("/codex/logs", h.GetCodexLogs)      // legacy compatibility: returns no retained logs
-	g.DELETE("/codex/logs", h.ClearCodexLogs) // clears legacy log storage if present
 
 	// Quota check
 	g.POST("/accounts/fetch-quotas", h.FetchQuotas)
@@ -169,7 +226,7 @@ func (h *OpenAIHandler) ListAccounts(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, accounts)
+	c.JSON(http.StatusOK, sanitizeOpenAIAccountsForResponse(accounts))
 }
 
 func (h *OpenAIHandler) AddAccount(c *gin.Context) {
@@ -189,13 +246,24 @@ func (h *OpenAIHandler) AddAccount(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "email is required", Code: "INVALID_REQUEST"})
 		return
 	}
+	if account.Status == "" {
+		account.Status = "active"
+	}
 	account.CreatedAt = time.Now()
 	account.UpdatedAt = time.Now()
+	defaultJoined := h.applyDefaultAPIServiceMembership(&account)
 	if err := h.storage.Save(&account); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, account)
+	if defaultJoined {
+		if err := h.saveDefaultAPIServiceMembership(&account); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
+			return
+		}
+		refreshCodexProxyPool()
+	}
+	c.JSON(http.StatusOK, sanitizeOpenAIAccountForResponse(&account))
 }
 
 func (h *OpenAIHandler) UpdateAccount(c *gin.Context) {
@@ -229,7 +297,7 @@ func (h *OpenAIHandler) UpdateAccount(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, account)
+	c.JSON(http.StatusOK, sanitizeOpenAIAccountForResponse(&account))
 }
 
 func (h *OpenAIHandler) DeleteAccount(c *gin.Context) {
@@ -293,7 +361,7 @@ func (h *OpenAIHandler) SwitchAccount(c *gin.Context) {
 		idToken = *account.IDToken
 	}
 
-	if err := openaiplatform.SwitchCodexOAuthAccount(accessToken, refreshToken, idToken, account.ChatGPTAccountID); err != nil {
+	if err := openaiplatform.SwitchCodexOAuthAccount(accessToken, refreshToken, idToken, account.ChatGPTAccountID, localProxyOriginFromRequest(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "SWITCH_ERROR"})
 		return
 	}
@@ -330,7 +398,11 @@ func (h *OpenAIHandler) SwitchAPIAccount(c *gin.Context) {
 	baseURL := derefStr(account.BaseURL)
 	apiKey := derefStr(account.APIKey)
 
-	if err := openaiplatform.SwitchCodexAPIAccount(provider, model, baseURL, apiKey, account.WireAPI, account.ModelReasoningEffort); err != nil {
+	writeCodexAPIAccountConfig := func() error {
+		return openaiplatform.SwitchCodexAPIAccount(provider, model, baseURL, apiKey, account.WireAPI, account.ModelReasoningEffort, localProxyOriginFromRequest(c))
+	}
+
+	if err := writeCodexAPIAccountConfig(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "SWITCH_ERROR"})
 		return
 	}
@@ -346,7 +418,54 @@ func (h *OpenAIHandler) SwitchAPIAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + account.Email})
+	providerModelInfo := fmt.Sprintf("API provider %s (%s)", derefStr(account.ModelProvider), derefStr(account.Model))
+
+	launchResult, err := openaiplatform.RestartCodexApp()
+	if err != nil {
+		// Non-fatal: config was written, but Codex restart failed
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + providerModelInfo, "restart_error": err.Error()})
+		return
+	}
+
+	// Codex Desktop may recreate its codex_local_access provider while starting.
+	// Write the selected API account again so the final on-disk config remains active.
+	time.Sleep(codexAPIAccountPostRestartReapplyDelay)
+	if err := writeCodexAPIAccountConfig(); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + providerModelInfo, "launch": launchResult, "config_reapply_error": err.Error()})
+		return
+	}
+	h.scheduleCodexAPIAccountConfigGuard(account.ID, writeCodexAPIAccountConfig, codexAPIAccountGuardReapplyAttempts, codexAPIAccountGuardReapplyInterval)
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + providerModelInfo, "launch": launchResult, "config_reapplied": true, "config_guard_seconds": int(codexAPIAccountGuardReapplyAttempts)})
+}
+
+func (h *OpenAIHandler) scheduleCodexAPIAccountConfigGuard(accountID string, write func() error, attempts int, interval time.Duration) {
+	if accountID == "" || write == nil || attempts <= 0 || interval <= 0 {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "easyllm: panic recovered in Codex API account config guard goroutine: %v\n", r)
+			}
+		}()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for i := 0; i < attempts; i++ {
+			<-ticker.C
+			if !h.isCodexActiveAccount(accountID) {
+				return
+			}
+			if err := write(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "easyllm: failed to reapply Codex API account config: %v\n", err)
+			}
+		}
+	}()
+}
+
+func (h *OpenAIHandler) isCodexActiveAccount(accountID string) bool {
+	account, err := h.storage.Get(accountID)
+	return err == nil && account != nil && account.IsCodexActive
 }
 
 // RefreshAccountToken refreshes the OAuth token for a single account
@@ -374,7 +493,8 @@ func (h *OpenAIHandler) RefreshAccountToken(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "REFRESH_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, account)
+	refreshCodexProxyPool()
+	c.JSON(http.StatusOK, sanitizeOpenAIAccountForResponse(account))
 }
 
 // RefreshAllTokens refreshes tokens for all OAuth accounts concurrently
@@ -443,6 +563,9 @@ func (h *OpenAIHandler) RefreshAllTokens(c *gin.Context) {
 			skipped++
 		}
 	}
+	if success > 0 {
+		refreshCodexProxyPool()
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"total":   len(results),
 		"success": success,
@@ -462,10 +585,12 @@ type tokenFileData struct {
 	Email        string `json:"email"`
 	Type         string `json:"type"`
 	Expired      string `json:"expired"`
+	PlanType     string `json:"plan_type"`
 }
 
 type tokenImportResult struct {
 	Filename string `json:"filename"`
+	Format   string `json:"format,omitempty"` // 扫描目录自动识别：token / cpa / easyllm-export
 	Success  bool   `json:"success"`
 	Email    string `json:"email,omitempty"`
 	Skipped  bool   `json:"skipped,omitempty"`
@@ -506,6 +631,32 @@ func parseTokenFileEntries(raw []byte) ([]tokenFileData, error) {
 		return nil, fmt.Errorf("no token entries found")
 	}
 	return entries, nil
+}
+
+// parseCPAFileEntries 解析 CPA 导出 JSON（单对象、数组或 NDJSON），格式如 *-cpa.json / *.codex.cpa.json。
+func parseCPAFileEntries(raw []byte) ([]tokenFileData, error) {
+	entries, err := parseTokenFileEntries(raw)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		if err := validateCPAEntry(&entries[i]); err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i+1, err)
+		}
+	}
+	return entries, nil
+}
+
+func validateCPAEntry(data *tokenFileData) error {
+	if data == nil {
+		return fmt.Errorf("empty entry")
+	}
+	if strings.TrimSpace(data.AccessToken) == "" &&
+		strings.TrimSpace(data.RefreshToken) == "" &&
+		strings.TrimSpace(data.IDToken) == "" {
+		return fmt.Errorf("missing access_token, refresh_token and id_token")
+	}
+	return nil
 }
 
 // importTokenFileData converts a tokenFileData into an OpenAIAccount and saves it
@@ -552,6 +703,9 @@ func (h *OpenAIHandler) importSingleTokenFile(data *tokenFileData, existingAccou
 			account.OpenAIAuthJSON = sPtr(j)
 		}
 	}
+	if account.Plan == nil && strings.TrimSpace(data.PlanType) != "" {
+		account.Plan = normalizedOpenAIPlanPtr(sPtr(data.PlanType))
+	}
 	if data.AccountID != "" && account.ChatGPTAccountID == nil {
 		account.ChatGPTAccountID = sPtr(data.AccountID)
 	}
@@ -561,10 +715,8 @@ func (h *OpenAIHandler) importSingleTokenFile(data *tokenFileData, existingAccou
 
 // ImportByTokenFiles handles uploading multiple token JSON files at once (multipart form)
 func (h *OpenAIHandler) ImportByTokenFiles(c *gin.Context) {
-	// Parse multipart explicitly with a large limit.
-	// Even though Gin has Engine.MaxMultipartMemory, this keeps behavior consistent
-	// across different router setups and avoids the default 32MiB constraint.
-	if err := c.Request.ParseMultipartForm(8 << 30); err != nil { // 8GiB
+	// Parse multipart explicitly so behavior stays consistent across router setups.
+	if err := c.Request.ParseMultipartForm(maxImportMultipartMemory); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "invalid multipart form: " + err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
@@ -650,6 +802,9 @@ func (h *OpenAIHandler) ImportByTokenFiles(c *gin.Context) {
 			skippedCount++
 		}
 	}
+	if successCount > 0 {
+		refreshCodexProxyPool()
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"total":   len(results),
@@ -660,84 +815,121 @@ func (h *OpenAIHandler) ImportByTokenFiles(c *gin.Context) {
 	})
 }
 
-// ImportByScanDir scans a server-side directory for token_*.json files and imports them all
-func (h *OpenAIHandler) ImportByScanDir(c *gin.Context) {
-	var req struct {
-		Dir string `json:"dir"`
+// ImportCPABytes 解析 CPA JSON 并导入 OAuth 账号（单对象、数组或 NDJSON）。
+func (h *OpenAIHandler) ImportCPABytes(data []byte) (gin.H, error) {
+	entries, err := parseCPAFileEntries(data)
+	if err != nil {
+		return nil, err
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Dir == "" {
-		req.Dir = "./auth"
-	}
+	return h.importCPAEntries(entries, "cpa.json")
+}
 
-	// Expand ~ to home dir
-	if strings.HasPrefix(req.Dir, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			req.Dir = filepath.Join(home, req.Dir[2:])
+func (h *OpenAIHandler) importCPAEntries(entries []tokenFileData, filename string) (gin.H, error) {
+	existingAccounts, _ := h.storage.List()
+	results := make([]tokenImportResult, 0, len(entries))
+	for _, data := range entries {
+		entry := data
+		account, skipped, err := h.importSingleTokenFile(&entry, &existingAccounts)
+		if err != nil {
+			label := entry.Email
+			if label == "" {
+				label = filename
+			}
+			results = append(results, tokenImportResult{Filename: filename, Success: false, Skipped: skipped, Error: err.Error(), Email: label})
+			continue
+		}
+		results = append(results, tokenImportResult{Filename: filename, Success: true, Email: account.Email})
+	}
+	successCount, skippedCount := 0, 0
+	for _, r := range results {
+		if r.Success {
+			successCount++
+		} else if r.Skipped {
+			skippedCount++
 		}
 	}
+	if successCount > 0 {
+		refreshCodexProxyPool()
+	}
+	return gin.H{
+		"total":   len(results),
+		"success": successCount,
+		"skipped": skippedCount,
+		"failed":  len(results) - successCount - skippedCount,
+		"results": results,
+	}, nil
+}
 
-	// Security: resolve to absolute path and restrict to safe directories
-	absDir, err := filepath.Abs(req.Dir)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "invalid directory path", Code: "INVALID_PATH"})
+// ImportCPA 支持 multipart 多文件上传，或请求体为单个/多个 CPA JSON 对象。
+func (h *OpenAIHandler) ImportCPA(c *gin.Context) {
+	if strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "multipart/form-data") {
+		h.importCPAFromMultipart(c)
 		return
 	}
-	cwd, _ := os.Getwd()
-	safeBase := filepath.Join(cwd, "auth")
-	if absDir != safeBase && !strings.HasPrefix(absDir, safeBase+string(filepath.Separator)) {
-		homeDir, _ := os.UserHomeDir()
-		if homeDir == "" || (absDir != homeDir && !strings.HasPrefix(absDir, homeDir+string(filepath.Separator))) {
-			c.JSON(http.StatusForbidden, models.APIError{Error: "directory not allowed; only ./auth or home subdirectories are permitted", Code: "PATH_FORBIDDEN"})
-			return
-		}
-	}
-
-	entries, err := os.ReadDir(absDir)
+	data, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "cannot read directory: " + err.Error(), Code: "DIR_ERROR"})
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "读取请求体失败: " + err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
-
-	// Filter JSON files
-	var jsonFiles []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
-			jsonFiles = append(jsonFiles, filepath.Join(absDir, e.Name()))
-		}
+	out, err := h.ImportCPABytes(data)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "无效的 CPA 数据: " + err.Error(), Code: "INVALID_REQUEST"})
+		return
 	}
+	c.JSON(http.StatusOK, out)
+}
 
-	if len(jsonFiles) == 0 {
-		c.JSON(http.StatusOK, gin.H{"total": 0, "success": 0, "skipped": 0, "failed": 0, "results": []interface{}{}})
+func (h *OpenAIHandler) importCPAFromMultipart(c *gin.Context) {
+	if err := c.Request.ParseMultipartForm(maxImportMultipartMemory); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "invalid multipart form: " + err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	form := c.Request.MultipartForm
+	if form == nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "invalid multipart form", Code: "INVALID_REQUEST"})
+		return
+	}
+	files := form.File["files"]
+	if len(files) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "no files uploaded", Code: "NO_FILES"})
 		return
 	}
 
 	existingMu := sync.Mutex{}
 	existingAccounts, _ := h.storage.List()
 	resultsMu := sync.Mutex{}
-	results := make([]tokenImportResult, 0, len(jsonFiles))
+	results := make([]tokenImportResult, 0)
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 20) // High concurrency - pure file I/O, no network
+	sem := make(chan struct{}, 10)
 
-	for i, fpath := range jsonFiles {
+	for _, fh := range files {
 		wg.Add(1)
-		go func(idx int, filePath string) {
+		go func(fileHeader *multipart.FileHeader) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			fname := filepath.Base(filePath)
-			raw, err := os.ReadFile(filePath)
+			f, err := fileHeader.Open()
 			if err != nil {
 				resultsMu.Lock()
-				results = append(results, tokenImportResult{Filename: fname, Success: false, Error: err.Error()})
+				results = append(results, tokenImportResult{Filename: fileHeader.Filename, Success: false, Error: "open error: " + err.Error()})
+				resultsMu.Unlock()
+				return
+			}
+			defer f.Close()
+
+			raw, err := io.ReadAll(f)
+			if err != nil {
+				resultsMu.Lock()
+				results = append(results, tokenImportResult{Filename: fileHeader.Filename, Success: false, Error: "read error: " + err.Error()})
 				resultsMu.Unlock()
 				return
 			}
 
-			entries, err := parseTokenFileEntries(raw)
+			entries, err := parseCPAFileEntries(raw)
 			if err != nil {
 				resultsMu.Lock()
-				results = append(results, tokenImportResult{Filename: fname, Success: false, Error: "parse error: " + err.Error()})
+				results = append(results, tokenImportResult{Filename: fileHeader.Filename, Success: false, Error: "parse error: " + err.Error()})
 				resultsMu.Unlock()
 				return
 			}
@@ -748,24 +940,24 @@ func (h *OpenAIHandler) ImportByScanDir(c *gin.Context) {
 				existingMu.Lock()
 				account, skipped, err := h.importSingleTokenFile(&entry, &existingAccounts)
 				existingMu.Unlock()
-
 				if err != nil {
-					fileResults = append(fileResults, tokenImportResult{Filename: fname, Success: false, Skipped: skipped, Error: err.Error(), Email: entry.Email})
+					email := entry.Email
+					if email == "" {
+						email = fileHeader.Filename
+					}
+					fileResults = append(fileResults, tokenImportResult{Filename: fileHeader.Filename, Success: false, Skipped: skipped, Error: err.Error(), Email: email})
 					continue
 				}
-				fileResults = append(fileResults, tokenImportResult{Filename: fname, Success: true, Email: account.Email})
+				fileResults = append(fileResults, tokenImportResult{Filename: fileHeader.Filename, Success: true, Email: account.Email})
 			}
-
 			resultsMu.Lock()
 			results = append(results, fileResults...)
 			resultsMu.Unlock()
-		}(i, fpath)
+		}(fh)
 	}
-
 	wg.Wait()
 
-	successCount := 0
-	skippedCount := 0
+	successCount, skippedCount := 0, 0
 	for _, r := range results {
 		if r.Success {
 			successCount++
@@ -773,7 +965,9 @@ func (h *OpenAIHandler) ImportByScanDir(c *gin.Context) {
 			skippedCount++
 		}
 	}
-
+	if successCount > 0 {
+		refreshCodexProxyPool()
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"total":   len(results),
 		"success": successCount,
@@ -928,9 +1122,15 @@ func (h *OpenAIHandler) upsertImportedOAuthAccount(incoming *models.OpenAIAccoun
 		if incoming.ProxyEnabled {
 			existing.ProxyEnabled = true
 		}
+		defaultJoined := h.applyDefaultAPIServiceMembership(existing)
 		existing.UpdatedAt = now
 		if err := h.storage.Save(existing); err != nil {
 			return nil, false, err
+		}
+		if defaultJoined {
+			if err := h.saveDefaultAPIServiceMembership(existing); err != nil {
+				return nil, false, err
+			}
 		}
 		return existing, false, nil
 	}
@@ -943,8 +1143,14 @@ func (h *OpenAIHandler) upsertImportedOAuthAccount(incoming *models.OpenAIAccoun
 	}
 	incoming.Status = incomingStatus
 	incoming.UpdatedAt = now
+	defaultJoined := h.applyDefaultAPIServiceMembership(incoming)
 	if err := h.storage.Save(incoming); err != nil {
 		return nil, false, err
+	}
+	if defaultJoined {
+		if err := h.saveDefaultAPIServiceMembership(incoming); err != nil {
+			return nil, false, err
+		}
 	}
 	*existingAccounts = append(*existingAccounts, *incoming)
 	return incoming, false, nil
@@ -1157,6 +1363,9 @@ func (h *OpenAIHandler) ImportByRefreshTokens(c *gin.Context) {
 			successCount++
 		}
 	}
+	if successCount > 0 {
+		refreshCodexProxyPool()
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"total":      len(req.RefreshTokens),
@@ -1229,6 +1438,9 @@ func (h *OpenAIHandler) ImportOAuthAccountByRefreshToken(refreshToken string) (*
 		return nil, err
 	}
 	out, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts)
+	if err == nil && out != nil {
+		refreshCodexProxyPool()
+	}
 	return out, err
 }
 
@@ -1732,12 +1944,11 @@ func (h *OpenAIHandler) AddAPIAccount(c *gin.Context) {
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
-
 	if err := h.storage.Save(account); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, account)
+	c.JSON(http.StatusOK, sanitizeOpenAIAccountForResponse(account))
 }
 
 // UpdateAPIAccount updates an API account's configuration
@@ -1790,7 +2001,88 @@ func (h *OpenAIHandler) UpdateAPIAccount(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, existing)
+	c.JSON(http.StatusOK, sanitizeOpenAIAccountForResponse(existing))
+}
+
+// TestAPIAccount sends a minimal request to verify an API account's key is valid.
+func (h *OpenAIHandler) TestAPIAccount(c *gin.Context) {
+	id := c.Param("id")
+	account, err := h.storage.Get(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.APIError{Error: "Account not found", Code: "NOT_FOUND"})
+		return
+	}
+	if account.AccountType != models.OpenAIAccountTypeAPI {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "Not an API account", Code: "INVALID_REQUEST"})
+		return
+	}
+
+	baseURL := derefStr(account.BaseURL)
+	apiKey := derefStr(account.APIKey)
+	model := derefStr(account.Model)
+	if baseURL == "" || apiKey == "" {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "Account missing base_url or api_key", Code: "INVALID_REQUEST"})
+		return
+	}
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+
+	wireAPI := strings.ToLower(strings.TrimSpace(derefStr(account.WireAPI)))
+	if wireAPI == "" {
+		wireAPI = "responses"
+	}
+	requestPath := "/v1/responses"
+	testReq := map[string]interface{}{
+		"model":             model,
+		"input":             "hi",
+		"max_output_tokens": 1,
+		"stream":            false,
+	}
+	if wireAPI == "chat_completions" || wireAPI == "chat-completions" || wireAPI == "chat" {
+		requestPath = "/v1/chat/completions"
+		testReq = map[string]interface{}{
+			"model":      model,
+			"messages":   []map[string]interface{}{{"role": "user", "content": "hi"}},
+			"max_tokens": 1,
+			"stream":     false,
+		}
+	}
+	body, _ := json.Marshal(testReq)
+
+	upstreamURL := buildAPIAccountTestURL(baseURL, requestPath)
+	req, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(body))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: "Failed to create request", Code: "INTERNAL_ERROR"})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	start := time.Now()
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"id": id, "success": false, "error": err.Error(), "latency_ms": latency})
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	result := gin.H{"id": id, "success": resp.StatusCode >= 200 && resp.StatusCode < 300, "http_status": resp.StatusCode, "latency_ms": latency}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		result["error"] = fmt.Sprintf("HTTP %d", resp.StatusCode)
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func buildAPIAccountTestURL(baseURL, requestPath string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	path := "/" + strings.TrimLeft(requestPath, "/")
+	if strings.HasSuffix(base, "/v1") && strings.HasPrefix(path, "/v1/") {
+		path = strings.TrimPrefix(path, "/v1")
+	}
+	return base + path
 }
 
 // ---- Codex Pool handlers ----
@@ -1801,7 +2093,7 @@ func (h *OpenAIHandler) ListCodexAccounts(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, accounts)
+	c.JSON(http.StatusOK, sanitizeCodexAccountsForResponse(accounts))
 }
 
 func (h *OpenAIHandler) AddCodexAccount(c *gin.Context) {
@@ -1826,7 +2118,7 @@ func (h *OpenAIHandler) AddCodexAccount(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, account)
+	c.JSON(http.StatusOK, sanitizeCodexAccountForResponse(&account))
 }
 
 func (h *OpenAIHandler) UpdateCodexAccount(c *gin.Context) {
@@ -1849,6 +2141,9 @@ func (h *OpenAIHandler) UpdateCodexAccount(c *gin.Context) {
 	}
 	account.Email = strings.TrimSpace(account.Email)
 	account.AccessToken = strings.TrimSpace(account.AccessToken)
+	if account.AccessToken == "" {
+		account.AccessToken = existing.AccessToken
+	}
 	if account.Email == "" || account.AccessToken == "" {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "email and access_token are required", Code: "INVALID_REQUEST"})
 		return
@@ -1862,7 +2157,7 @@ func (h *OpenAIHandler) UpdateCodexAccount(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, account)
+	c.JSON(http.StatusOK, sanitizeCodexAccountForResponse(&account))
 }
 
 func (h *OpenAIHandler) DeleteCodexAccount(c *gin.Context) {
@@ -1930,42 +2225,6 @@ func (h *OpenAIHandler) RefreshCodexPool(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Pool refreshed"})
 }
 
-func (h *OpenAIHandler) GetCodexLogs(c *gin.Context) {
-	page := 1
-	perPage := 50
-	if v := c.Query("page"); v != "" {
-		if p, err := strconv.Atoi(v); err == nil && p > 0 {
-			page = p
-		}
-	}
-	if v := c.Query("per_page"); v != "" {
-		if pp, err := strconv.Atoi(v); err == nil && pp > 0 && pp <= 500 {
-			perPage = pp
-		}
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"logs":        []models.CodexLog{},
-		"total":       0,
-		"page":        page,
-		"per_page":    perPage,
-		"total_pages": 0,
-	})
-}
-
-func (h *OpenAIHandler) ClearCodexLogs(c *gin.Context) {
-	if h.codexStorage != nil {
-		if err := h.codexStorage.ClearLogs(); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-			return
-		}
-	}
-	if err := storage.PurgeCodexLogs(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
-}
-
 // ToggleProxy toggles proxy_enabled for an OpenAI OAuth account.
 // When enabled=true, the account's access_token joins the /v1/* proxy pool.
 func (h *OpenAIHandler) ToggleProxy(c *gin.Context) {
@@ -2019,6 +2278,8 @@ type exportedOAuthAccount struct {
 	Expired          string `json:"expired,omitempty"`
 	IDToken          string `json:"id_token"`
 	LastRefresh      string `json:"last_refresh,omitempty"`
+	Plan             string `json:"plan,omitempty"`
+	PlanType         string `json:"plan_type,omitempty"`
 	RefreshToken     string `json:"refresh_token"`
 	Type             string `json:"type"`
 	ChatGPTAccountID string `json:"chatgpt_account_id,omitempty"`
@@ -2038,6 +2299,20 @@ func exportedOAuthChatGPTAccountID(a exportedOAuthAccount) string {
 		return strings.TrimSpace(a.ChatGPTAccountID)
 	}
 	return strings.TrimSpace(a.AccountID)
+}
+
+func exportedOAuthPlan(a exportedOAuthAccount) *string {
+	for _, value := range []string{a.Plan, a.PlanType} {
+		if normalized := openaiplatform.NormalizePlanType(value); normalized != "" {
+			return sPtr(normalized)
+		}
+	}
+	if userInfo := openaiplatform.ParseIDToken(a.IDToken); userInfo != nil {
+		if plan := normalizedOpenAIPlanPtr(userInfo.PlanType); plan != nil {
+			return plan
+		}
+	}
+	return nil
 }
 
 func parseExportedOAuthTime(s string) (*time.Time, bool) {
@@ -2116,6 +2391,8 @@ func (h *OpenAIHandler) ExportAccounts(c *gin.Context) {
 			Expired:      expiredStr,
 			IDToken:      derefStr(a.IDToken),
 			LastRefresh:  lastRefreshStr,
+			Plan:         derefStr(a.Plan),
+			PlanType:     derefStr(a.Plan),
 			RefreshToken: derefStr(a.RefreshToken),
 			Type:         "codex",
 			Status:       a.Status,
@@ -2128,1133 +2405,19 @@ func (h *OpenAIHandler) ExportAccounts(c *gin.Context) {
 // ImportFromExport 直接从导出的备份 JSON 中重新导入所有账号，无需任何 OpenAI API 调用。
 // 支持导出文件中的 oauth_accounts 和 api_accounts 两类账号。
 func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
-	var payload struct {
-		OAuthAccounts []exportedOAuthAccount             `json:"oauth_accounts"`
-		APIAccounts   []exportedAPIAccount               `json:"api_accounts"`
-		LocalAccess   *models.CodexLocalAccessCollection `json:"local_access"`
-	}
+	var payload easyLLMExportPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "无效的请求体: " + err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
-
 	if len(payload.OAuthAccounts) == 0 && len(payload.APIAccounts) == 0 && payload.LocalAccess == nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "备份文件中没有账号数据", Code: "EMPTY_INPUT"})
 		return
 	}
-
 	existingAccounts, _ := h.storage.List()
-
-	type result struct {
-		Email   string `json:"email"`
-		Success bool   `json:"success"`
-		Skipped bool   `json:"skipped,omitempty"`
-		Error   string `json:"error,omitempty"`
-	}
-	var results []result
-	oauthIDMap := make(map[string]string)
-
-	now := time.Now()
-
-	// 导入 OAuth 账号
-	for _, a := range payload.OAuthAccounts {
-		if a.Email == "" && a.IDToken != "" {
-			if userInfo := openaiplatform.ParseIDToken(a.IDToken); userInfo != nil && userInfo.Email != nil {
-				a.Email = strings.TrimSpace(*userInfo.Email)
-			}
-		}
-		if a.Email == "" {
-			results = append(results, result{Email: "(unknown)", Success: false, Error: "缺少 email 字段"})
-			continue
-		}
-
-		var expiresAt *time.Time
-		if t, ok := parseExportedOAuthTime(exportedOAuthExpiresSource(a)); ok {
-			expiresAt = t
-		}
-
-		status := strings.TrimSpace(a.Status)
-		if status == "" {
-			if a.Disabled {
-				status = "inactive"
-			} else {
-				status = "active"
-			}
-		}
-
-		account := &models.OpenAIAccount{
-			ID:           strings.TrimSpace(a.ID),
-			Email:        a.Email,
-			AccountType:  models.OpenAIAccountTypeOAuth,
-			Status:       status,
-			AccessToken:  sPtr(a.AccessToken),
-			RefreshToken: sPtr(a.RefreshToken),
-			ExpiresAt:    expiresAt,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-		}
-		if a.IDToken != "" {
-			account.IDToken = sPtr(a.IDToken)
-			if userInfo := openaiplatform.ParseIDToken(a.IDToken); userInfo != nil {
-				account.ChatGPTAccountID = userInfo.ChatGPTAccountID
-				account.ChatGPTUserID = userInfo.ChatGPTUserID
-				account.OrganizationID = userInfo.OrganizationID
-			}
-			if j := openaiplatform.ExtractOpenAIAuthJSON(a.IDToken); j != "" {
-				account.OpenAIAuthJSON = sPtr(j)
-			}
-		}
-		if cid := exportedOAuthChatGPTAccountID(a); cid != "" && account.ChatGPTAccountID == nil {
-			account.ChatGPTAccountID = sPtr(cid)
-		}
-
-		saved, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts)
-		if err != nil {
-			results = append(results, result{Email: a.Email, Success: false, Error: err.Error()})
-			continue
-		}
-		if saved != nil {
-			if oldID := strings.TrimSpace(a.ID); oldID != "" {
-				oauthIDMap[oldID] = saved.ID
-			}
-			if cid := exportedOAuthChatGPTAccountID(a); cid != "" {
-				oauthIDMap[cid] = saved.ID
-			}
-		}
-		results = append(results, result{Email: a.Email, Success: true})
-	}
-
-	// 导入 API 账号
-	for _, a := range payload.APIAccounts {
-		label := a.ModelProvider
-		if label == "" {
-			label = a.BaseURL
-		}
-		if a.APIKey == "" {
-			results = append(results, result{Email: label, Success: false, Error: "api_key 为空，跳过"})
-			continue
-		}
-		wireAPI := a.WireAPI
-		if wireAPI == "" {
-			wireAPI = "responses"
-		}
-		account := &models.OpenAIAccount{
-			Email:                label,
-			AccountType:          models.OpenAIAccountTypeAPI,
-			ModelProvider:        sPtr(a.ModelProvider),
-			Model:                sPtr(a.Model),
-			BaseURL:              sPtr(a.BaseURL),
-			APIKey:               sPtr(a.APIKey),
-			WireAPI:              sPtr(wireAPI),
-			ModelReasoningEffort: sPtr(a.ModelReasoningEffort),
-			ProxyEnabled:         a.ProxyEnabled,
-			CreatedAt:            now,
-			UpdatedAt:            now,
-		}
-		if _, _, err := h.upsertImportedAPIAccount(account, &existingAccounts); err != nil {
-			results = append(results, result{Email: label, Success: false, Error: err.Error()})
-			continue
-		}
-		results = append(results, result{Email: label, Success: true})
-	}
-
-	if payload.LocalAccess != nil {
-		accountIDs := make([]string, 0, len(payload.LocalAccess.AccountIDs))
-		for _, id := range payload.LocalAccess.AccountIDs {
-			id = strings.TrimSpace(id)
-			if id == "" {
-				continue
-			}
-			if mapped := oauthIDMap[id]; mapped != "" {
-				accountIDs = append(accountIDs, mapped)
-			} else {
-				accountIDs = append(accountIDs, id)
-			}
-		}
-		ids, err := h.filterCodexLocalAccessAccountIDs(accountIDs, payload.LocalAccess.RestrictFreeAccounts)
-		if err == nil {
-			_ = saveCodexLocalAccessAccountIDs(ids)
-			_ = storage.SaveSetting(codexLocalAccessRestrictFreeAccountsKey, fmt.Sprintf("%v", payload.LocalAccess.RestrictFreeAccounts))
-			if payload.LocalAccess.Port > 0 && payload.LocalAccess.Port <= 65535 {
-				_ = storage.SaveSetting(codexLocalAccessPortKey, strconv.Itoa(payload.LocalAccess.Port))
-			}
-			if isValidCodexProxyStrategy(payload.LocalAccess.RoutingStrategy) {
-				_ = storage.SaveSetting(codexLocalAccessRoutingStrategyKey, payload.LocalAccess.RoutingStrategy)
-				_ = storage.SaveSetting("proxy_strategy", payload.LocalAccess.RoutingStrategy)
-			}
-			_ = storage.SaveSetting(codexLocalAccessEnabledKey, fmt.Sprintf("%v", payload.LocalAccess.Enabled))
-			_ = saveCodexLocalAccessTimestamp(true)
-			if h.storage != nil && len(ids) > 0 {
-				_, _ = h.storage.SetProxyForIDs(ids, true)
-			}
-			if p := proxy.GetProxy(); p != nil {
-				p.Refresh()
-			}
-		}
-	}
-
-	success, skipped, failed := 0, 0, 0
-	for _, r := range results {
-		if r.Success {
-			success++
-		} else if r.Skipped {
-			skipped++
-		} else {
-			failed++
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"total":   len(results),
-		"success": success,
-		"skipped": skipped,
-		"failed":  failed,
-		"results": results,
-	})
-}
-
-type cockpitToolsTokenSet struct {
-	IDToken      string `json:"id_token"`
-	IDTokenCamel string `json:"idToken"`
-	AccessToken  string `json:"access_token"`
-	AccessCamel  string `json:"accessToken"`
-	RefreshToken string `json:"refresh_token"`
-	RefreshCamel string `json:"refreshToken"`
-}
-
-type cockpitToolsQuota struct {
-	HourlyPercentage *int   `json:"hourly_percentage"`
-	WeeklyPercentage *int   `json:"weekly_percentage"`
-	HourlyResetTime  *int64 `json:"hourly_reset_time"`
-	WeeklyResetTime  *int64 `json:"weekly_reset_time"`
-}
-
-type cockpitToolsAccount struct {
-	ID                      string                 `json:"id"`
-	Email                   string                 `json:"email"`
-	AuthMode                string                 `json:"auth_mode"`
-	AuthModeCamel           string                 `json:"authMode"`
-	IDToken                 string                 `json:"id_token"`
-	IDTokenCamel            string                 `json:"idToken"`
-	AccessToken             string                 `json:"access_token"`
-	AccessTokenCamel        string                 `json:"accessToken"`
-	RefreshToken            string                 `json:"refresh_token"`
-	RefreshTokenCamel       string                 `json:"refreshToken"`
-	OpenAIAPIKey            string                 `json:"openai_api_key"`
-	OpenAIAPIKeyCamel       string                 `json:"openaiApiKey"`
-	APIBaseURL              string                 `json:"api_base_url"`
-	APIBaseURLCamel         string                 `json:"apiBaseUrl"`
-	APIProviderMode         string                 `json:"api_provider_mode"`
-	APIProviderModeCamel    string                 `json:"apiProviderMode"`
-	APIProviderID           string                 `json:"api_provider_id"`
-	APIProviderIDCamel      string                 `json:"apiProviderId"`
-	APIProviderName         string                 `json:"api_provider_name"`
-	APIProviderNameCamel    string                 `json:"apiProviderName"`
-	UserID                  string                 `json:"user_id"`
-	UserIDCamel             string                 `json:"userId"`
-	PlanType                string                 `json:"plan_type"`
-	PlanTypeCamel           string                 `json:"planType"`
-	AuthFilePlanType        string                 `json:"auth_file_plan_type"`
-	AuthFilePlanTypeCamel   string                 `json:"authFilePlanType"`
-	AccountID               string                 `json:"account_id"`
-	AccountIDCamel          string                 `json:"accountId"`
-	ChatGPTAccountID        string                 `json:"chatgpt_account_id"`
-	ChatGPTAccountIDCamel   string                 `json:"chatgptAccountId"`
-	OrganizationID          string                 `json:"organization_id"`
-	OrganizationIDCamel     string                 `json:"organizationId"`
-	AccountName             string                 `json:"account_name"`
-	AccountNameCamel        string                 `json:"accountName"`
-	AccountStructure        string                 `json:"account_structure"`
-	AccountStructureCamel   string                 `json:"accountStructure"`
-	Expired                 string                 `json:"expired"`
-	ExpiresAt               string                 `json:"expires_at"`
-	LastRefresh             string                 `json:"last_refresh"`
-	Type                    string                 `json:"type"`
-	Disabled                bool                   `json:"disabled"`
-	Status                  string                 `json:"status"`
-	Tokens                  cockpitToolsTokenSet   `json:"tokens"`
-	Quota                   *cockpitToolsQuota     `json:"quota"`
-	Tags                    []string               `json:"tags"`
-	RequiresReauth          bool                   `json:"requires_reauth"`
-	AdditionalCompatibility map[string]interface{} `json:"-"`
-}
-
-type cockpitToolsImportResult struct {
-	Email   string `json:"email"`
-	Success bool   `json:"success"`
-	Skipped bool   `json:"skipped,omitempty"`
-	Error   string `json:"error,omitempty"`
-}
-
-func unwrapCockpitToolsAccountsPayload(raw []byte) ([]byte, error) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return nil, fmt.Errorf("empty cockpit-tools payload")
-	}
-	if trimmed[0] == '[' {
-		return trimmed, nil
-	}
-
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &root); err != nil {
-		return nil, err
-	}
-
-	if looksLikeCockpitToolsAccount(root) {
-		return json.Marshal([]json.RawMessage{trimmed})
-	}
-
-	if payload, ok := rawObjectField(root, "platforms"); ok {
-		var platforms map[string]json.RawMessage
-		if err := json.Unmarshal(payload, &platforms); err == nil {
-			if codexPayload, ok := platforms["codex"]; ok {
-				return unwrapCockpitToolsPlatformPayload(codexPayload)
-			}
-		}
-	}
-
-	for _, key := range []string{"codex", "exported_data", "data", "accounts"} {
-		if payload, ok := rawObjectField(root, key); ok {
-			return unwrapCockpitToolsPlatformPayload(payload)
-		}
-	}
-
-	return nil, fmt.Errorf("no cockpit-tools account payload found")
-}
-
-func rawObjectField(root map[string]json.RawMessage, key string) (json.RawMessage, bool) {
-	value, ok := root[key]
-	if !ok || len(bytes.TrimSpace(value)) == 0 || string(bytes.TrimSpace(value)) == "null" {
-		return nil, false
-	}
-	return value, true
-}
-
-func looksLikeCockpitToolsAccount(root map[string]json.RawMessage) bool {
-	if _, ok := root["tokens"]; ok {
-		return true
-	}
-	if _, ok := root["id_token"]; ok {
-		return true
-	}
-	if _, ok := root["access_token"]; ok {
-		return true
-	}
-	if _, ok := root["refresh_token"]; ok {
-		return true
-	}
-	if _, ok := root["account_id"]; ok {
-		return true
-	}
-	if _, ok := root["openai_api_key"]; ok {
-		return true
-	}
-	if _, ok := root["auth_mode"]; ok {
-		return true
-	}
-	return false
-}
-
-func unwrapCockpitToolsPlatformPayload(raw json.RawMessage) ([]byte, error) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return nil, fmt.Errorf("empty cockpit-tools payload")
-	}
-	if trimmed[0] == '[' {
-		return trimmed, nil
-	}
-
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &object); err != nil {
-		return nil, err
-	}
-	if looksLikeCockpitToolsAccount(object) {
-		return json.Marshal([]json.RawMessage{trimmed})
-	}
-	for _, key := range []string{"exported_data", "data", "accounts"} {
-		if payload, ok := rawObjectField(object, key); ok {
-			return unwrapCockpitToolsPlatformPayload(payload)
-		}
-	}
-	return nil, fmt.Errorf("no cockpit-tools accounts found in platform payload")
-}
-
-func parseCockpitToolsAccounts(raw []byte) ([]cockpitToolsAccount, error) {
-	payload, err := unwrapCockpitToolsAccountsPayload(raw)
+	out, err := h.applyEasyLLMExportPayload(&payload, &existingAccounts)
 	if err != nil {
-		return nil, err
-	}
-	var accounts []cockpitToolsAccount
-	if err := json.Unmarshal(payload, &accounts); err != nil {
-		return nil, err
-	}
-	if len(accounts) == 0 {
-		return nil, fmt.Errorf("no cockpit-tools accounts found")
-	}
-	return accounts, nil
-}
-
-func cockpitToolsAccountLabel(a cockpitToolsAccount) string {
-	for _, value := range []string{a.Email, cockpitToolsAccountName(a), cockpitToolsAPIProviderName(a), cockpitToolsAPIProviderID(a), a.ID, cockpitToolsRawAccountID(a)} {
-		if text := strings.TrimSpace(value); text != "" {
-			return text
-		}
-	}
-	return "(unknown)"
-}
-
-func cockpitToolsFirstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if text := strings.TrimSpace(value); text != "" {
-			return text
-		}
-	}
-	return ""
-}
-
-func cockpitToolsPlanType(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.PlanType, a.PlanTypeCamel)
-}
-
-func cockpitToolsAuthMode(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.AuthMode, a.AuthModeCamel)
-}
-
-func cockpitToolsAPIKey(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.OpenAIAPIKey, a.OpenAIAPIKeyCamel)
-}
-
-func cockpitToolsAPIBaseURL(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.APIBaseURL, a.APIBaseURLCamel)
-}
-
-func cockpitToolsAPIProviderID(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.APIProviderID, a.APIProviderIDCamel)
-}
-
-func cockpitToolsAPIProviderName(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.APIProviderName, a.APIProviderNameCamel)
-}
-
-func cockpitToolsAuthFilePlanType(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.AuthFilePlanType, a.AuthFilePlanTypeCamel)
-}
-
-func cockpitToolsAccountName(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.AccountName, a.AccountNameCamel)
-}
-
-func cockpitToolsAccountStructure(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.AccountStructure, a.AccountStructureCamel)
-}
-
-func cockpitToolsRawAccountID(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.ChatGPTAccountID, a.ChatGPTAccountIDCamel, a.AccountID, a.AccountIDCamel)
-}
-
-func cockpitToolsOrganizationID(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.OrganizationID, a.OrganizationIDCamel)
-}
-
-func cockpitToolsPlan(a cockpitToolsAccount) *string {
-	for _, text := range []string{
-		cockpitToolsPlanType(a),
-		cockpitToolsTokenPlan(cockpitToolsIDToken(a)),
-		cockpitToolsTokenPlan(cockpitToolsAccessToken(a)),
-		cockpitToolsAuthFilePlanType(a),
-		cockpitToolsStructurePlan(cockpitToolsAccountStructure(a)),
-	} {
-		if normalized := normalizeCockpitToolsPlan(text); normalized != "" {
-			return sPtr(normalized)
-		}
-	}
-	return nil
-}
-
-func cockpitToolsTokenPlan(token string) string {
-	payload := decodeJWTPayloadMap(token)
-	if payload == nil {
-		return ""
-	}
-	if plan := jsonStringField(payload, "chatgpt_plan_type"); plan != "" {
-		return plan
-	}
-	if plan := jsonStringField(payload, "plan_type"); plan != "" {
-		return plan
-	}
-	if plan := jsonStringField(payload, "plan"); plan != "" {
-		return plan
-	}
-	auth, _ := payload["https://api.openai.com/auth"].(map[string]interface{})
-	return jsonStringField(auth, "chatgpt_plan_type")
-}
-
-func cockpitToolsStructurePlan(structure string) string {
-	normalized := strings.ToLower(strings.TrimSpace(structure))
-	switch {
-	case strings.Contains(normalized, "team"):
-		return "team"
-	case strings.Contains(normalized, "business"):
-		return "business"
-	case strings.Contains(normalized, "enterprise"):
-		return "enterprise"
-	default:
-		return ""
-	}
-}
-
-func normalizeCockpitToolsPlan(value string) string {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	if normalized == "" {
-		return ""
-	}
-	normalized = strings.ReplaceAll(normalized, "_", "-")
-	normalized = strings.Join(strings.Fields(normalized), "-")
-	switch {
-	case strings.Contains(normalized, "team"):
-		return "team"
-	case strings.Contains(normalized, "enterprise"):
-		return "enterprise"
-	case strings.Contains(normalized, "business"):
-		return "business"
-	case strings.Contains(normalized, "pro-max"), strings.Contains(normalized, "promax"):
-		return "promax"
-	case strings.Contains(normalized, "pro-lite"), strings.Contains(normalized, "prolite"):
-		return "prolite"
-	case normalized == "pro" || strings.Contains(normalized, "chatgpt-pro"):
-		return "pro"
-	case strings.Contains(normalized, "plus"):
-		return "plus"
-	case strings.Contains(normalized, "free"):
-		return "free"
-	default:
-		return normalized
-	}
-}
-
-func decodeJWTPayloadMap(token string) map[string]interface{} {
-	token = strings.TrimSpace(token)
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return nil
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		payload := parts[1]
-		switch len(payload) % 4 {
-		case 2:
-			payload += "=="
-		case 3:
-			payload += "="
-		}
-		decoded, err = base64.URLEncoding.DecodeString(payload)
-		if err != nil {
-			return nil
-		}
-	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal(decoded, &payload); err != nil {
-		return nil
-	}
-	return payload
-}
-
-func jsonStringField(object map[string]interface{}, key string) string {
-	if object == nil {
-		return ""
-	}
-	value, ok := object[key]
-	if !ok {
-		return ""
-	}
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case fmt.Stringer:
-		return strings.TrimSpace(v.String())
-	default:
-		return strings.TrimSpace(fmt.Sprint(v))
-	}
-}
-
-func cockpitToolsStatus(a cockpitToolsAccount) string {
-	if text := strings.TrimSpace(a.Status); text != "" {
-		return text
-	}
-	if a.RequiresReauth || a.Disabled {
-		return "inactive"
-	}
-	return "active"
-}
-
-func cockpitToolsIDToken(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.IDToken, a.IDTokenCamel, a.Tokens.IDToken, a.Tokens.IDTokenCamel)
-}
-
-func cockpitToolsAccessToken(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.AccessToken, a.AccessTokenCamel, a.Tokens.AccessToken, a.Tokens.AccessCamel)
-}
-
-func cockpitToolsRefreshToken(a cockpitToolsAccount) string {
-	return cockpitToolsFirstNonEmpty(a.RefreshToken, a.RefreshTokenCamel, a.Tokens.RefreshToken, a.Tokens.RefreshCamel)
-}
-
-func cockpitToolsAccountID(a cockpitToolsAccount) string {
-	if text := cockpitToolsRawAccountID(a); text != "" {
-		return text
-	}
-	for _, token := range []string{cockpitToolsIDToken(a), cockpitToolsAccessToken(a)} {
-		payload := decodeJWTPayloadMap(token)
-		if payload == nil {
-			continue
-		}
-		auth, _ := payload["https://api.openai.com/auth"].(map[string]interface{})
-		for _, object := range []map[string]interface{}{auth, payload} {
-			for _, key := range []string{"chatgpt_account_id", "account_id"} {
-				if text := jsonStringField(object, key); text != "" {
-					return text
-				}
-			}
-		}
-	}
-	if isCockpitToolsTeamLike(a) {
-		return cockpitToolsStableSyntheticAccountID(a)
-	}
-	return ""
-}
-
-func isCockpitToolsTeamLike(a cockpitToolsAccount) bool {
-	for _, value := range []string{
-		cockpitToolsPlanType(a),
-		cockpitToolsAuthFilePlanType(a),
-		cockpitToolsTokenPlan(cockpitToolsIDToken(a)),
-		cockpitToolsTokenPlan(cockpitToolsAccessToken(a)),
-		cockpitToolsAccountStructure(a),
-	} {
-		switch normalizeCockpitToolsPlan(value) {
-		case "team", "business", "enterprise":
-			return true
-		}
-	}
-	return false
-}
-
-func cockpitToolsStableSyntheticAccountID(a cockpitToolsAccount) string {
-	seed := cockpitToolsFirstNonEmpty(
-		a.ID,
-		cockpitToolsAccountName(a),
-		cockpitToolsAccessToken(a),
-		cockpitToolsRefreshToken(a),
-		cockpitToolsIDToken(a),
-		a.Email,
-	)
-	sum := sha256.Sum256([]byte(seed))
-	return "cockpit-tools-team-" + base64.RawURLEncoding.EncodeToString(sum[:12])
-}
-
-func cockpitToolsExpiresAt(a cockpitToolsAccount) *time.Time {
-	if t, ok := parseExportedOAuthTime(a.Expired); ok {
-		return t
-	}
-	if t, ok := parseExportedOAuthTime(a.ExpiresAt); ok {
-		return t
-	}
-	return nil
-}
-
-func secondsUntilUnixTimestamp(ts *int64, now time.Time) *int64 {
-	if ts == nil || *ts <= 0 {
-		return nil
-	}
-	seconds := *ts - now.Unix()
-	if seconds < 0 {
-		seconds = 0
-	}
-	return &seconds
-}
-
-func applyCockpitToolsQuota(account *models.OpenAIAccount, quota *cockpitToolsQuota, now time.Time) {
-	if quota == nil {
-		return
-	}
-	if quota.HourlyPercentage != nil {
-		v := float64(*quota.HourlyPercentage)
-		account.Quota5hUsedPercent = &v
-	}
-	if quota.WeeklyPercentage != nil {
-		v := float64(*quota.WeeklyPercentage)
-		account.Quota7dUsedPercent = &v
-	}
-	account.Quota5hResetSeconds = secondsUntilUnixTimestamp(quota.HourlyResetTime, now)
-	account.Quota7dResetSeconds = secondsUntilUnixTimestamp(quota.WeeklyResetTime, now)
-	if account.Quota5hUsedPercent != nil || account.Quota7dUsedPercent != nil {
-		account.QuotaVerified = true
-		account.QuotaUpdatedAt = &now
-	}
-}
-
-func (h *OpenAIHandler) buildOAuthAccountFromCockpitTools(a cockpitToolsAccount, now time.Time) (*models.OpenAIAccount, error) {
-	idToken := cockpitToolsIDToken(a)
-	accessToken := cockpitToolsAccessToken(a)
-	refreshToken := cockpitToolsRefreshToken(a)
-	email := strings.TrimSpace(a.Email)
-	if email == "" && idToken != "" {
-		if userInfo := openaiplatform.ParseIDToken(idToken); userInfo != nil && userInfo.Email != nil {
-			email = strings.TrimSpace(*userInfo.Email)
-		}
-	}
-	if email == "" {
-		return nil, fmt.Errorf("缺少 email，且无法从 id_token 解析邮箱")
-	}
-	if accessToken == "" && refreshToken == "" && idToken == "" {
-		return nil, fmt.Errorf("缺少 access_token、refresh_token 或 id_token")
-	}
-
-	account := &models.OpenAIAccount{
-		Email:            email,
-		AccountType:      models.OpenAIAccountTypeOAuth,
-		Status:           cockpitToolsStatus(a),
-		AccessToken:      sPtr(accessToken),
-		RefreshToken:     sPtr(refreshToken),
-		ExpiresAt:        cockpitToolsExpiresAt(a),
-		ChatGPTAccountID: sPtr(cockpitToolsAccountID(a)),
-		ChatGPTUserID:    sPtr(cockpitToolsFirstNonEmpty(a.UserID, a.UserIDCamel)),
-		OrganizationID:   sPtr(cockpitToolsOrganizationID(a)),
-		Plan:             cockpitToolsPlan(a),
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	if len(a.Tags) > 0 && strings.TrimSpace(a.Tags[0]) != "" {
-		account.TagName = sPtr(strings.TrimSpace(a.Tags[0]))
-	} else if name := cockpitToolsAccountName(a); name != "" {
-		account.TagName = sPtr(name)
-	}
-	if idToken != "" {
-		account.IDToken = sPtr(idToken)
-		if userInfo := openaiplatform.ParseIDToken(idToken); userInfo != nil {
-			if account.ChatGPTAccountID == nil || *account.ChatGPTAccountID == "" {
-				account.ChatGPTAccountID = userInfo.ChatGPTAccountID
-			}
-			if account.ChatGPTUserID == nil || *account.ChatGPTUserID == "" {
-				account.ChatGPTUserID = userInfo.ChatGPTUserID
-			}
-			if account.OrganizationID == nil || *account.OrganizationID == "" {
-				account.OrganizationID = userInfo.OrganizationID
-			}
-		}
-		if j := openaiplatform.ExtractOpenAIAuthJSON(idToken); j != "" {
-			account.OpenAIAuthJSON = sPtr(j)
-		}
-	}
-	applyCockpitToolsQuota(account, a.Quota, now)
-	return account, nil
-}
-
-func (h *OpenAIHandler) buildAPIAccountFromCockpitTools(a cockpitToolsAccount, now time.Time) (*models.OpenAIAccount, error) {
-	apiKey := cockpitToolsAPIKey(a)
-	if apiKey == "" {
-		return nil, fmt.Errorf("api key 为空")
-	}
-	provider := cockpitToolsAPIProviderID(a)
-	if provider == "" {
-		provider = cockpitToolsAPIProviderName(a)
-	}
-	if provider == "" {
-		provider = "openai"
-	}
-	baseURL := cockpitToolsAPIBaseURL(a)
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
-	}
-	label := strings.TrimSpace(a.Email)
-	if label == "" {
-		label = strings.TrimSpace(a.AccountName)
-		if label == "" {
-			label = cockpitToolsAccountName(a)
-		}
-	}
-	if label == "" {
-		label = provider
-	}
-	return &models.OpenAIAccount{
-		Email:         label,
-		AccountType:   models.OpenAIAccountTypeAPI,
-		ModelProvider: sPtr(provider),
-		Model:         sPtr(""),
-		BaseURL:       sPtr(baseURL),
-		APIKey:        sPtr(apiKey),
-		WireAPI:       sPtr("responses"),
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}, nil
-}
-
-func (h *OpenAIHandler) ImportFromCockpitTools(c *gin.Context) {
-	data, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "读取请求体失败: " + err.Error(), Code: "INVALID_REQUEST"})
-		return
-	}
-	cockpitToolsAccounts, err := parseCockpitToolsAccounts(data)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "无效的 cockpit-tools 导出数据: " + err.Error(), Code: "INVALID_REQUEST"})
-		return
-	}
-
-	existingAccounts, _ := h.storage.List()
-	results := make([]cockpitToolsImportResult, 0, len(cockpitToolsAccounts))
-	now := time.Now()
-
-	for _, item := range cockpitToolsAccounts {
-		label := cockpitToolsAccountLabel(item)
-		authMode := strings.ToLower(strings.TrimSpace(cockpitToolsAuthMode(item)))
-		isAPIKey := authMode == "apikey" || cockpitToolsAPIKey(item) != ""
-		if isAPIKey {
-			account, err := h.buildAPIAccountFromCockpitTools(item, now)
-			if err != nil {
-				results = append(results, cockpitToolsImportResult{Email: label, Success: false, Error: err.Error()})
-				continue
-			}
-			if _, _, err := h.upsertImportedAPIAccount(account, &existingAccounts); err != nil {
-				results = append(results, cockpitToolsImportResult{Email: label, Success: false, Error: err.Error()})
-				continue
-			}
-			results = append(results, cockpitToolsImportResult{Email: account.Email, Success: true})
-			continue
-		}
-
-		account, err := h.buildOAuthAccountFromCockpitTools(item, now)
-		if err != nil {
-			results = append(results, cockpitToolsImportResult{Email: label, Success: false, Error: err.Error()})
-			continue
-		}
-		if _, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts); err != nil {
-			results = append(results, cockpitToolsImportResult{Email: label, Success: false, Error: err.Error()})
-			continue
-		}
-		results = append(results, cockpitToolsImportResult{Email: account.Email, Success: true})
-	}
-
-	success, skipped, failed := 0, 0, 0
-	for _, r := range results {
-		if r.Success {
-			success++
-		} else if r.Skipped {
-			skipped++
-		} else {
-			failed++
-		}
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"total":   len(results),
-		"success": success,
-		"skipped": skipped,
-		"failed":  failed,
-		"results": results,
-	})
-}
-
-// flexSub2Unix unmarshals credentials.expires_at from int/float, numeric string, or RFC3339 time string.
-type flexSub2Unix struct{ Unix int64 }
-
-func (f *flexSub2Unix) UnmarshalJSON(b []byte) error {
-	f.Unix = 0
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || string(b) == "null" {
-		return nil
-	}
-	if b[0] == '"' {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return nil
-		}
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return nil
-		}
-		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-			f.Unix = n
-			return nil
-		}
-		for _, layout := range []string{time.RFC3339, time.RFC3339Nano, "2006-01-02 15:04:05-07:00"} {
-			if t, err := time.Parse(layout, s); err == nil {
-				f.Unix = t.Unix()
-				return nil
-			}
-		}
-		return nil
-	}
-	var n json.Number
-	if err := json.Unmarshal(b, &n); err != nil {
-		return nil
-	}
-	if v, err := n.Int64(); err == nil {
-		f.Unix = v
-		return nil
-	}
-	if fv, err := n.Float64(); err == nil {
-		f.Unix = int64(fv)
-	}
-	return nil
-}
-
-// flexSub2Int unmarshals JSON numbers that may be floats (e.g. 1.0 from JS) or numeric strings.
-type flexSub2Int int
-
-func (f *flexSub2Int) UnmarshalJSON(b []byte) error {
-	*f = 0
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || string(b) == "null" {
-		return nil
-	}
-	if b[0] == '"' {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return nil
-		}
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return nil
-		}
-		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			return nil
-		}
-		*f = flexSub2Int(n)
-		return nil
-	}
-	var n json.Number
-	if err := json.Unmarshal(b, &n); err != nil {
-		return nil
-	}
-	if v, err := n.Int64(); err == nil {
-		*f = flexSub2Int(v)
-		return nil
-	}
-	if fv, err := n.Float64(); err == nil {
-		*f = flexSub2Int(fv)
-	}
-	return nil
-}
-
-// flexSub2Float unmarshals rate_multiplier from number or numeric string.
-type flexSub2Float float64
-
-func (f *flexSub2Float) UnmarshalJSON(b []byte) error {
-	*f = 0
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || string(b) == "null" {
-		return nil
-	}
-	if b[0] == '"' {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return nil
-		}
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return nil
-		}
-		v, err := strconv.ParseFloat(s, 64)
-		if err != nil {
-			return nil
-		}
-		*f = flexSub2Float(v)
-		return nil
-	}
-	var n json.Number
-	if err := json.Unmarshal(b, &n); err != nil {
-		return nil
-	}
-	v, err := n.Float64()
-	if err != nil {
-		return nil
-	}
-	*f = flexSub2Float(v)
-	return nil
-}
-
-// flexSub2Bool accepts bool, 0/1 number, or "true"/"false" string (部分导出工具用数字表示布尔).
-type flexSub2Bool bool
-
-func (f *flexSub2Bool) UnmarshalJSON(b []byte) error {
-	*f = false
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || string(b) == "null" {
-		return nil
-	}
-	var v interface{}
-	if err := json.Unmarshal(b, &v); err != nil {
-		return nil
-	}
-	switch x := v.(type) {
-	case bool:
-		*f = flexSub2Bool(x)
-	case float64:
-		*f = flexSub2Bool(x != 0)
-	case string:
-		s := strings.TrimSpace(strings.ToLower(x))
-		*f = flexSub2Bool(s == "true" || s == "1" || s == "yes")
-	default:
-		*f = false
-	}
-	return nil
-}
-
-// sub2apiCredentials matches Sub2API / 各工具导出的 credentials；字段类型尽量宽松避免 JSON 解析失败。
-type sub2apiCredentials struct {
-	AccessToken      string          `json:"access_token"`
-	IDToken          string          `json:"id_token"`
-	ChatgptAccountID string          `json:"chatgpt_account_id"`
-	ChatgptUserID    string          `json:"chatgpt_user_id"`
-	ClientID         string          `json:"client_id"`
-	ExpiresAt        flexSub2Unix    `json:"expires_at"`
-	ExpiresIn        flexSub2Int     `json:"expires_in"`
-	ModelMapping     json.RawMessage `json:"model_mapping"`
-	OrganizationID   string          `json:"organization_id"`
-	PlanType         string          `json:"plan_type"`
-	RefreshToken     string          `json:"refresh_token"`
-}
-
-// sub2api format structs
-type sub2apiAccount struct {
-	Name        string             `json:"name"`
-	Platform    string             `json:"platform"`
-	AccountType string             `json:"type"` // "oauth"
-	Credentials sub2apiCredentials `json:"credentials"`
-	Extra       struct {
-		Email string `json:"email"`
-	} `json:"extra"`
-	Concurrency        flexSub2Int   `json:"concurrency"`
-	Priority           flexSub2Int   `json:"priority"`
-	RateMultiplier     flexSub2Float `json:"rate_multiplier"`
-	AutoPauseOnExpired flexSub2Bool  `json:"auto_pause_on_expired"`
-}
-
-type sub2apiExport struct {
-	ExportedAt string           `json:"exported_at"`
-	Proxies    []interface{}    `json:"proxies"`
-	Accounts   []sub2apiAccount `json:"accounts"`
-}
-
-// ImportSub2APIBytes parses Sub2API JSON and upserts OAuth accounts (与 HTTP 导入逻辑一致，供 CLI 使用).
-func (h *OpenAIHandler) ImportSub2APIBytes(data []byte) (gin.H, error) {
-	var payload sub2apiExport
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, err
-	}
-	if len(payload.Accounts) == 0 {
-		return nil, fmt.Errorf("文件中没有账号数据")
-	}
-
-	existingAccounts, _ := h.storage.List()
-	type result struct {
-		Email   string `json:"email"`
-		Success bool   `json:"success"`
-		Skipped bool   `json:"skipped,omitempty"`
-		Error   string `json:"error,omitempty"`
-	}
-	var results []result
-	now := time.Now()
-
-	for _, a := range payload.Accounts {
-		email := strings.TrimSpace(a.Extra.Email)
-		if email == "" {
-			email = strings.TrimSpace(a.Name)
-		}
-		if email == "" && strings.TrimSpace(a.Credentials.IDToken) != "" {
-			if userInfo := openaiplatform.ParseIDToken(strings.TrimSpace(a.Credentials.IDToken)); userInfo != nil && userInfo.Email != nil {
-				email = strings.TrimSpace(*userInfo.Email)
-			}
-		}
-		if email == "" {
-			results = append(results, result{Email: "(unknown)", Success: false, Error: "缺少 email、name 或可从 id_token 解析的邮箱"})
-			continue
-		}
-
-		var expiresAt *time.Time
-		if a.Credentials.ExpiresAt.Unix > 0 {
-			t := time.Unix(a.Credentials.ExpiresAt.Unix, 0)
-			expiresAt = &t
-		} else if int(a.Credentials.ExpiresIn) > 0 {
-			t := now.Add(time.Duration(int(a.Credentials.ExpiresIn)) * time.Second)
-			expiresAt = &t
-		}
-
-		account := &models.OpenAIAccount{
-			Email:            email,
-			AccountType:      models.OpenAIAccountTypeOAuth,
-			AccessToken:      sPtr(a.Credentials.AccessToken),
-			RefreshToken:     sPtr(a.Credentials.RefreshToken),
-			ExpiresAt:        expiresAt,
-			ChatGPTAccountID: sPtr(a.Credentials.ChatgptAccountID),
-			ChatGPTUserID:    sPtr(a.Credentials.ChatgptUserID),
-			OrganizationID:   sPtr(a.Credentials.OrganizationID),
-			CreatedAt:        now,
-			UpdatedAt:        now,
-		}
-		if a.Credentials.PlanType != "" {
-			account.Plan = sPtr(a.Credentials.PlanType)
-		}
-		if a.Credentials.IDToken != "" {
-			account.IDToken = sPtr(a.Credentials.IDToken)
-			if userInfo := openaiplatform.ParseIDToken(a.Credentials.IDToken); userInfo != nil {
-				if account.ChatGPTAccountID == nil || *account.ChatGPTAccountID == "" {
-					account.ChatGPTAccountID = userInfo.ChatGPTAccountID
-				}
-				if account.ChatGPTUserID == nil || *account.ChatGPTUserID == "" {
-					account.ChatGPTUserID = userInfo.ChatGPTUserID
-				}
-				if account.OrganizationID == nil || *account.OrganizationID == "" {
-					account.OrganizationID = userInfo.OrganizationID
-				}
-			}
-			if j := openaiplatform.ExtractOpenAIAuthJSON(a.Credentials.IDToken); j != "" {
-				account.OpenAIAuthJSON = sPtr(j)
-			}
-		}
-
-		if _, _, err := h.upsertImportedOAuthAccount(account, &existingAccounts); err != nil {
-			results = append(results, result{Email: email, Success: false, Error: err.Error()})
-			continue
-		}
-		results = append(results, result{Email: email, Success: true})
-	}
-
-	success, skipped, failed := 0, 0, 0
-	for _, r := range results {
-		if r.Success {
-			success++
-		} else if r.Skipped {
-			skipped++
-		} else {
-			failed++
-		}
-	}
-
-	return gin.H{
-		"total":   len(results),
-		"success": success,
-		"skipped": skipped,
-		"failed":  failed,
-		"results": results,
-	}, nil
-}
-
-// ImportFromSub2API handles importing accounts from the sub2api JSON format.
-func (h *OpenAIHandler) ImportFromSub2API(c *gin.Context) {
-	data, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "读取请求体失败: " + err.Error(), Code: "INVALID_REQUEST"})
-		return
-	}
-	out, err := h.ImportSub2APIBytes(data)
-	if err != nil {
-		if err.Error() == "文件中没有账号数据" {
-			c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "EMPTY_INPUT"})
-			return
-		}
-		c.JSON(http.StatusBadRequest, models.APIError{Error: "无效的请求体: " + err.Error(), Code: "INVALID_REQUEST"})
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
 		return
 	}
 	c.JSON(http.StatusOK, out)
@@ -3509,6 +2672,7 @@ func (h *OpenAIHandler) serviceConfigPayload(c *gin.Context) gin.H {
 		"total_requests":        totalReqs,
 		"request_logs_retained": false,
 		"api_key_set":           apiKey != "",
+		"api_key":               apiKey,
 		"api_key_masked":        maskedKey,
 		"v1_proxy_mode":         v1ProxyMode,
 		"codex_api_service":     enabled && v1ProxyMode == "codex",
@@ -3678,6 +2842,11 @@ func (h *OpenAIHandler) UpdateCodexLocalAccessPort(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "port must be between 1 and 65535", Code: "INVALID_REQUEST"})
 		return
 	}
+	currentPort := config.Get().Server.Port
+	if currentPort > 0 && req.Port != currentPort {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: fmt.Sprintf("port must match the running EasyLLM server port (%d)", currentPort), Code: "INVALID_REQUEST"})
+		return
+	}
 	_ = storage.SaveSetting(codexLocalAccessPortKey, strconv.Itoa(req.Port))
 	_ = saveCodexLocalAccessTimestamp(false)
 	if readBoolSetting(codexLocalAccessEnabledKey, false) {
@@ -3736,12 +2905,6 @@ func (h *OpenAIHandler) RotateCodexLocalAccessAPIKey(c *gin.Context) {
 }
 
 func (h *OpenAIHandler) ClearCodexLocalAccessStats(c *gin.Context) {
-	if h.codexStorage != nil {
-		if err := h.codexStorage.ClearLogs(); err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
-			return
-		}
-	}
 	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
 }
 
@@ -3833,6 +2996,15 @@ func generateCodexAPIServiceKey() (string, error) {
 	return "easyllm_codex_" + strings.TrimRight(base64.RawURLEncoding.EncodeToString(buf), "="), nil
 }
 
+func localProxyOriginFromRequest(c *gin.Context) string {
+	if c != nil && c.Request != nil {
+		if host := strings.TrimSpace(c.Request.Host); host != "" {
+			return openaiplatform.LocalProxyOrigin(host)
+		}
+	}
+	return openaiplatform.LocalProxyOrigin("")
+}
+
 func buildCodexAPIServiceBaseURL(c *gin.Context) string {
 	host := "localhost:8022"
 	if c != nil && c.Request != nil {
@@ -3845,16 +3017,20 @@ func buildCodexAPIServiceBaseURL(c *gin.Context) string {
 		if hostOnly == "" || hostOnly == "0.0.0.0" || hostOnly == "::" || hostOnly == "[::]" || strings.EqualFold(hostOnly, "localhost") || net.ParseIP(hostOnly) != nil {
 			hostOnly = "localhost"
 		}
-		if configuredPort := readIntSetting(codexLocalAccessPortKey, 0); configuredPort > 0 {
-			port = strconv.Itoa(configuredPort)
+		if serverPort := config.Get().Server.Port; serverPort > 0 {
+			port = strconv.Itoa(serverPort)
 		}
 		host = net.JoinHostPort(hostOnly, port)
-	} else if configuredPort := readIntSetting(codexLocalAccessPortKey, 0); configuredPort > 0 {
+	} else {
 		hostOnly := strings.TrimSpace(host)
 		if hostOnly == "" || hostOnly == "0.0.0.0" || hostOnly == "::" || hostOnly == "[::]" || strings.EqualFold(hostOnly, "localhost") || net.ParseIP(hostOnly) != nil {
 			hostOnly = "localhost"
 		}
-		host = net.JoinHostPort(hostOnly, strconv.Itoa(configuredPort))
+		port := "8022"
+		if serverPort := config.Get().Server.Port; serverPort > 0 {
+			port = strconv.Itoa(serverPort)
+		}
+		host = net.JoinHostPort(hostOnly, port)
 	}
 	scheme := "http"
 	if c != nil && c.Request != nil && c.Request.TLS != nil {
@@ -3977,6 +3153,80 @@ func saveCodexLocalAccessAccountIDs(ids []string) error {
 		return err
 	}
 	return storage.SaveSetting(codexLocalAccessAccountIDsKey, string(data))
+}
+
+func appendCodexLocalAccessAccountID(id string) (bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false, nil
+	}
+	ids := readCodexLocalAccessAccountIDs()
+	for _, existing := range ids {
+		if existing == id {
+			return false, nil
+		}
+	}
+	ids = append(ids, id)
+	return true, saveCodexLocalAccessAccountIDs(ids)
+}
+
+func refreshCodexProxyPool() {
+	if p := proxy.GetProxy(); p != nil {
+		p.Refresh()
+	}
+}
+
+func isDefaultAPIServiceOAuthAccount(account *models.OpenAIAccount) bool {
+	if account == nil {
+		return false
+	}
+	if account.AccountType != "" && account.AccountType != models.OpenAIAccountTypeOAuth {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(account.Status))
+	if status != "" && status != "active" {
+		return false
+	}
+	if strings.TrimSpace(derefStr(account.AccessToken)) == "" {
+		return false
+	}
+	if account.ExpiresAt != nil && !account.ExpiresAt.After(time.Now()) {
+		return false
+	}
+	return true
+}
+
+func shouldAddDefaultAPIServiceCollectionMember(account *models.OpenAIAccount) bool {
+	if !isDefaultAPIServiceOAuthAccount(account) {
+		return false
+	}
+	if readBoolSetting(codexLocalAccessRestrictFreeAccountsKey, true) &&
+		strings.EqualFold(strings.TrimSpace(derefStr(account.Plan)), "free") {
+		return false
+	}
+	return true
+}
+
+func (h *OpenAIHandler) applyDefaultAPIServiceMembership(account *models.OpenAIAccount) bool {
+	if !isDefaultAPIServiceOAuthAccount(account) {
+		return false
+	}
+	account.ProxyEnabled = true
+	return true
+}
+
+func (h *OpenAIHandler) saveDefaultAPIServiceMembership(account *models.OpenAIAccount) error {
+	if !shouldAddDefaultAPIServiceCollectionMember(account) {
+		return nil
+	}
+	added, err := appendCodexLocalAccessAccountID(account.ID)
+	if err != nil {
+		return err
+	}
+	if added {
+		return saveCodexLocalAccessTimestamp(false)
+	}
+	return nil
 }
 
 func saveCodexLocalAccessTimestamp(createIfMissing bool) error {
@@ -4106,9 +3356,15 @@ func (h *OpenAIHandler) refreshOAuthAccountTokens(account *models.OpenAIAccount)
 		t := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
 		account.ExpiresAt = &t
 	}
+	defaultJoined := h.applyDefaultAPIServiceMembership(account)
 	account.UpdatedAt = time.Now()
 	if err := h.storage.Save(account); err != nil {
 		return fmt.Errorf("persist refreshed token failed: %w", err)
+	}
+	if defaultJoined {
+		if err := h.saveDefaultAPIServiceMembership(account); err != nil {
+			return fmt.Errorf("persist API service membership failed: %w", err)
+		}
 	}
 	return nil
 }

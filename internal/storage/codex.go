@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// CodexStorage handles Codex account and log CRUD
+// CodexStorage handles Codex account CRUD
 type CodexStorage struct {
 	db *gorm.DB
 }
@@ -75,34 +75,4 @@ func (s *CodexStorage) DeleteAccount(id string) error {
 		return gorm.ErrRecordNotFound
 	}
 	return nil
-}
-
-// SaveLog intentionally does not persist per-request API logs.
-func (s *CodexStorage) SaveLog(log *models.CodexLog) error {
-	return nil
-}
-
-// GetLogs returns no entries because EasyLLM does not retain API call logs.
-func (s *CodexStorage) GetLogs(limit, offset int) ([]models.CodexLog, int64, error) {
-	return []models.CodexLog{}, 0, nil
-}
-
-// GetLogsSince returns no entries because EasyLLM does not retain API call logs.
-func (s *CodexStorage) GetLogsSince(since time.Time) ([]models.CodexLog, error) {
-	return []models.CodexLog{}, nil
-}
-
-// BackfillPlatform is kept for compatibility with older callers.
-func (s *CodexStorage) BackfillPlatform(platform string) int64 {
-	return 0
-}
-
-// GetSessionLogPaths returns no paths because session scanning is disabled.
-func (s *CodexStorage) GetSessionLogPaths() []string {
-	return []string{}
-}
-
-// ClearLogs removes any legacy log table left from older versions.
-func (s *CodexStorage) ClearLogs() error {
-	return PurgeCodexLogs()
 }

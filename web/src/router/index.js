@@ -1,21 +1,10 @@
 import { createRouter, createWebHistory } from 'vue-router'
-
-import { cockpitPlatforms } from '@/lib/platforms'
-
-const genericPlatformRoutes = cockpitPlatforms
-  .filter((platform) => platform.managementMode === 'generic')
-  .map((platform) => ({
-    path: platform.route,
-    name: platform.id,
-    component: () => import('@/views/PlatformWorkspaceView.vue'),
-    props: { platformId: platform.id },
-    meta: { title: platform.label, icon: platform.icon },
-  }))
+import { defaultHomePath, syncMacAppFromRoute } from '@/lib/runtime'
 
 const routes = [
   {
     path: '/',
-    redirect: '/dashboard',
+    redirect: () => defaultHomePath(),
   },
   {
     path: '/login',
@@ -39,7 +28,6 @@ const routes = [
     path: '/openai',
     redirect: '/codex',
   },
-  ...genericPlatformRoutes,
   {
     path: '/docs',
     name: 'docs',
@@ -60,6 +48,8 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to, from, next) => {
+  syncMacAppFromRoute(to)
+
   if (to.meta.public) {
     next()
     return

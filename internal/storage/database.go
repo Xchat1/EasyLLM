@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -26,30 +25,16 @@ func InitDB(cfg *config.Config) error {
 		gormConfig.Logger = logger.Default.LogMode(logger.Info)
 	}
 
-	switch cfg.Database.Type {
-	case "postgres":
-		dsn := cfg.Database.DSN
-		if dsn == "" {
-			return fmt.Errorf("postgres DSN is required when DB_TYPE=postgres")
-		}
-		DB, err = gorm.Open(postgres.Open(dsn), gormConfig)
-		if err != nil {
-			return fmt.Errorf("failed to connect to postgres: %w", err)
-		}
-	default:
-		// SQLite (default)
-		sqlitePath := cfg.Database.SQLitePath
-		if sqlitePath == "" {
-			sqlitePath = filepath.Join(cfg.App.DataDir, "easyllm.db")
-		}
-		// Ensure directory exists
-		if err := os.MkdirAll(filepath.Dir(sqlitePath), 0755); err != nil {
-			return fmt.Errorf("failed to create data directory: %w", err)
-		}
-		DB, err = gorm.Open(sqlite.Open(sqlitePath), gormConfig)
-		if err != nil {
-			return fmt.Errorf("failed to open sqlite: %w", err)
-		}
+	sqlitePath := cfg.Database.SQLitePath
+	if sqlitePath == "" {
+		sqlitePath = filepath.Join(cfg.App.DataDir, "easyllm.db")
+	}
+	if err := os.MkdirAll(filepath.Dir(sqlitePath), 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+	DB, err = gorm.Open(sqlite.Open(sqlitePath), gormConfig)
+	if err != nil {
+		return fmt.Errorf("failed to open sqlite: %w", err)
 	}
 
 	return AutoMigrate()
@@ -59,29 +44,38 @@ func InitDB(cfg *config.Config) error {
 func AutoMigrate() error {
 	if err := DB.AutoMigrate(
 		&models.OpenAIAccount{},
-		&models.OpenAIAPIKey{},
 		&models.CodexAccount{},
-		&models.AntigravityAccount{},
-		&models.PlatformAccount{},
-		&models.PlatformInstance{},
-		&models.WakeupTask{},
 		&models.AppSettings{},
 	); err != nil {
 		return err
 	}
-	return PurgeCodexLogs()
+	return PurgeNonOpenAITables()
 }
 
-// PurgeCodexLogs removes the legacy per-request log table. EasyLLM keeps account
-// configuration and aggregate counters, but it must not retain API call logs.
-func PurgeCodexLogs() error {
+// PurgeNonOpenAITables removes any table outside the current local
+// OpenAI/Codex data model.
+func PurgeNonOpenAITables() error {
 	if DB == nil {
 		return nil
 	}
-	if !DB.Migrator().HasTable(&models.CodexLog{}) {
-		return nil
+	allowed := map[string]bool{
+		"open_ai_accounts": true,
+		"codex_accounts":   true,
+		"app_settings":     true,
 	}
-	return DB.Migrator().DropTable(&models.CodexLog{})
+	tables, err := DB.Migrator().GetTables()
+	if err != nil {
+		return err
+	}
+	for _, table := range tables {
+		if allowed[table] || table == "sqlite_sequence" {
+			continue
+		}
+		if err := DB.Migrator().DropTable(table); err != nil {
+			return fmt.Errorf("drop non-openai table %s: %w", table, err)
+		}
+	}
+	return nil
 }
 
 // GetDB returns the database instance

@@ -30,7 +30,7 @@ func setupOpenAIHandlerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&models.AppSettings{}, &models.OpenAIAccount{}, &models.CodexLog{}); err != nil {
+	if err := db.AutoMigrate(&models.AppSettings{}, &models.OpenAIAccount{}, &models.CodexAccount{}); err != nil {
 		t.Fatalf("migrate schema: %v", err)
 	}
 	storage.DB = db
@@ -92,7 +92,7 @@ func TestMergeOpenAIAccountUpdatePreservesManagedFields(t *testing.T) {
 	}
 }
 
-func TestGetServiceConfigDoesNotLeakRawAPIKey(t *testing.T) {
+func TestGetServiceConfigReturnsRawAPIKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupOpenAIHandlerTestDB(t)
 	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
@@ -115,11 +115,196 @@ func TestGetServiceConfigDoesNotLeakRawAPIKey(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if _, exists := payload["api_key"]; exists {
-		t.Fatalf("expected raw api_key to be omitted from response")
+	if payload["api_key"] != "secret-1234-key" {
+		t.Fatalf("expected raw api key in service config response, got %#v", payload["api_key"])
 	}
 	if payload["api_key_masked"] == "secret-1234-key" {
 		t.Fatalf("expected masked api key, got raw key")
+	}
+}
+
+func TestListAccountsDoesNotLeakSecrets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+	now := time.Now()
+
+	if err := handler.storage.Save(&models.OpenAIAccount{
+		ID:             "secret-account",
+		Email:          "secret@example.com",
+		AccountType:    models.OpenAIAccountTypeOAuth,
+		AccessToken:    sPtr("access-secret"),
+		RefreshToken:   sPtr("refresh-secret"),
+		IDToken:        sPtr(testUnsignedJWT(t, map[string]interface{}{"https://api.openai.com/auth": map[string]interface{}{"chatgpt_plan_type": "plus"}})),
+		OpenAIAuthJSON: sPtr(`{"secret":true}`),
+		APIKey:         sPtr("api-secret"),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("seed account: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/openai/accounts", nil)
+
+	handler.ListAccounts(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", recorder.Code)
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("expected 1 account, got %d", len(payload))
+	}
+	for _, key := range []string{"access_token", "refresh_token", "id_token", "openai_auth_json", "api_key"} {
+		if _, exists := payload[0][key]; exists {
+			t.Fatalf("expected %s to be omitted from list response", key)
+		}
+	}
+	if payload[0]["plan"] != "plus" {
+		t.Fatalf("expected plan to be inferred before secret fields are omitted, got %#v", payload[0]["plan"])
+	}
+}
+
+func TestAPIAccountTestUsesConfiguredWireAPI(t *testing.T) {
+	tests := []struct {
+		name     string
+		wireAPI  string
+		wantPath string
+	}{
+		{name: "responses", wireAPI: "responses", wantPath: "/v1/responses"},
+		{name: "chat completions", wireAPI: "chat_completions", wantPath: "/v1/chat/completions"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			db := setupOpenAIHandlerTestDB(t)
+			handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+			var gotPath string
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer upstream.Close()
+
+			now := time.Now()
+			if err := handler.storage.Save(&models.OpenAIAccount{
+				ID:          "api-account",
+				Email:       "api",
+				AccountType: models.OpenAIAccountTypeAPI,
+				Model:       sPtr("test-model"),
+				BaseURL:     sPtr(upstream.URL + "/v1"),
+				APIKey:      sPtr("test-key"),
+				WireAPI:     sPtr(tc.wireAPI),
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			}); err != nil {
+				t.Fatalf("seed api account: %v", err)
+			}
+
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Params = gin.Params{{Key: "id", Value: "api-account"}}
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/api-accounts/api-account/test", nil)
+
+			handler.TestAPIAccount(ctx)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", recorder.Code)
+			}
+			if gotPath != tc.wantPath {
+				t.Fatalf("upstream path = %q, want %q", gotPath, tc.wantPath)
+			}
+		})
+	}
+}
+
+func TestExportAccountsIncludesOAuthPlan(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+	now := time.Now()
+
+	if err := handler.storage.Save(&models.OpenAIAccount{
+		ID:          "team-export",
+		Email:       "team@example.com",
+		AccountType: models.OpenAIAccountTypeOAuth,
+		Status:      "active",
+		Plan:        sPtr("team"),
+		AccessToken: sPtr("at"),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed account: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/openai/export", nil)
+
+	handler.ExportAccounts(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		OAuthAccounts []exportedOAuthAccount `json:"oauth_accounts"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.OAuthAccounts) != 1 {
+		t.Fatalf("expected one oauth account, got %+v", payload.OAuthAccounts)
+	}
+	if payload.OAuthAccounts[0].Plan != "team" || payload.OAuthAccounts[0].PlanType != "team" {
+		t.Fatalf("expected plan to be exported, got %+v", payload.OAuthAccounts[0])
+	}
+}
+
+func TestImportFromExportPreservesOAuthPlan(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	body := strings.NewReader(`{
+		"oauth_accounts":[
+			{
+				"id":"team-import",
+				"email":"team@example.com",
+				"access_token":"at",
+				"refresh_token":"rt",
+				"account_id":"acct-team",
+				"plan_type":"team",
+				"type":"codex"
+			}
+		]
+	}`)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/from-export", body)
+
+	handler.ImportFromExport(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("expected one account, got %+v", accounts)
+	}
+	if accounts[0].Plan == nil || *accounts[0].Plan != "team" {
+		t.Fatalf("expected team plan to be imported, got %#v", accounts[0].Plan)
 	}
 }
 
@@ -347,412 +532,6 @@ func TestUpsertImportedOAuthAccountCanEnableProxyForExistingAccount(t *testing.T
 	}
 	if !stored.ProxyEnabled {
 		t.Fatalf("expected stored account to persist proxy_enabled=true")
-	}
-}
-
-func TestParseCockpitToolsAccountsSupportsArrayAndTransferBundle(t *testing.T) {
-	arrayPayload := []byte(`[
-		{
-			"id":"codex-1",
-			"email":"one@example.com",
-			"auth_mode":"oauth",
-			"account_id":"acct-1",
-			"tokens":{"access_token":"at1","refresh_token":"rt1","id_token":""}
-		}
-	]`)
-	accounts, err := parseCockpitToolsAccounts(arrayPayload)
-	if err != nil {
-		t.Fatalf("parse account array: %v", err)
-	}
-	if len(accounts) != 1 || accounts[0].Email != "one@example.com" || accounts[0].Tokens.AccessToken != "at1" {
-		t.Fatalf("unexpected parsed accounts: %+v", accounts)
-	}
-
-	topLevelPayload := []byte(`{
-		"id_token":"id-top",
-		"access_token":"at-top",
-		"refresh_token":"rt-top",
-		"account_id":"acct-top",
-		"last_refresh":"2026-05-07T01:29:06.000Z",
-		"email":"top@example.com",
-		"type":"codex",
-		"expired":"2026-05-16T06:20:07.000Z"
-	}`)
-	accounts, err = parseCockpitToolsAccounts(topLevelPayload)
-	if err != nil {
-		t.Fatalf("parse top-level token object: %v", err)
-	}
-	if len(accounts) != 1 || accounts[0].Email != "top@example.com" || accounts[0].AccessToken != "at-top" || accounts[0].RefreshToken != "rt-top" {
-		t.Fatalf("unexpected parsed top-level account: %+v", accounts)
-	}
-
-	bundlePayload := []byte(`{
-		"schema":"account-transfer",
-		"platforms":{
-			"codex":{
-				"account_count":1,
-				"exported_data":[
-					{
-						"id":"codex-2",
-						"email":"two@example.com",
-						"auth_mode":"oauth",
-						"account_id":"acct-2",
-						"tokens":{"access_token":"at2","refresh_token":"rt2","id_token":""}
-					}
-				]
-			}
-		}
-	}`)
-	accounts, err = parseCockpitToolsAccounts(bundlePayload)
-	if err != nil {
-		t.Fatalf("parse transfer bundle: %v", err)
-	}
-	if len(accounts) != 1 || accounts[0].Email != "two@example.com" || accounts[0].Tokens.RefreshToken != "rt2" {
-		t.Fatalf("unexpected parsed bundle accounts: %+v", accounts)
-	}
-}
-
-func TestImportFromCockpitToolsImportsOAuthAccount(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	db := setupOpenAIHandlerTestDB(t)
-	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
-
-	body := strings.NewReader(`[
-		{
-			"id":"codex-1",
-			"email":"one@example.com",
-			"id_token":"id1",
-			"access_token":"at1",
-			"refresh_token":"rt1",
-			"account_id":"acct-1",
-			"expired":"2026-05-16T06:20:07.000Z",
-			"plan_type":"plus",
-			"type":"codex"
-		}
-	]`)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", body)
-
-	handler.ImportFromCockpitTools(ctx)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var payload struct {
-		Total   int `json:"total"`
-		Success int `json:"success"`
-		Failed  int `json:"failed"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if payload.Total != 1 || payload.Success != 1 || payload.Failed != 0 {
-		t.Fatalf("unexpected payload: %+v", payload)
-	}
-
-	accounts, err := handler.storage.List()
-	if err != nil {
-		t.Fatalf("list accounts: %v", err)
-	}
-	if len(accounts) != 1 {
-		t.Fatalf("expected 1 account imported, got %d", len(accounts))
-	}
-	if accounts[0].Email != "one@example.com" ||
-		derefStr(accounts[0].AccessToken) != "at1" ||
-		derefStr(accounts[0].RefreshToken) != "rt1" ||
-		derefStr(accounts[0].IDToken) != "id1" ||
-		derefStr(accounts[0].ChatGPTAccountID) != "acct-1" ||
-		accounts[0].ExpiresAt == nil {
-		t.Fatalf("unexpected imported account: %+v", accounts[0])
-	}
-}
-
-func TestImportFromCockpitToolsKeepsTeamAccountSeparateByTokenAccountID(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	db := setupOpenAIHandlerTestDB(t)
-	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
-
-	now := time.Now()
-	personalID := "personal-account"
-	if err := handler.storage.Save(&models.OpenAIAccount{
-		ID:               "existing-personal",
-		Email:            "same@example.com",
-		AccountType:      models.OpenAIAccountTypeOAuth,
-		Status:           "active",
-		ChatGPTAccountID: &personalID,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}); err != nil {
-		t.Fatalf("seed personal account: %v", err)
-	}
-
-	idToken := testUnsignedJWT(t, map[string]interface{}{
-		"email": "same@example.com",
-		"https://api.openai.com/auth": map[string]interface{}{
-			"account_id":        "team-account",
-			"chatgpt_user_id":   "team-user",
-			"chatgpt_plan_type": "team",
-			"organization_id":   "team-org",
-		},
-	})
-	body, err := json.Marshal([]map[string]interface{}{
-		{
-			"id":                "cockpit-team-row",
-			"email":             "same@example.com",
-			"id_token":          idToken,
-			"access_token":      "at-team",
-			"refresh_token":     "rt-team",
-			"account_structure": "team",
-			"type":              "codex",
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal request body: %v", err)
-	}
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", bytes.NewReader(body))
-
-	handler.ImportFromCockpitTools(ctx)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	accounts, err := handler.storage.List()
-	if err != nil {
-		t.Fatalf("list accounts: %v", err)
-	}
-	if len(accounts) != 2 {
-		t.Fatalf("expected personal and team accounts to coexist, got %d: %+v", len(accounts), accounts)
-	}
-
-	var team *models.OpenAIAccount
-	for i := range accounts {
-		if derefStr(accounts[i].ChatGPTAccountID) == "team-account" {
-			team = &accounts[i]
-			break
-		}
-	}
-	if team == nil {
-		t.Fatalf("expected imported team account with account_id from id_token")
-	}
-	if team.Plan == nil || *team.Plan != "team" {
-		t.Fatalf("expected team plan to be persisted, got %#v", team.Plan)
-	}
-}
-
-func TestImportFromCockpitToolsKeepsTeamOrganizationsSeparateWithSameAccountID(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	db := setupOpenAIHandlerTestDB(t)
-	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
-
-	body, err := json.Marshal([]map[string]interface{}{
-		{
-			"id":                "workspace-a",
-			"email":             "same@example.com",
-			"account_id":        "shared-account",
-			"organization_id":   "org-a",
-			"account_name":      "Workspace A",
-			"access_token":      "at-a",
-			"refresh_token":     "rt-a",
-			"plan_type":         "team",
-			"account_structure": "team",
-			"type":              "codex",
-		},
-		{
-			"id":                "workspace-b",
-			"email":             "same@example.com",
-			"account_id":        "shared-account",
-			"organization_id":   "org-b",
-			"account_name":      "Workspace B",
-			"access_token":      "at-b",
-			"refresh_token":     "rt-b",
-			"plan_type":         "team",
-			"account_structure": "team",
-			"type":              "codex",
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal request body: %v", err)
-	}
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", bytes.NewReader(body))
-
-	handler.ImportFromCockpitTools(ctx)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	accounts, err := handler.storage.List()
-	if err != nil {
-		t.Fatalf("list accounts: %v", err)
-	}
-	if len(accounts) != 2 {
-		t.Fatalf("expected two team organizations to coexist, got %d: %+v", len(accounts), accounts)
-	}
-
-	seen := map[string]bool{}
-	for _, account := range accounts {
-		if derefStr(account.ChatGPTAccountID) != "shared-account" {
-			t.Fatalf("expected shared chatgpt account id, got %+v", account)
-		}
-		if account.Plan == nil || *account.Plan != "team" {
-			t.Fatalf("expected team plan to be persisted, got %#v", account.Plan)
-		}
-		seen[derefStr(account.OrganizationID)] = true
-	}
-	if !seen["org-a"] || !seen["org-b"] {
-		t.Fatalf("expected org-a and org-b, got %+v", seen)
-	}
-}
-
-func TestImportFromCockpitToolsKeepsTeamAccountSeparateWithoutAccountID(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	db := setupOpenAIHandlerTestDB(t)
-	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
-
-	now := time.Now()
-	if err := handler.storage.Save(&models.OpenAIAccount{
-		ID:          "existing-personal",
-		Email:       "same@example.com",
-		AccountType: models.OpenAIAccountTypeOAuth,
-		Status:      "active",
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}); err != nil {
-		t.Fatalf("seed personal account: %v", err)
-	}
-
-	idToken := testUnsignedJWT(t, map[string]interface{}{
-		"email": "same@example.com",
-		"https://api.openai.com/auth": map[string]interface{}{
-			"chatgpt_plan_type": "team",
-		},
-	})
-	body, err := json.Marshal([]map[string]interface{}{
-		{
-			"id":          "cockpit-team-row-without-account-id",
-			"email":       "same@example.com",
-			"id_token":    idToken,
-			"accessToken": "ignored-camel-token",
-			"tokens": map[string]string{
-				"access_token":  "at-team-without-account-id",
-				"refresh_token": "rt-team-without-account-id",
-			},
-			"accountStructure": "team",
-			"planType":         "team",
-			"type":             "codex",
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal request body: %v", err)
-	}
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", bytes.NewReader(body))
-
-	handler.ImportFromCockpitTools(ctx)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	accounts, err := handler.storage.List()
-	if err != nil {
-		t.Fatalf("list accounts: %v", err)
-	}
-	if len(accounts) != 2 {
-		t.Fatalf("expected personal and account-id-less team accounts to coexist, got %d: %+v", len(accounts), accounts)
-	}
-
-	var team *models.OpenAIAccount
-	for i := range accounts {
-		if accounts[i].ID != "existing-personal" {
-			team = &accounts[i]
-			break
-		}
-	}
-	if team == nil || !strings.HasPrefix(derefStr(team.ChatGPTAccountID), "cockpit-tools-team-") {
-		t.Fatalf("expected synthetic team account id, got %#v", team)
-	}
-	if team.Plan == nil || *team.Plan != "team" {
-		t.Fatalf("expected team plan to be persisted, got %#v", team.Plan)
-	}
-}
-
-func TestImportFromCockpitToolsSupportsCamelCaseTokenFields(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	db := setupOpenAIHandlerTestDB(t)
-	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
-
-	idToken := testUnsignedJWT(t, map[string]interface{}{
-		"email": "camel@example.com",
-		"https://api.openai.com/auth": map[string]interface{}{
-			"account_id":        "camel-account",
-			"chatgpt_plan_type": "team",
-		},
-	})
-	body, err := json.Marshal([]map[string]interface{}{
-		{
-			"id":    "nested-camel",
-			"email": "camel@example.com",
-			"tokens": map[string]string{
-				"idToken":      idToken,
-				"accessToken":  "at-camel",
-				"refreshToken": "rt-camel",
-			},
-			"accountStructure": "team",
-			"planType":         "team",
-		},
-		{
-			"id":           "top-level-camel",
-			"email":        "topcamel@example.com",
-			"idToken":      idToken,
-			"accessToken":  "at-top-camel",
-			"refreshToken": "rt-top-camel",
-			"accountId":    "top-camel-account",
-			"planType":     "plus",
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal request body: %v", err)
-	}
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/openai/import/cockpit-tools", bytes.NewReader(body))
-
-	handler.ImportFromCockpitTools(ctx)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	var payload struct {
-		Total   int `json:"total"`
-		Success int `json:"success"`
-		Failed  int `json:"failed"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if payload.Total != 2 || payload.Success != 2 || payload.Failed != 0 {
-		t.Fatalf("unexpected payload: %+v", payload)
-	}
-
-	accounts, err := handler.storage.List()
-	if err != nil {
-		t.Fatalf("list accounts: %v", err)
-	}
-	if len(accounts) != 2 {
-		t.Fatalf("expected 2 camel-case accounts imported, got %d", len(accounts))
 	}
 }
 

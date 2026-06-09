@@ -78,6 +78,7 @@ func (h *SettingsHandler) SystemInfo(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"version":              models.AppVersion,
+		"mac_app":              os.Getenv("EASYLLM_MAC_APP") == "1",
 		"git_repo":             models.AppGitRepo,
 		"go_version":           runtime.Version(),
 		"os":                   runtime.GOOS,
@@ -92,7 +93,8 @@ func (h *SettingsHandler) SystemInfo(c *gin.Context) {
 		"memory_alloc_mb":      fmt.Sprintf("%.1f", float64(m.Alloc)/1024/1024),
 		"memory_sys_mb":        fmt.Sprintf("%.1f", float64(m.Sys)/1024/1024),
 		"memory_gc_cycles":     m.NumGC,
-		"db_type":              cfg.Database.Type,
+		"db_type":              "sqlite",
+		"db_sqlite_path":       cfg.Database.SQLitePath,
 		"server_port":          cfg.Server.Port,
 		"server_host":          cfg.Server.Host,
 		"proxy_enabled":        cfg.Proxy.Enabled,
@@ -122,24 +124,13 @@ func getAccountCounts() gin.H {
 	}
 	counts := gin.H{}
 	tables := map[string]string{
-		"openai":      "open_ai_accounts",
-		"antigravity": "antigravity_accounts",
-		"codex_pool":  "codex_accounts",
-		"instances":   "platform_instances",
-		"wakeup":      "wakeup_tasks",
+		"openai":     "open_ai_accounts",
+		"codex_pool": "codex_accounts",
 	}
 	for key, table := range tables {
 		var count int64
 		if err := db.Table(table).Count(&count).Error; err == nil {
 			counts[key] = count
-		}
-	}
-	if db.Migrator().HasTable("platform_accounts") {
-		for _, def := range models.GetCockpitPlatformDefinitions() {
-			var count int64
-			if err := db.Table("platform_accounts").Where("platform = ?", def.ID).Count(&count).Error; err == nil {
-				counts[def.ID] = count
-			}
 		}
 	}
 	return counts
@@ -164,8 +155,8 @@ func (h *SettingsHandler) GetSettings(c *gin.Context) {
 			"username": cfg.Proxy.Username,
 		},
 		"database": gin.H{
-			"type": cfg.Database.Type,
-			"dsn":  maskDSN(cfg.Database.DSN),
+			"type":        "sqlite",
+			"sqlite_path": cfg.Database.SQLitePath,
 		},
 		"ip_blacklist": gin.H{
 			"enabled": cfg.IPBlacklist.Enabled,
@@ -319,16 +310,13 @@ func (h *SettingsHandler) UpdateProxy(c *gin.Context) {
 func (h *SettingsHandler) GetDatabase(c *gin.Context) {
 	cfg := config.Get()
 	c.JSON(http.StatusOK, gin.H{
-		"type":        cfg.Database.Type,
-		"dsn":         maskDSN(cfg.Database.DSN),
+		"type":        "sqlite",
 		"sqlite_path": cfg.Database.SQLitePath,
 	})
 }
 
 func (h *SettingsHandler) UpdateDatabase(c *gin.Context) {
 	var req struct {
-		Type       string `json:"type"`
-		DSN        string `json:"dsn"`
 		SQLitePath string `json:"sqlite_path"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -336,18 +324,16 @@ func (h *SettingsHandler) UpdateDatabase(c *gin.Context) {
 		return
 	}
 
-	// Only persist - actual DB switch requires restart
-	storage.SaveSetting("db_type", req.Type)
-	if req.DSN != "" {
-		storage.SaveSetting("db_dsn", req.DSN)
+	if strings.TrimSpace(req.SQLitePath) == "" {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "sqlite_path is required", Code: "INVALID_REQUEST"})
+		return
 	}
-	if req.SQLitePath != "" {
-		storage.SaveSetting("db_sqlite_path", req.SQLitePath)
-	}
+	config.Get().Database.SQLitePath = strings.TrimSpace(req.SQLitePath)
+	storage.SaveSetting("db_sqlite_path", config.Get().Database.SQLitePath)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Database settings saved. Restart required to take effect.",
+		"message": "Database path saved. Restart required to take effect.",
 	})
 }
 
@@ -360,13 +346,6 @@ func maskSecret(s string) string {
 		return "***"
 	}
 	return s[:4] + "***"
-}
-
-func maskDSN(dsn string) string {
-	if dsn == "" {
-		return ""
-	}
-	return "[configured]"
 }
 
 func toString(v interface{}) string {
@@ -386,7 +365,7 @@ func toString(v interface{}) string {
 
 func isSupportedSettingsUpdateKey(key string) bool {
 	switch key {
-	case "proxy_enabled", "proxy_host", "proxy_port", "proxy_username", "proxy_password", "db_type", "db_dsn", "ip_blacklist_enabled":
+	case "proxy_enabled", "proxy_host", "proxy_port", "proxy_username", "proxy_password", "db_sqlite_path", "ip_blacklist_enabled":
 		return true
 	default:
 		return false

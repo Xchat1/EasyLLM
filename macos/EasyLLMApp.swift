@@ -19,6 +19,7 @@ final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDel
     private var serverProcess: Process?
     private var serverLogHandle: FileHandle?
     private var serverPort = 8022
+    private let launchCacheBuster = String(Int(Date().timeIntervalSince1970))
 
     private var baseURL: URL {
         URL(string: "http://127.0.0.1:\(serverPort)")!
@@ -27,6 +28,7 @@ final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDel
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         configureMenu()
+        clearWebViewCache()
 
         serverPort = firstAvailablePort(startingAt: 8022, limit: 80) ?? 8022
         createWindow()
@@ -54,6 +56,40 @@ final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDel
             NSWorkspace.shared.open(url)
         }
         return nil
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.canChooseFiles = !parameters.allowsDirectories
+        panel.canCreateDirectories = false
+        panel.resolvesAliases = true
+        panel.title = parameters.allowsDirectories ? "选择要导入的文件夹" : "选择要导入的文件"
+        panel.prompt = "选择"
+
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
+
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            panel.begin(completionHandler: finish)
+        }
+    }
+
+    private func clearWebViewCache() {
+        let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+        WKWebsiteDataStore.default().removeData(
+            ofTypes: dataTypes,
+            modifiedSince: Date(timeIntervalSince1970: 0)
+        ) {}
     }
 
     private func configureMenu() {
@@ -85,7 +121,7 @@ final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDel
         webView.loadHTMLString(loadingHTML(), baseURL: nil)
         self.webView = webView
 
-        let contentSize = NSSize(width: 1280, height: 820)
+        let contentSize = NSSize(width: 1360, height: 820)
         let dragRegionHeight: CGFloat = 18
         let contentView = NSView(frame: NSRect(origin: .zero, size: contentSize))
         contentView.wantsLayer = true
@@ -150,7 +186,6 @@ final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDel
             environment["SERVER_HOST"] = "127.0.0.1"
             environment["SERVER_PORT"] = "\(serverPort)"
             environment["DATA_DIR"] = dataURL.path
-            environment["DB_TYPE"] = "sqlite"
             environment["DB_SQLITE_PATH"] = dataURL.appendingPathComponent("easyllm.db").path
             environment["SECRET_KEY"] = try persistentSecret(in: supportURL)
             environment["EASYLLM_MAC_APP"] = "1"
@@ -203,7 +238,18 @@ final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDel
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
             DispatchQueue.main.async {
                 if ok {
-                    self.webView?.load(URLRequest(url: self.baseURL))
+                    var components = URLComponents(
+                        url: self.baseURL.appendingPathComponent("codex"),
+                        resolvingAgainstBaseURL: false
+                    )
+                    components?.queryItems = [
+                        URLQueryItem(name: "mac_app", value: "1"),
+                        URLQueryItem(name: "t", value: self.launchCacheBuster),
+                    ]
+                    let url = components?.url ?? self.baseURL.appendingPathComponent("codex")
+                    var request = URLRequest(url: url)
+                    request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                    self.webView?.load(request)
                 } else {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                         self.waitForServer(attempt: attempt + 1)

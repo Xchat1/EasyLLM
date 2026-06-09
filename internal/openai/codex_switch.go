@@ -17,6 +17,7 @@ const (
 	codexAPIServiceDefaultModel    = "gpt-5-codex"
 	codexAPIServiceDefaultWireAPI  = "responses"
 	codexAPIServiceRequiresAuthKey = "requires_openai_auth"
+	codexDesktopLocalAccessID      = "codex_local_access"
 )
 
 type CodexLaunchResult struct {
@@ -27,8 +28,9 @@ type CodexLaunchResult struct {
 }
 
 // SwitchCodexOAuthAccount writes OAuth tokens to ~/.codex/auth.json
-// and cleans up API-related fields from ~/.codex/config.toml
-func SwitchCodexOAuthAccount(accessToken, refreshToken, idToken string, accountID *string) error {
+// and cleans up API-related fields from ~/.codex/config.toml.
+// proxyOrigin 为 HTTP Host 或空字符串，空时使用当前服务配置端口。
+func SwitchCodexOAuthAccount(accessToken, refreshToken, idToken string, accountID *string, proxyOrigin string) error {
 	codexDir, err := getCodexDir()
 	if err != nil {
 		return err
@@ -63,19 +65,26 @@ func SwitchCodexOAuthAccount(accessToken, refreshToken, idToken string, accountI
 	// Remove API-related fields from config.toml (keep project trust entries intact),
 	// then inject chatgpt_base_url so the CLI routes through the local proxy for logging.
 	if _, err := os.Stat(configFile); err == nil {
-		cleanConfigTOMLAPIFields(configFile)
+		if err := cleanConfigTOMLAPIFields(configFile); err != nil {
+			return fmt.Errorf("failed to clean config.toml: %w", err)
+		}
 	}
-	injectChatGPTBaseURL(configFile, "http://localhost:8022")
+	if err := injectChatGPTBaseURL(configFile, LocalProxyOrigin(proxyOrigin)); err != nil {
+		return fmt.Errorf("failed to inject chatgpt_base_url: %w", err)
+	}
 
 	return nil
 }
 
-// SwitchCodexAPIAccount writes API key config to ~/.codex/auth.json and config.toml
-func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI, reasoningEffort *string) error {
+// SwitchCodexAPIAccount writes API key config to ~/.codex/auth.json and config.toml.
+// proxyOrigin 来自 HTTP Host，与 Web 展示的本地服务地址一致。
+func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI, reasoningEffort *string, proxyOrigin string) error {
 	codexDir, err := getCodexDir()
 	if err != nil {
 		return err
 	}
+
+	modelProvider, model, baseURL, wireAPI, reasoningEffort = normalizeCodexAPIAccountConfig(modelProvider, model, baseURL, wireAPI, reasoningEffort)
 
 	authFile := filepath.Join(codexDir, "auth.json")
 	configFile := filepath.Join(codexDir, "config.toml")
@@ -121,14 +130,36 @@ func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI
 	configLines = append(configLines, fmt.Sprintf(`base_url = "%s"`, baseURL))
 	configLines = append(configLines, fmt.Sprintf(`wire_api = "%s"`, wireAPIVal))
 	configLines = append(configLines, fmt.Sprintf(`%s = true`, codexAPIServiceRequiresAuthKey))
+	if isLocalCodexProxyBaseURL(baseURL) {
+		configLines = append(configLines, `supports_websockets = false`)
+	}
 
-	configContent := strings.Join(configLines, "\n") + "\n"
+	apiBlock := strings.Join(configLines, "\n") + "\n"
+	existingConfig := ""
+	if data, err := os.ReadFile(configFile); err == nil {
+		existingConfig = stripCodexAPIServiceManagedConfig(string(data), modelProvider)
+		existingConfig = stripCodexAPIServiceManagedConfig(existingConfig, codexDesktopLocalAccessID)
+		existingConfig = strings.TrimLeft(existingConfig, "\n")
+	}
+	configContent := apiBlock
+	if strings.TrimSpace(existingConfig) != "" {
+		configContent += "\n" + existingConfig
+	}
 
 	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("failed to write config.toml: %w", err)
 	}
 
 	return nil
+}
+
+func normalizeCodexAPIAccountConfig(modelProvider, model, baseURL string, wireAPI, reasoningEffort *string) (string, string, string, *string, *string) {
+	return strings.TrimSpace(modelProvider), strings.TrimSpace(model), strings.TrimRight(strings.TrimSpace(baseURL), "/"), wireAPI, reasoningEffort
+}
+
+func isLocalCodexProxyBaseURL(baseURL string) bool {
+	value := strings.ToLower(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	return strings.HasPrefix(value, "http://localhost:") || strings.HasPrefix(value, "http://127.0.0.1:")
 }
 
 // SwitchCodexAPIService writes the local EasyLLM API service into Codex CLI.
@@ -341,6 +372,10 @@ func stripCodexAPIServiceManagedConfig(content, providerID string) string {
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			sectionName := strings.Trim(trimmed, "[]")
 			inSection = true
+			if sectionName == "model_providers" {
+				skipProviderSection = false
+				continue
+			}
 			skipProviderSection = sectionName == targetSection
 			if skipProviderSection {
 				continue
@@ -381,9 +416,16 @@ func tomlString(value string) string {
 }
 
 // injectChatGPTBaseURL ensures chatgpt_base_url is set in config.toml so the
-// Codex CLI routes requests through the local proxy (enabling request logging).
-func injectChatGPTBaseURL(configFile, baseURL string) {
-	data, _ := os.ReadFile(configFile)
+// Codex client routes requests through the local proxy (enabling request logging).
+func injectChatGPTBaseURL(configFile, baseURL string) error {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			line := fmt.Sprintf(`chatgpt_base_url = "%s"`, baseURL)
+			return os.WriteFile(configFile, []byte(line+"\n"), 0644)
+		}
+		return err
+	}
 	content := string(data)
 
 	key := "chatgpt_base_url"
@@ -392,7 +434,7 @@ func injectChatGPTBaseURL(configFile, baseURL string) {
 	// Already present?
 	for _, l := range strings.Split(content, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(l), key+" ") || strings.HasPrefix(strings.TrimSpace(l), key+"=") {
-			return
+			return nil
 		}
 	}
 
@@ -402,14 +444,17 @@ func injectChatGPTBaseURL(configFile, baseURL string) {
 	} else {
 		content = line + "\n" + content
 	}
-	os.WriteFile(configFile, []byte(content), 0644)
+	return os.WriteFile(configFile, []byte(content), 0644)
 }
 
 // cleanConfigTOMLAPIFields removes API-related keys from config.toml
-func cleanConfigTOMLAPIFields(configFile string) {
+func cleanConfigTOMLAPIFields(configFile string) error {
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		return
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -454,5 +499,5 @@ func cleanConfigTOMLAPIFields(configFile string) {
 		}
 	}
 
-	os.WriteFile(configFile, []byte(strings.Join(filtered, "\n")), 0644)
+	return os.WriteFile(configFile, []byte(strings.Join(filtered, "\n")), 0644)
 }

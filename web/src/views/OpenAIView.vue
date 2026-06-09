@@ -3,10 +3,10 @@
     <!-- Header -->
     <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
       <div class="flex min-w-0 items-center gap-3">
-        <PlatformIcon :platform="codexPlatform" size="lg" />
+        <CodexIcon :item="currentCodexRoute" size="lg" />
         <div class="min-w-0">
-          <h1 class="text-2xl font-bold text-white">OpenAI / Codex 管理</h1>
-          <p class="text-gray-400 text-sm mt-1">管理 OpenAI OAuth 账号及 Codex API 配置</p>
+          <h1 class="text-2xl font-bold text-white">{{ pageTitle }}</h1>
+          <p class="text-gray-400 text-sm mt-1">{{ pageSubtitle }}</p>
         </div>
       </div>
       <div class="stable-actions">
@@ -22,7 +22,7 @@
           </svg>
           OAuth
         </button>
-        <button @click="showAddAPIDialog = true" class="btn btn-primary header-action-btn" title="添加 API 账号">
+        <button @click="openAddAPIDialog" class="btn btn-primary header-action-btn" title="添加 API 账号">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
           </svg>
@@ -68,42 +68,6 @@
             配额更新于 {{ quotaLastFetched }}
           </div>
           <div class="account-toolbar account-toolbar--oauth">
-            <div class="toolbar-section toolbar-section--actions">
-              <button
-                @click="refreshAllTokens"
-                :disabled="refreshingAllTokens || oauthAccounts.length === 0"
-                class="toolbar-btn toolbar-btn-neutral"
-                title="刷新全部 OAuth 账号的 Token，全部完成并落库后自动导出最新 JSON"
-              >
-                <svg class="w-3.5 h-3.5" :class="refreshingAllTokens ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                </svg>
-                {{ refreshingAllTokens ? '刷新中' : '刷新' }}
-              </button>
-              <button
-                @click="fetchAllQuotas"
-                :disabled="fetchingQuotas || oauthAccounts.length === 0"
-                class="toolbar-btn toolbar-btn-neutral"
-                title="查询全部 OAuth 账号配额"
-              >
-                <svg class="w-3.5 h-3.5" :class="fetchingQuotas ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                </svg>
-                {{ fetchingQuotas ? '查询中' : '配额' }}
-              </button>
-              <button
-                @click="exportAccounts"
-                :disabled="exportingAccounts"
-                class="toolbar-btn toolbar-btn-success"
-                title="导出全部账号的最新落库数据"
-              >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                </svg>
-                {{ exportingAccounts ? '导出中' : '导出' }}
-              </button>
-            </div>
-
             <div class="toolbar-section toolbar-section--search">
               <input
                 v-model="searchQuery"
@@ -115,11 +79,32 @@
                 v-model="planGroupFilter"
                 @change="setPlanGroupFilter(planGroupFilter)"
                 class="toolbar-select toolbar-select--plan"
-                title="按套餐分组过滤"
+                title="账号类型"
               >
                 <option v-for="group in planGroups" :key="group.id" :value="group.id">
-                  {{ group.label }}（{{ group.count }}）
+                  {{ group.id === 'all' ? group.label : `${group.label}（${group.count}）` }}
                 </option>
+              </select>
+              <select
+                v-model="accountSortMode"
+                @change="setAccountSortMode(accountSortMode)"
+                class="toolbar-select toolbar-select--sort"
+                title="排序"
+              >
+                <option v-for="option in accountSortOptions" :key="option.id" :value="option.id">
+                  {{ option.label }}
+                </option>
+              </select>
+              <select
+                v-model="quotaFilter"
+                class="toolbar-select toolbar-select--quota"
+                title="按上次配额查询结果过滤账号"
+              >
+                <option value="all">全部</option>
+                <option value="200">200（成功）</option>
+                <option value="401">401（失效/未授权）</option>
+                <option value="403">403（地区受限/禁止）</option>
+                <option value="429">429（限流）</option>
               </select>
             </div>
 
@@ -154,18 +139,40 @@
               </button>
             </div>
 
-            <div class="toolbar-section toolbar-section--filter">
-              <select
-                v-model="quotaFilter"
-                class="toolbar-select toolbar-select--quota"
-                title="按上次配额查询结果过滤账号"
+            <div class="toolbar-section toolbar-section--actions">
+              <button
+                @click="refreshAllTokens"
+                :disabled="refreshingAllTokens || oauthAccounts.length === 0"
+                class="toolbar-btn toolbar-btn-neutral"
+                title="刷新全部 OAuth 账号的 Token，全部完成并落库后自动导出最新 JSON"
               >
-                <option value="all">全部</option>
-                <option value="200">200（成功）</option>
-                <option value="401">401（失效/未授权）</option>
-                <option value="403">403（地区受限/禁止）</option>
-                <option value="429">429（限流）</option>
-              </select>
+                <svg class="w-3.5 h-3.5" :class="refreshingAllTokens ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                {{ refreshingAllTokens ? '刷新中' : '刷新Token' }}
+              </button>
+              <button
+                @click="fetchAllQuotas"
+                :disabled="fetchingQuotas || oauthAccounts.length === 0"
+                class="toolbar-btn toolbar-btn-neutral"
+                title="查询全部 OAuth 账号配额"
+              >
+                <svg class="w-3.5 h-3.5" :class="fetchingQuotas ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                {{ fetchingQuotas ? '查询中' : '配额' }}
+              </button>
+              <button
+                @click="exportAccounts"
+                :disabled="exportingAccounts"
+                class="toolbar-btn toolbar-btn-success"
+                title="导出全部账号的最新落库数据"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                {{ exportingAccounts ? '导出中' : '导出' }}
+              </button>
             </div>
 
             <div class="toolbar-section toolbar-section--selection">
@@ -262,7 +269,7 @@
                   :class="planBadge(account).cls"
                 >{{ planBadge(account).text }}</span>
                 <span v-if="isRegionRestricted(account)" class="text-[10px] text-amber-300">地区受限</span>
-                <span v-if="account._verified && !hasQuotaData(account)" class="text-[10px] text-green-400">✓ 有效</span>
+                <span v-if="account._verified && !hasDisplayQuotaData(account)" class="text-[10px] text-green-400">✓ 有效</span>
               </div>
 
               <!-- Forbidden badge -->
@@ -281,7 +288,7 @@
               </div>
 
               <!-- 5h quota bar -->
-              <template v-if="!account.quota_is_forbidden && hasWindowQuotaData(account)">
+              <template v-if="!account.quota_is_forbidden && shouldShow5hQuota(account)">
                 <div class="flex items-center gap-2">
                   <span class="shrink-0 text-[9px] text-gray-500 w-6">5h</span>
                   <div class="flex-1 bg-gray-700 rounded-full h-1.5 overflow-hidden">
@@ -302,7 +309,7 @@
               </template>
 
               <!-- 7d quota bar -->
-              <template v-if="!account.quota_is_forbidden && hasWindowQuotaData(account)">
+              <template v-if="!account.quota_is_forbidden && shouldShow7dQuota(account)">
                 <div class="flex items-center gap-2">
                   <span class="shrink-0 text-[9px] text-gray-500 w-6">7d</span>
                   <div class="flex-1 bg-gray-700 rounded-full h-1.5 overflow-hidden">
@@ -345,12 +352,12 @@
               </template>
 
               <!-- Updated time -->
-              <div v-if="account.quota_updated_at && hasQuotaData(account)" class="text-[9px] text-gray-600 text-right">
+              <div v-if="account.quota_updated_at && hasDisplayQuotaData(account)" class="text-[9px] text-gray-600 text-right">
                 {{ formatQuotaTime(account.quota_updated_at) }}
               </div>
 
               <!-- No quota data yet -->
-              <div v-if="!hasQuotaData(account) && !account.quota_is_forbidden" class="text-[9px] text-gray-600">
+              <div v-if="!hasDisplayQuotaData(account) && !account.quota_is_forbidden" class="text-[9px] text-gray-600">
                 <span v-if="accountPlanType(account) === 'free'">免费账号·配额头部不开放</span>
                 <span v-else>点击卡片「配额」或上方「查询配额」获取</span>
               </div>
@@ -358,10 +365,10 @@
             <div v-else class="dense-account-meta">
               <span v-if="planBadge(account)" class="dense-pill" :class="planBadge(account).cls">{{ planBadge(account).text }}</span>
               <span v-if="account.quota_is_forbidden" class="dense-pill bg-red-500/15 text-red-300">禁用</span>
-              <span v-else-if="account.quota_5h_used_percent != null" class="dense-pill" :class="pctColor(100 - account.quota_5h_used_percent)">5h {{ Math.round(100 - account.quota_5h_used_percent) }}%</span>
-              <span v-if="account.quota_7d_used_percent != null" class="dense-pill" :class="pctColor(100 - account.quota_7d_used_percent)">7d {{ Math.round(100 - account.quota_7d_used_percent) }}%</span>
+              <span v-else-if="shouldShow5hQuota(account)" class="dense-pill" :class="pctColor(100 - account.quota_5h_used_percent)">5h {{ Math.round(100 - account.quota_5h_used_percent) }}%</span>
+              <span v-if="shouldShow7dQuota(account)" class="dense-pill" :class="pctColor(100 - account.quota_7d_used_percent)">7d {{ Math.round(100 - account.quota_7d_used_percent) }}%</span>
               <span v-if="isRegionRestricted(account)" class="dense-pill bg-amber-500/15 text-amber-300">地区</span>
-              <span v-if="!planBadge(account) && !hasQuotaData(account) && !account.quota_is_forbidden" class="text-gray-600 truncate">未查配额</span>
+              <span v-if="!planBadge(account) && !hasDisplayQuotaData(account) && !account.quota_is_forbidden" class="text-gray-600 truncate">未查配额</span>
             </div>
             <!-- Row 3: all action buttons in one row -->
             <div v-if="accountLayout !== 'dense'" class="card-actions">
@@ -398,10 +405,19 @@
           </div>
         </div>
         <!-- Pagination -->
-        <div v-if="oauthTotalPages > 1" class="flex items-center justify-center gap-2 mt-4 text-sm">
-          <button @click="oauthPage = Math.max(1, oauthPage - 1)" :disabled="oauthPage <= 1" class="btn btn-sm btn-secondary">上一页</button>
-          <span class="text-gray-400">{{ oauthPage }} / {{ oauthTotalPages }}<span class="text-gray-600 ml-2">(显示 {{ filteredOAuthAccounts.length }} / {{ oauthAccounts.length }})</span></span>
-          <button @click="oauthPage = Math.min(oauthTotalPages, oauthPage + 1)" :disabled="oauthPage >= oauthTotalPages" class="btn btn-sm btn-secondary">下一页</button>
+        <div v-if="filteredOAuthAccounts.length > 0" class="pagination-bar">
+          <label class="pagination-page-size">
+            <span>每页</span>
+            <select :value="currentPageSize" class="pagination-page-size-select" @change="setAccountPageSize($event.target.value)">
+              <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }}</option>
+            </select>
+            <span>个</span>
+          </label>
+          <div class="pagination-nav">
+            <button @click="oauthPage = Math.max(1, oauthPage - 1)" :disabled="oauthPage <= 1" class="btn btn-sm btn-secondary">上一页</button>
+            <span class="text-gray-400">{{ oauthPage }} / {{ oauthTotalPages }}<span class="text-gray-600 ml-2">({{ oauthPaginationRangeText }})</span></span>
+            <button @click="oauthPage = Math.min(oauthTotalPages, oauthPage + 1)" :disabled="oauthPage >= oauthTotalPages" class="btn btn-sm btn-secondary">下一页</button>
+          </div>
         </div>
       </template>
     </div>
@@ -410,7 +426,7 @@
     <div v-if="activeTab === 'api'">
       <div v-if="apiAccounts.length === 0" class="text-center py-12 text-gray-500">
         <p class="text-base mb-1">暂无 API 账号</p>
-        <p class="text-sm">点击"添加 API 账号"配置自定义 API 端点</p>
+        <p class="text-sm">点击「添加 API 账号」配置自定义 API 端点</p>
       </div>
       <template v-else>
         <div class="account-toolbar account-toolbar--api mb-3">
@@ -486,7 +502,7 @@
                 />
                 <span></span>
               </label>
-              <span class="text-sm font-medium text-white truncate flex-1" :title="account.model_provider">{{ account.model_provider || 'API' }}</span>
+              <span class="text-sm font-medium text-white truncate flex-1" :title="account.model_provider">{{ providerDisplayName(account.model_provider) }}</span>
               <span v-if="account.is_codex_active" class="shrink-0 text-[10px] font-bold text-blue-300 bg-blue-600/30 px-1.5 py-0.5 rounded">Codex</span>
               <span v-if="account.model" class="shrink-0 text-[10px] font-mono text-emerald-300 bg-emerald-600/20 px-1.5 py-0.5 rounded truncate max-w-[100px]">{{ account.model }}</span>
             </div>
@@ -499,6 +515,9 @@
             <div v-if="accountLayout !== 'dense'" class="card-actions">
               <button @click="switchAPIAccount(account)" :disabled="switchingId === account.id" class="card-btn card-btn--primary card-btn--text flex-1" title="切换配置">
                 {{ switchingId === account.id ? '...' : '切换' }}
+              </button>
+              <button @click="testAPIAccount(account)" :disabled="testingAPIId === account.id" class="card-btn card-btn--secondary card-btn--text" title="测活：发送最小请求验证 Key 是否可用">
+                {{ testingAPIId === account.id ? '...' : '测活' }}
               </button>
               <button @click="editAPIAccount(account)" class="card-btn card-btn--secondary card-btn--icon" title="编辑">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -514,18 +533,21 @@
           </div>
         </div>
         <!-- Pagination -->
-        <div v-if="apiTotalPages > 1" class="flex items-center justify-center gap-2 mt-4 text-sm">
-          <button @click="apiPage = Math.max(1, apiPage - 1)" :disabled="apiPage <= 1" class="btn btn-sm btn-secondary">上一页</button>
-          <span class="text-gray-400">{{ apiPage }} / {{ apiTotalPages }}<span class="text-gray-600 ml-2">(显示 {{ filteredAPIAccounts.length }} / {{ apiAccounts.length }})</span></span>
-          <button @click="apiPage = Math.min(apiTotalPages, apiPage + 1)" :disabled="apiPage >= apiTotalPages" class="btn btn-sm btn-secondary">下一页</button>
+        <div v-if="filteredAPIAccounts.length > 0" class="pagination-bar">
+          <label class="pagination-page-size">
+            <span>每页</span>
+            <select :value="currentPageSize" class="pagination-page-size-select" @change="setAccountPageSize($event.target.value)">
+              <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }}</option>
+            </select>
+            <span>个</span>
+          </label>
+          <div class="pagination-nav">
+            <button @click="apiPage = Math.max(1, apiPage - 1)" :disabled="apiPage <= 1" class="btn btn-sm btn-secondary">上一页</button>
+            <span class="text-gray-400">{{ apiPage }} / {{ apiTotalPages }}<span class="text-gray-600 ml-2">({{ apiPaginationRangeText }})</span></span>
+            <button @click="apiPage = Math.min(apiTotalPages, apiPage + 1)" :disabled="apiPage >= apiTotalPages" class="btn btn-sm btn-secondary">下一页</button>
+          </div>
         </div>
       </template>
-    </div>
-
-    <!-- Toast notification -->
-    <div v-if="toast.show" class="fixed bottom-6 right-6 z-[100] px-4 py-3 rounded-lg text-sm font-medium shadow-lg transition-all"
-      :class="toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'">
-      {{ toast.message }}
     </div>
 
     <!-- ==================== Modals ==================== -->
@@ -560,7 +582,7 @@
 
     <!-- Bulk Delete Confirm Dialog -->
     <div v-if="showBulkDeleteConfirm" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="closeBulkDeleteConfirm">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl">
         <div class="flex items-center justify-between p-6 border-b border-gray-700">
           <h2 class="text-lg font-semibold text-white">确认批量删除</h2>
           <button @click="closeBulkDeleteConfirm" class="text-gray-400 hover:text-white" :disabled="bulkDeleting">
@@ -647,8 +669,8 @@
     </div>
 
     <!-- Batch Import Dialog -->
-    <div v-if="showImportDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl shadow-2xl">
+    <div v-if="showImportDialog" class="import-dialog-overlay fixed inset-0 flex items-center justify-center z-50 p-4">
+      <div class="import-dialog-panel bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl shadow-2xl">
         <div class="flex items-center justify-between p-6 border-b border-gray-700">
           <h2 class="text-lg font-semibold text-white">批量导入账号</h2>
           <button @click="closeImportDialog" class="text-gray-400 hover:text-white">
@@ -660,7 +682,7 @@
         <div class="p-6 space-y-4">
 
           <!-- Import mode tabs -->
-          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1 bg-gray-800 rounded-lg p-1">
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-1 bg-gray-800 rounded-lg p-1">
             <button
               v-for="m in importModes"
               :key="m.id"
@@ -713,23 +735,59 @@
             </div>
           </div>
 
-          <!-- Mode 2: Scan local directory -->
-          <div v-if="importMode === 'scan-dir'">
+          <!-- Mode 2: 自适应导入（自动识别格式，单文件或多文件） -->
+          <div v-if="importMode === 'auto-files'">
             <div class="bg-blue-900/20 border border-blue-700/40 rounded-lg p-3 text-xs text-blue-300 mb-3">
               <div class="flex items-start justify-between gap-2">
                 <div>
-                  🗂 扫描服务器本地目录，自动导入所有 JSON 文件（适合大批量，默认扫 <code>./auth</code>）<br/>
-                  <span class="text-blue-400/70">目录内每个 JSON 文件都支持单对象、数组和 NDJSON 多账号格式</span>
+                  🎯 选择 JSON 文件后<strong class="text-blue-200">自动识别</strong>格式并导入，无需知道文件属于哪种导出工具<br/>
+                  <span class="text-blue-400/70">支持单个或多个文件；自动适配 Token、CPA、EasyLLM 备份；单文件内也支持数组、NDJSON</span>
                 </div>
-                <button @click="downloadExample('scan-dir')" class="shrink-0 px-2 py-1 bg-blue-800/60 hover:bg-blue-700/80 text-blue-200 rounded text-xs transition-colors whitespace-nowrap">
-                  下载示例
-                </button>
               </div>
             </div>
-            <div>
-              <label class="block text-xs text-gray-400 mb-1">目录路径</label>
-              <input v-model="scanDir" class="input w-full font-mono text-sm" placeholder="./auth  或  /Users/xxx/tokens"/>
-              <p class="text-xs text-gray-600 mt-1">服务器本地绝对路径或相对路径（相对于程序运行目录）</p>
+            <div v-if="!importAutoFiles.length">
+              <input ref="importAutoFileInput" type="file" accept=".json,application/json" multiple class="hidden" @change="handleAutoFileSelect"/>
+              <input ref="importAutoDirectoryInput" type="file" accept=".json,application/json" multiple webkitdirectory directory class="hidden" @change="handleAutoDirectorySelect"/>
+              <div
+                @dragover.prevent="dragging = true"
+                @dragleave.prevent="dragging = false"
+                @drop.prevent="handleDrop"
+                class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center hover:border-blue-500 hover:bg-blue-900/10 transition-colors"
+                :class="{ 'border-blue-500 bg-blue-900/10': dragging }"
+              >
+                <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                </svg>
+                <p class="text-gray-400 text-sm">选择文件夹或 JSON 文件</p>
+                <p class="text-xs text-gray-600 mt-1">文件夹内会递归导入 <code class="text-blue-300">.json</code>，格式混放也可以</p>
+                <div class="mt-4 flex flex-col sm:flex-row items-center justify-center gap-2">
+                  <button
+                    @click.stop="openImportDirectoryPicker"
+                    :disabled="selectingImportDirectory"
+                    class="btn btn-primary text-xs px-3 py-1.5"
+                  >
+                    {{ selectingImportDirectory ? '打开中...' : '选择文件夹' }}
+                  </button>
+                  <button
+                    @click.stop="$refs.importAutoFileInput.click()"
+                    class="btn btn-secondary text-xs px-3 py-1.5"
+                  >
+                    选择 JSON 文件
+                  </button>
+                </div>
+                <p class="text-xs text-gray-600 mt-3">也可以直接拖拽 JSON 文件到此处</p>
+              </div>
+            </div>
+            <div v-else>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-sm text-gray-300">已选择 <strong class="text-white">{{ importAutoFiles.length }}</strong> 个文件</span>
+                <button @click="resetScanImportSelection" class="text-xs text-gray-500 hover:text-red-400">重新选择</button>
+              </div>
+              <div class="max-h-36 overflow-y-auto bg-gray-800 rounded-lg p-3 space-y-1">
+                <div v-for="(f, i) in importAutoFiles" :key="i" class="text-xs text-gray-400 truncate">
+                  {{ i + 1 }}. {{ f.webkitRelativePath || f.name }}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -775,87 +833,53 @@
             </div>
           </div>
 
-          <!-- Mode 5: Import from Sub2API JSON format -->
-          <div v-if="importMode === 'sub2api'">
-            <div class="bg-blue-900/20 border border-blue-700/40 rounded-lg p-3 text-xs text-blue-300 mb-3">
+          <!-- Mode 4: CPA JSON（*-cpa.json / *.codex.cpa.json） -->
+          <div v-if="importMode === 'cpa'">
+            <div class="bg-violet-900/20 border border-violet-700/40 rounded-lg p-3 text-xs text-violet-300 mb-3">
               <div class="flex items-start justify-between gap-2">
                 <div>
-                  🚀 直接导入 Sub2API 格式的 JSON 文件（支持包含 accounts 数组的文件）
+                  📋 导入 CPA 格式账号 JSON，无需调用 OpenAI API。<br/>
+                  支持单文件单账号、单文件多账号数组，以及一次选择多个 <code class="text-violet-200">*-cpa.json</code> 文件。
                 </div>
-                <button @click="downloadExample('sub2api')" class="shrink-0 px-2 py-1 bg-blue-800/60 hover:bg-blue-700/80 text-blue-200 rounded text-xs transition-colors whitespace-nowrap">
+                <button @click="downloadExample('cpa')" class="shrink-0 px-2 py-1 bg-violet-800/60 hover:bg-violet-700/80 text-violet-200 rounded text-xs transition-colors whitespace-nowrap">
                   下载示例
                 </button>
               </div>
             </div>
-            <div v-if="!importSub2APIFile">
-              <input ref="importSub2APIFileInput" type="file" accept=".json" class="hidden" @change="handleSub2APIFileSelect"/>
+            <div v-if="!importCPAFiles.length">
+              <input ref="importCPAFileInput" type="file" accept=".json,application/json" multiple class="hidden" @change="handleCPAFileSelect"/>
               <div
-                @click="$refs.importSub2APIFileInput.click()"
+                @click="$refs.importCPAFileInput.click()"
                 @dragover.prevent="dragging = true"
                 @dragleave.prevent="dragging = false"
                 @drop.prevent="handleDrop"
-                class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-blue-500 hover:bg-blue-900/10 transition-colors"
-                :class="{ 'border-blue-500 bg-blue-900/10': dragging }"
+                class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-violet-500 hover:bg-violet-900/10 transition-colors"
+                :class="{ 'border-violet-500 bg-violet-900/10': dragging }"
               >
                 <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                 </svg>
-                <p class="text-gray-400 text-sm">点击或拖拽 Sub2API 文件到此处</p>
-                <p class="text-xs text-gray-600 mt-1">支持包含 accounts 数组的 JSON 格式</p>
+                <p class="text-gray-400 text-sm">点击或拖拽 CPA JSON 到此处</p>
+                <p class="text-xs text-gray-600 mt-1">例如 <code class="text-violet-300">email-cpa.json</code>、<code class="text-violet-300">*.codex.cpa.json</code></p>
               </div>
             </div>
-            <div v-else class="space-y-2">
-              <div class="flex items-center justify-between">
-                <div class="text-sm text-gray-300">
-                  已解析：
-                  <span class="text-white font-medium">{{ importSub2APIFile.accounts?.length ?? 0 }}</span> 个账号
+            <div v-else>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-sm text-gray-300">
+                  已选择 <strong class="text-white">{{ importCPAFiles.length }}</strong> 个文件，
+                  约 <strong class="text-white">{{ importCPAAccountCount }}</strong> 个账号
+                </span>
+                <button @click="importCPAFiles = []; importCPAAccountCount = 0; importResults = null" class="text-xs text-gray-500 hover:text-red-400">重新选择</button>
+              </div>
+              <div class="max-h-36 overflow-y-auto bg-gray-800 rounded-lg p-3 space-y-1">
+                <div v-for="(item, i) in importCPAFiles" :key="i" class="text-xs text-gray-400 truncate">
+                  {{ i + 1 }}. {{ item.name }}（{{ item.count }} 个账号）
                 </div>
-                <button @click="importSub2APIFile = null; importResults = null" class="text-xs text-gray-500 hover:text-red-400">重新选择</button>
               </div>
             </div>
           </div>
 
-          <!-- Mode 6: Import cockpit-tools accounts exported by another desktop manager -->
-          <div v-if="importMode === 'cockpit-tools'">
-            <div class="bg-cyan-900/20 border border-cyan-700/40 rounded-lg p-3 text-xs text-cyan-300 mb-3">
-              <div class="flex items-start justify-between gap-2">
-                <div>
-                  🧭 直接导入 cockpit-tools 导出的账号 JSON，支持账号数组和账户迁移包结构，无需调用 OpenAI API。
-                </div>
-                <button @click="downloadExample('cockpit-tools')" class="shrink-0 px-2 py-1 bg-cyan-800/60 hover:bg-cyan-700/80 text-cyan-200 rounded text-xs transition-colors whitespace-nowrap">
-                  下载示例
-                </button>
-              </div>
-            </div>
-            <div v-if="!importCockpitToolsFile">
-              <input ref="importCockpitToolsFileInput" type="file" accept=".json" class="hidden" @change="handleCockpitToolsFileSelect"/>
-              <div
-                @click="$refs.importCockpitToolsFileInput.click()"
-                @dragover.prevent="dragging = true"
-                @dragleave.prevent="dragging = false"
-                @drop.prevent="handleDrop"
-                class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-cyan-500 hover:bg-cyan-900/10 transition-colors"
-                :class="{ 'border-cyan-500 bg-cyan-900/10': dragging }"
-              >
-                <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-                </svg>
-                <p class="text-gray-400 text-sm">点击或拖拽 cockpit-tools 导出文件到此处</p>
-                <p class="text-xs text-gray-600 mt-1">支持单平台账号数组，也支持含 platforms.codex.exported_data 的迁移包</p>
-              </div>
-            </div>
-            <div v-else class="space-y-2">
-              <div class="flex items-center justify-between">
-                <div class="text-sm text-gray-300">
-                  已解析：
-                  <span class="text-white font-medium">{{ importCockpitToolsCount }}</span> 个账号
-                </div>
-                <button @click="importCockpitToolsFile = null; importCockpitToolsCount = 0; importResults = null" class="text-xs text-gray-500 hover:text-red-400">重新选择</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Mode 4: Re-import from exported backup JSON -->
+          <!-- Mode 5: Re-import from exported backup JSON -->
           <div v-if="importMode === 'from-export'">
             <div class="bg-purple-900/20 border border-purple-700/40 rounded-lg p-3 text-xs text-purple-300 mb-3">
               <div class="flex items-start justify-between gap-2">
@@ -1003,7 +1027,7 @@
 
     <!-- Add/Edit API Account Dialog -->
     <div v-if="showAddAPIDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl">
         <div class="flex items-center justify-between p-6 border-b border-gray-700">
           <h2 class="text-lg font-semibold text-white">{{ editingAPIAccount ? '编辑' : '添加' }} API 账号</h2>
           <button @click="closeAPIDialog" class="text-gray-400 hover:text-white">
@@ -1015,11 +1039,11 @@
         <div class="p-6 space-y-4">
           <div>
             <label class="block text-xs text-gray-400 mb-1">Model Provider <span class="text-red-400">*</span></label>
-            <input v-model="apiForm.model_provider" class="input w-full" placeholder="e.g. openai, anthropic"/>
+            <input v-model="apiForm.model_provider" class="input w-full" placeholder="openai"/>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Model <span class="text-red-400">*</span></label>
-            <input v-model="apiForm.model" class="input w-full" placeholder="e.g. o3, gpt-4o"/>
+            <input v-model="apiForm.model" class="input w-full" placeholder="e.g. gpt-4o"/>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Base URL <span class="text-red-400">*</span></label>
@@ -1136,8 +1160,8 @@
             <div class="grid md:grid-cols-2 gap-2 text-xs">
               <div class="flex items-center justify-between bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
                 <span class="text-gray-500 shrink-0">Base URL</span>
-                <code class="text-blue-300 font-mono truncate mx-3">{{ serviceConfig.codex_api_base_url || (baseURL + '/v1') }}</code>
-                <button @click="copyText(serviceConfig.codex_api_base_url || (baseURL + '/v1'))" class="text-gray-500 hover:text-white shrink-0">复制</button>
+                <code class="text-blue-300 font-mono truncate mx-3">{{ serviceConfig.codex_api_base_url || serviceAPIBaseURL }}</code>
+                <button @click="copyText(serviceConfig.codex_api_base_url || serviceAPIBaseURL)" class="text-gray-500 hover:text-white shrink-0">复制</button>
               </div>
               <div class="flex items-center justify-between bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
                 <span class="text-gray-500 shrink-0">Wire API</span>
@@ -1190,9 +1214,9 @@
 
             <div class="grid lg:grid-cols-[1fr_1fr] gap-4">
               <div class="space-y-3">
-                <div class="grid sm:grid-cols-[1fr_auto] gap-2">
-                  <input v-model="localAccessPortInput" class="input text-xs" placeholder="端口，例如 8022" />
-                  <button @click="updateLocalAccessPort" :disabled="localAccessBusy" class="btn btn-sm btn-secondary">保存端口</button>
+                <div class="grid gap-1">
+                  <input :value="localAccessPortInput" class="input text-xs" readonly />
+                  <div class="text-[11px] text-gray-500">端口跟随当前 EasyLLM 服务启动配置</div>
                 </div>
                 <div class="grid sm:grid-cols-[1fr_auto] gap-2">
                   <select
@@ -1352,7 +1376,7 @@
             <div class="flex items-center justify-between">
               <span v-if="serviceConfig.api_key_set" class="text-xs text-green-400 flex items-center gap-1.5">
                 当前已设置:
-                <code class="text-green-300 bg-green-500/10 px-1.5 py-0.5 rounded">{{ serviceConfig.api_key_masked || '****' }}</code>
+                <code class="text-green-300 bg-green-500/10 px-1.5 py-0.5 rounded">{{ serviceConfig.api_key || serviceConfig.api_key_masked || '****' }}</code>
               </span>
               <span v-else class="text-xs text-yellow-400">
                 未设置（无需鉴权即可调用）
@@ -1374,18 +1398,27 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, inject, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import api, { longApi, openaiAPI } from '@/api/index.js'
-import PlatformIcon from '@/components/PlatformIcon.vue'
-import { getPlatformMeta } from '@/lib/platforms'
+import CodexIcon from '@/components/CodexIcon.vue'
+import { getCodexRouteMeta } from '@/lib/codexRoutes'
+import { filterAPIAccounts, filterOAuthAccounts } from '@/lib/accounts'
+import { localServiceAPIBaseURL, localServiceOrigin } from '@/lib/runtime'
 
 // State
-const codexPlatform = getPlatformMeta('codex')
+const route = useRoute()
+const notify = inject('notify')
+const confirmOperation = inject('confirmOperation')
+const currentCodexRoute = computed(() => getCodexRouteMeta('codex'))
+const pageTitle = computed(() => 'OpenAI / Codex 管理')
+const pageSubtitle = computed(() => '管理 OpenAI OAuth 账号及 Codex API 配置')
 const accounts = ref([])
 const loading = ref(false)
 const activeTab = ref('oauth')
 
 // Proxy endpoints
-const baseURL = computed(() => `${window.location.protocol}//${window.location.hostname}:${window.location.port || 8022}`)
+const baseURL = computed(() => localServiceOrigin())
+const serviceAPIBaseURL = computed(() => localServiceAPIBaseURL())
 const proxyEndpoints = [
   { method: 'POST', path: '/v1/responses', desc: 'Codex Responses（推荐）' },
   { method: 'POST', path: '/v1/chat/completions', desc: '聊天补全（兼容）' },
@@ -1397,6 +1430,7 @@ function copyText(text) {
   navigator.clipboard.writeText(text).then(() => showToast('已复制', 'success'))
 }
 const switchingId = ref(null)
+const testingAPIId = ref(null)
 const refreshingId = ref(null)
 const refreshingAllTokens = ref(false)
 const togglingProxyId = ref(null)
@@ -1421,6 +1455,17 @@ const selectedAPIIds = ref([])
 const hideAccountEmails = ref(readStoredBoolean('easyllm.openai.hideAccountEmails', false))
 const accountLayoutModes = ['standard', 'dense']
 const accountLayout = ref(readStoredOption('easyllm.openai.accountLayout', 'standard', accountLayoutModes))
+const accountSortOptions = [
+  { id: 'smart', label: '智能排序' },
+  { id: 'updated_desc', label: '最近更新' },
+  { id: 'quota_5h_desc', label: '5h 剩余高' },
+  { id: 'quota_5h_asc', label: '5h 剩余低' },
+  { id: 'plan_desc', label: '订阅优先' },
+  { id: 'plan_asc', label: 'free 优先' },
+  { id: 'email_asc', label: '邮箱 A-Z' },
+]
+const accountSortModeValues = accountSortOptions.map(option => option.id)
+const accountSortMode = ref(readStoredOption('easyllm.openai.accountSortMode', 'smart', accountSortModeValues))
 const storedAccountGroups = readStoredJSON('easyllm.openai.accountGroups', [])
 const accountGroups = ref(Array.isArray(storedAccountGroups) ? storedAccountGroups.map(normalizeAccountGroup).filter(Boolean) : [])
 const activeGroupFilter = ref(readStoredOption('easyllm.openai.activeGroupFilter', 'all', ['all', ...accountGroups.value.map(g => g.id)]))
@@ -1444,21 +1489,21 @@ const importResults = ref(null)
 const fileInput = ref(null)
 const multiFileInput = ref(null)
 const dragging = ref(false)
-const scanDir = ref('./auth')
-const importSub2APIFile = ref(null)
-const importSub2APIFileInput = ref(null)
-const importCockpitToolsFile = ref(null)
-const importCockpitToolsFileInput = ref(null)
-const importCockpitToolsCount = ref(0)
-const importMode = ref('token-files') // 'token-files' | 'scan-dir' | 'refresh-tokens' | 'sub2api' | 'cockpit-tools' | 'from-export'
+const importAutoFiles = ref([])
+const importAutoFileInput = ref(null)
+const importAutoDirectoryInput = ref(null)
+const selectingImportDirectory = ref(false)
+const importCPAFiles = ref([])
+const importCPAFileInput = ref(null)
+const importCPAAccountCount = ref(0)
+const importMode = ref('token-files')
 const importBackupFile = ref(null)  // 从备份导入用的解析后的 JSON 对象
 const importBackupFileInput = ref(null)
 const importModes = [
   { id: 'token-files',  label: '⚡ Token文件' },
-  { id: 'scan-dir',     label: '🗂 扫描目录' },
+  { id: 'auto-files',   label: '🎯 自适应' },
   { id: 'refresh-tokens', label: '🔄 refresh_token' },
-  { id: 'sub2api',      label: '🚀 Sub2API' },
-  { id: 'cockpit-tools', label: '🧭 cockpit-tools' },
+  { id: 'cpa',          label: '📋 CPA' },
   { id: 'from-export',  label: '📦 从备份导入' },
 ]
 
@@ -1481,6 +1526,9 @@ const apiForm = ref({
   wire_api: 'responses',
   model_reasoning_effort: ''
 })
+const providerDisplayNames = {
+  openai: 'OpenAI'
+}
 
 const showServiceConfigDialog = ref(false)
 const savingServiceConfig = ref(false)
@@ -1495,6 +1543,7 @@ const serviceConfig = ref({
   total_requests: 0,
   request_logs_retained: false,
   api_key_set: false,
+  api_key: '',
   api_key_masked: '',
   v1_proxy_mode: '',
   codex_api_service: false,
@@ -1536,9 +1585,6 @@ const strategies = [
   { id: 'least_used', label: '最少使用' }
 ]
 
-// Toast
-const toast = ref({ show: false, message: '', type: 'success' })
-
 // Delete confirm dialog
 const showDeleteConfirm = ref(false)
 const deleteTargetId = ref(null)
@@ -1552,12 +1598,12 @@ const formatExample = `[
 ]`
 
 // Computed
-const oauthAccounts = computed(() => accounts.value.filter(a => !a.account_type || a.account_type === 'oauth'))
-const apiAccounts = computed(() => accounts.value.filter(a => a.account_type === 'api'))
+const oauthAccounts = computed(() => filterOAuthAccounts(accounts.value))
+const apiAccounts = computed(() => filterAPIAccounts(accounts.value))
 const proxyEnabledCount = computed(() => oauthAccounts.value.filter(a => a.proxy_enabled).length)
 const proxyAllOn = computed(() => oauthAccounts.value.length > 0 && proxyEnabledCount.value === oauthAccounts.value.length)
 const planGroups = computed(() => [
-  { id: 'all', label: 'all', count: oauthAccounts.value.length },
+  { id: 'all', label: '账号类型', count: oauthAccounts.value.length },
   { id: 'team', label: 'team', count: countOAuthAccountsByPlan('team') },
   { id: 'plus', label: 'plus', count: countOAuthAccountsByPlan('plus') },
   { id: 'free', label: 'free', count: countOAuthAccountsByPlan('free') },
@@ -1602,6 +1648,7 @@ const filteredAPIAccounts = computed(() => {
   }
   return sortAPIAccounts(list)
 })
+
 const allFilteredOAuthSelected = computed(() => (
   filteredOAuthAccounts.value.length > 0 &&
   filteredOAuthAccounts.value.every(a => selectedOAuthIds.value.includes(accountId(a.id)))
@@ -1612,17 +1659,23 @@ const allAPISelected = computed(() => (
 ))
 const accountGridClass = computed(() => accountLayout.value === 'dense'
   ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-6 gap-2'
-  : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3'
+  : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-3'
 )
 
 // Pagination
 const PAGE_SIZE = 20
 const DENSE_PAGE_SIZE = 48
-const currentPageSize = computed(() => accountLayout.value === 'dense' ? DENSE_PAGE_SIZE : PAGE_SIZE)
+const MAX_PAGE_SIZE = 2000
+const pageSizeOptions = [12, 20, 32, 48, 50, 96, 100, 200, 500, 1000, 2000]
+const defaultPageSize = accountLayout.value === 'dense' ? DENSE_PAGE_SIZE : PAGE_SIZE
+const accountPageSize = ref(normalizeAccountPageSize(readStoredAccountPageSize(defaultPageSize)))
+const currentPageSize = computed(() => normalizeAccountPageSize(accountPageSize.value))
 const oauthPage = ref(1)
 const apiPage = ref(1)
 const oauthTotalPages = computed(() => Math.ceil(filteredOAuthAccounts.value.length / currentPageSize.value) || 1)
 const apiTotalPages = computed(() => Math.ceil(filteredAPIAccounts.value.length / currentPageSize.value) || 1)
+const oauthPaginationRangeText = computed(() => paginationRangeText(oauthPage.value, filteredOAuthAccounts.value.length, currentPageSize.value))
+const apiPaginationRangeText = computed(() => paginationRangeText(apiPage.value, filteredAPIAccounts.value.length, currentPageSize.value))
 const paginatedOAuth = computed(() => {
   const start = (oauthPage.value - 1) * currentPageSize.value
   return filteredOAuthAccounts.value.slice(start, start + currentPageSize.value)
@@ -1697,6 +1750,43 @@ function toggleAccountLayout() {
   oauthPage.value = 1
   apiPage.value = 1
   writeStoredOption('easyllm.openai.accountLayout', accountLayout.value)
+}
+
+function setAccountPageSize(value) {
+  accountPageSize.value = normalizeAccountPageSize(value)
+  oauthPage.value = 1
+  apiPage.value = 1
+  writeStoredOption('easyllm.openai.accountPageSize', String(accountPageSize.value))
+}
+
+function readStoredAccountPageSize(fallback) {
+  try {
+    return localStorage.getItem('easyllm.openai.accountPageSize') || fallback
+  } catch {
+    return fallback
+  }
+}
+
+function normalizeAccountPageSize(value) {
+  const size = Math.floor(Number(value))
+  if (!Number.isFinite(size) || size <= 0) return PAGE_SIZE
+  return Math.min(size, MAX_PAGE_SIZE)
+}
+
+function paginationRangeText(page, total, pageSize) {
+  if (total <= 0) return '显示 0'
+  const start = (Math.max(1, page) - 1) * pageSize + 1
+  const end = Math.min(total, start + pageSize - 1)
+  return `显示 ${start}-${end} / ${total}`
+}
+
+function setAccountSortMode(mode) {
+  accountSortMode.value = accountSortModeValues.includes(mode) ? mode : 'smart'
+  oauthPage.value = 1
+  apiPage.value = 1
+  clearOAuthSelection()
+  clearAPISelection()
+  writeStoredOption('easyllm.openai.accountSortMode', accountSortMode.value)
 }
 
 function setPlanGroupFilter(groupID) {
@@ -1799,10 +1889,17 @@ function removeSelectedFromGroup(groupId) {
   showToast(`已移出 ${selected.size} 个账号`, 'success')
 }
 
-function deleteAccountGroup(groupId) {
+async function deleteAccountGroup(groupId) {
   const group = accountGroups.value.find(item => item.id === groupId)
   if (!group) return
-  if (!confirm(`确认删除分组「${group.name}」吗？账号本身不会被删除。`)) return
+  const confirmed = await requestOperationConfirm({
+    title: '删除分组',
+    message: `确认删除分组「${group.name}」吗？`,
+    details: '账号本身不会被删除，只会移除该分组。',
+    confirmText: '删除分组',
+    tone: 'danger',
+  })
+  if (!confirmed) return
   accountGroups.value = accountGroups.value.filter(item => item.id !== groupId)
   persistAccountGroups()
   showToast('分组已删除', 'success')
@@ -1855,11 +1952,20 @@ function accountUpdatedSortValue(account) {
 
 function oauthRemainingQuota(account, windowKey) {
   if (windowKey === '5h') {
+    if (isTeamPlan(account)) return oauthRemainingQuota(account, '7d')
     return account?.quota_5h_used_percent == null ? null : 100 - Number(account.quota_5h_used_percent)
   }
   if (account?.quota_7d_used_percent != null) return 100 - Number(account.quota_7d_used_percent)
   if (account?.quota_total && account.quota_total > 0) return quotaPct(account)
   return null
+}
+
+function accountPlanRank(account) {
+  const plan = accountPlanType(account)
+  if (plan === 'team') return 3
+  if (plan === 'plus') return 2
+  if (plan === 'free') return 1
+  return 0
 }
 
 function sortOAuthAccounts(list) {
@@ -1868,9 +1974,26 @@ function sortOAuthAccounts(list) {
     const activeDiff = compareActiveAccountFirst(left, right)
     if (activeDiff !== 0) return activeDiff
 
-    let diff = oauthAccountPriority(left) - oauthAccountPriority(right)
-    if (diff === 0) diff = compareNullableNumber(oauthRemainingQuota(left, '5h'), oauthRemainingQuota(right, '5h'), 'desc')
+    let diff = 0
+    if (accountSortMode.value === 'updated_desc') {
+      diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), 'desc')
+    } else if (accountSortMode.value === 'quota_5h_desc') {
+      diff = compareNullableNumber(oauthRemainingQuota(left, '5h'), oauthRemainingQuota(right, '5h'), 'desc')
+    } else if (accountSortMode.value === 'quota_5h_asc') {
+      diff = compareNullableNumber(oauthRemainingQuota(left, '5h'), oauthRemainingQuota(right, '5h'), 'asc')
+    } else if (accountSortMode.value === 'plan_desc') {
+      diff = compareNullableNumber(accountPlanRank(left), accountPlanRank(right), 'desc')
+    } else if (accountSortMode.value === 'plan_asc') {
+      diff = compareNullableNumber(accountPlanRank(left), accountPlanRank(right), 'asc')
+    } else if (accountSortMode.value === 'email_asc') {
+      diff = compareText(left?.email || left?.id, right?.email || right?.id, 'asc')
+    } else {
+      diff = oauthAccountPriority(left) - oauthAccountPriority(right)
+      if (diff === 0) diff = compareNullableNumber(oauthRemainingQuota(left, '5h'), oauthRemainingQuota(right, '5h'), 'desc')
+      if (diff === 0) diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), 'desc')
+    }
     if (diff === 0) diff = compareNullableNumber(accountUpdatedSortValue(left), accountUpdatedSortValue(right), 'desc')
+    if (diff === 0) diff = compareNullableNumber(accountCreatedSortValue(left), accountCreatedSortValue(right), 'desc')
     if (diff !== 0) return diff
     return compareText(left?.email || left?.id, right?.email || right?.id, 'asc')
   })
@@ -1943,14 +2066,35 @@ async function switchAPIAccount(account) {
   }
 }
 
+async function testAPIAccount(account) {
+  testingAPIId.value = account.id
+  try {
+    const res = await api.post(`/openai/api-accounts/${account.id}/test`)
+    if (res.success) {
+      showToast(`测活成功 · ${res.http_status} · ${res.latency_ms}ms`, 'success')
+    } else {
+      showToast(`测活失败: ${res.error || 'HTTP ' + res.http_status}`, 'error')
+    }
+  } catch (e) {
+    showToast('测活失败: ' + (e.response?.data?.error || e.message), 'error')
+  } finally {
+    testingAPIId.value = null
+  }
+}
+
 async function refreshAllTokens() {
   if (oauthAccounts.value.length === 0) {
     showToast('没有可刷新的 OAuth 账号', 'error')
     return
   }
-  if (!confirm('刷新全部 Token 会轮换 RT。确认后会先等待全部账号刷新完成并写入本地库，然后自动下载最新账号 JSON。是否继续？')) {
-    return
-  }
+  const confirmed = await requestOperationConfirm({
+    title: '刷新全部 Token',
+    message: '刷新全部 Token 会轮换 refresh_token。',
+    details: '确认后会等待全部账号刷新完成并写入本地库，然后自动下载最新账号 JSON。',
+    confirmText: '继续刷新',
+    tone: 'warning',
+  })
+  if (!confirmed) return
   refreshingAllTokens.value = true
   try {
     const res = await openaiAPI.refreshAll()
@@ -1961,7 +2105,7 @@ async function refreshAllTokens() {
     if (success > 0) parts.push(`成功 ${success}`)
     if (skipped > 0) parts.push(`跳过 ${skipped}`)
     if (failed > 0) parts.push(`失败 ${failed}`)
-    await loadAccounts()
+    await Promise.all([loadAccounts(), loadServiceConfig(), loadLocalAccess()])
     if (success > 0) {
       await exportAccounts({ showSuccessToast: false, throwOnError: true })
       showToast(`全部刷新完成并已导出最新 JSON：${parts.join('，')}`, failed > 0 ? 'error' : 'success')
@@ -2080,7 +2224,7 @@ const exampleFiles = {
       "expires_at": 1772632299
     }, null, 2)
   },
-  'scan-dir': {
+  'auto-files': {
     filename: 'token_account1.json',
     content: JSON.stringify({
       "id_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -2099,52 +2243,19 @@ const exampleFiles = {
       "v1.NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM..."
     ], null, 2)
   },
-  'sub2api': {
-    filename: 'sub2api_example.json',
+  'cpa': {
+    filename: 'example-cpa.json',
     content: JSON.stringify({
-      "exported_at": "2026-05-08T12:00:00Z",
-      "accounts": [
-        {
-          "name": "your-email@example.com",
-          "platform": "openai",
-          "type": "oauth",
-          "credentials": {
-            "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE5MzQ0ZTY1In0...",
-            "refresh_token": "v1.MjQ3NDUzMTg3NjE0NzY3OTc0NjQxNDExNDY3ODk...",
-            "id_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
-            "chatgpt_account_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-            "chatgpt_user_id": "user-xxxx",
-            "organization_id": "org-xxxx",
-            "plan_type": "team",
-            "expires_at": 1772632299
-          },
-          "extra": {
-            "email": "your-email@example.com"
-          }
-        }
-      ]
+      type: 'codex',
+      email: 'your-email@example.com',
+      expired: '2026-06-01T00:00:00Z',
+      account_id: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+      access_token: 'eyJhbGciOiJSUzI1NiIsImtpZCI6IjE5MzQ0ZTY1In0...',
+      refresh_token: 'rt_example_refresh_token',
+      id_token: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...',
+      last_refresh: '2026-05-08T12:00:00Z',
+      plan_type: 'plus'
     }, null, 2)
-  },
-  'cockpit-tools': {
-    filename: 'cockpit_tools_example.json',
-    content: JSON.stringify([
-      {
-        "id": "codex-account-1",
-        "email": "your-email@example.com",
-        "authMode": "oauth",
-        "tokens": {
-          "idToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
-          "accessToken": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE5MzQ0ZTY1In0...",
-          "refreshToken": "v1.MjQ3NDUzMTg3NjE0NzY3OTc0NjQxNDExNDY3ODk..."
-        },
-        "accountId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-        "organizationId": "org-xxxx",
-        "accountName": "Team Workspace",
-        "accountStructure": "team",
-        "planType": "team",
-        "type": "codex"
-      }
-    ], null, 2)
   },
   'from-export': {
     filename: 'easyllm_accounts_backup_example.json',
@@ -2196,32 +2307,26 @@ function selectImportMode(mode) {
   importResults.value = null
   importFiles.value = []
   importTokens.value = []
-  importSub2APIFile.value = null
-  importCockpitToolsFile.value = null
-  importCockpitToolsCount.value = 0
+  importCPAFiles.value = []
+  importCPAAccountCount.value = 0
+  importAutoFiles.value = []
   importBackupFile.value = null
 }
 
 const canRunImport = computed(() => {
   if (importMode.value === 'token-files') return importFiles.value.length > 0
-  if (importMode.value === 'scan-dir') return scanDir.value.trim().length > 0
+  if (importMode.value === 'auto-files') return importAutoFiles.value.length > 0
   if (importMode.value === 'refresh-tokens') return importTokens.value.length > 0
-  if (importMode.value === 'sub2api') return !!importSub2APIFile.value
-  if (importMode.value === 'cockpit-tools') return !!importCockpitToolsFile.value
+  if (importMode.value === 'cpa') return importCPAFiles.value.length > 0
   if (importMode.value === 'from-export') return !!importBackupFile.value
   return false
 })
 
 const importButtonLabel = computed(() => {
   if (importMode.value === 'token-files') return `导入 ${importFiles.value.length} 个文件`
-  if (importMode.value === 'scan-dir') return `扫描并导入目录`
+  if (importMode.value === 'auto-files') return `自适应导入 ${importAutoFiles.value.length} 个文件`
   if (importMode.value === 'refresh-tokens') return `导入 ${importTokens.value.length} 个账号`
-  if (importMode.value === 'sub2api') {
-    return `导入 ${importSub2APIFile.value?.accounts?.length ?? 0} 个账号`
-  }
-  if (importMode.value === 'cockpit-tools') {
-    return `导入 ${importCockpitToolsCount.value} 个账号`
-  }
+  if (importMode.value === 'cpa') return `导入 ${importCPAAccountCount.value} 个 CPA 账号`
   if (importMode.value === 'from-export') {
     const total = (importBackupFile.value?.oauth_accounts?.length ?? 0) + (importBackupFile.value?.api_accounts?.length ?? 0)
     return importBackupFile.value?.local_access ? `从备份导入 ${total} 个账号 + 本地服务配置` : `从备份导入 ${total} 个账号`
@@ -2233,6 +2338,104 @@ function handleFiles(files) {
   if (!files.length) return
   importFiles.value = Array.from(files)
   importResults.value = null
+}
+
+function handleAutoFiles(files) {
+  if (!files.length) return
+  const jsonFiles = Array.from(files).filter(f => /\.json$/i.test(f.name))
+  if (!jsonFiles.length) {
+    showToast('请选择 .json 文件', 'error')
+    return
+  }
+  importAutoFiles.value = jsonFiles
+  importResults.value = null
+}
+
+function handleAutoFileSelect(event) {
+  handleAutoFiles(event.target.files)
+  event.target.value = ''
+}
+
+function handleAutoDirectorySelect(event) {
+  handleAutoFiles(event.target.files)
+  event.target.value = ''
+}
+
+function openImportDirectoryPicker() {
+  const input = importAutoDirectoryInput.value
+  if (!input) {
+    showToast('当前环境不支持选择文件夹，请改选 JSON 文件', 'error')
+    return
+  }
+
+  selectingImportDirectory.value = true
+  try {
+    input.click()
+  } finally {
+    window.setTimeout(() => {
+      selectingImportDirectory.value = false
+    }, 300)
+  }
+}
+
+function resetScanImportSelection() {
+  importAutoFiles.value = []
+  importResults.value = null
+}
+
+function resolveCPAAccountCount(data) {
+  if (Array.isArray(data)) return data.length
+  if (data && typeof data === 'object') {
+    if (data.access_token || data.refresh_token || data.id_token) return 1
+  }
+  return 0
+}
+
+async function countCPAAccountsInFile(file) {
+  const text = await file.text()
+  const trimmed = text.trim()
+  if (!trimmed) return 0
+  if (trimmed.startsWith('[')) {
+    const data = JSON.parse(trimmed)
+    return resolveCPAAccountCount(data)
+  }
+  let count = 0
+  const lines = trimmed.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  if (lines.length > 1) {
+    for (const line of lines) {
+      count += resolveCPAAccountCount(JSON.parse(line))
+    }
+    return count
+  }
+  return resolveCPAAccountCount(JSON.parse(trimmed))
+}
+
+async function handleCPAFiles(files) {
+  if (!files.length) return
+  const items = []
+  let total = 0
+  for (const file of Array.from(files)) {
+    try {
+      const count = await countCPAAccountsInFile(file)
+      if (count <= 0) {
+        showToast(`文件 ${file.name} 中未找到有效 CPA 账号`, 'error')
+        continue
+      }
+      items.push({ name: file.name, file, count })
+      total += count
+    } catch (err) {
+      showToast(`解析 ${file.name} 失败: ${err.message}`, 'error')
+    }
+  }
+  if (!items.length) return
+  importCPAFiles.value = items
+  importCPAAccountCount.value = total
+  importResults.value = null
+}
+
+function handleCPAFileSelect(event) {
+  handleCPAFiles(event.target.files)
+  event.target.value = ''
 }
 
 function handleMultiFileSelect(event) {
@@ -2288,60 +2491,6 @@ function parseRefreshTokenFile(file) {
   reader.readAsText(file)
 }
 
-function parseSub2APIFile(file) {
-  if (!file) return
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    try {
-      const data = JSON.parse(e.target.result)
-      if (!data.accounts || !Array.isArray(data.accounts)) {
-        showToast('文件格式不正确，缺少 accounts 数组', 'error')
-        return
-      }
-      importSub2APIFile.value = data
-      importResults.value = null
-    } catch (err) {
-      showToast('文件解析失败: ' + err.message, 'error')
-    }
-  }
-  reader.readAsText(file)
-}
-
-function resolveCockpitToolsPayload(data) {
-  if (Array.isArray(data)) return data
-  if (!data || typeof data !== 'object') return null
-  if (data.tokens || data.id_token || data.access_token || data.refresh_token || data.account_id || data.openai_api_key || data.auth_mode) return [data]
-  const fromPlatform = data.platforms?.codex
-  if (fromPlatform) return resolveCockpitToolsPayload(fromPlatform)
-  if (data.codex) return resolveCockpitToolsPayload(data.codex)
-  if (data.exported_data) return resolveCockpitToolsPayload(data.exported_data)
-  if (data.data) return resolveCockpitToolsPayload(data.data)
-  if (data.accounts) return resolveCockpitToolsPayload(data.accounts)
-  return null
-}
-
-function parseCockpitToolsFile(file) {
-  if (!file) return
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    try {
-      const data = JSON.parse(e.target.result)
-      const accountsPayload = resolveCockpitToolsPayload(data)
-      const count = Array.isArray(accountsPayload) ? accountsPayload.length : 0
-      if (count <= 0) {
-        showToast('文件格式不正确，未找到 cockpit-tools 账号数据', 'error')
-        return
-      }
-      importCockpitToolsFile.value = data
-      importCockpitToolsCount.value = count
-      importResults.value = null
-    } catch (err) {
-      showToast('文件解析失败: ' + err.message, 'error')
-    }
-  }
-  reader.readAsText(file)
-}
-
 function handleDrop(event) {
   dragging.value = false
   const files = Array.from(event.dataTransfer?.files || [])
@@ -2351,18 +2500,18 @@ function handleDrop(event) {
     handleFiles(files)
     return
   }
+  if (importMode.value === 'cpa') {
+    handleCPAFiles(files)
+    return
+  }
+  if (importMode.value === 'auto-files') {
+    handleAutoFiles(files)
+    return
+  }
 
   const [file] = files
   if (importMode.value === 'refresh-tokens') {
     parseRefreshTokenFile(file)
-    return
-  }
-  if (importMode.value === 'sub2api') {
-    parseSub2APIFile(file)
-    return
-  }
-  if (importMode.value === 'cockpit-tools') {
-    parseCockpitToolsFile(file)
     return
   }
   if (importMode.value === 'from-export') {
@@ -2379,18 +2528,6 @@ function handleBackupFileSelect(event) {
 function handleFileSelect(event) {
   const file = event.target.files?.[0]
   parseRefreshTokenFile(file)
-  event.target.value = ''
-}
-
-function handleSub2APIFileSelect(event) {
-  const file = event.target.files?.[0]
-  parseSub2APIFile(file)
-  event.target.value = ''
-}
-
-function handleCockpitToolsFileSelect(event) {
-  const file = event.target.files?.[0]
-  parseCockpitToolsFile(file)
   event.target.value = ''
 }
 
@@ -2427,13 +2564,27 @@ async function runImport() {
         results: res?.results ?? []
       }
 
-    } else if (importMode.value === 'scan-dir') {
-      res = await api.post('/openai/import/scan-dir', { dir: scanDir.value.trim() })
+    } else if (importMode.value === 'auto-files') {
+      const formData = new FormData()
+      for (const f of importAutoFiles.value) {
+        formData.append('files', f)
+      }
+      const token = localStorage.getItem('easyllm_token')
+      const fetchRes = await fetch('/api/v1/openai/import/auto-files', {
+        method: 'POST',
+        body: formData,
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      })
+      if (!fetchRes.ok) {
+        const errData = await fetchRes.json().catch(() => ({}))
+        throw new Error(errData.error || `HTTP ${fetchRes.status}`)
+      }
+      res = await fetchRes.json()
       importResults.value = {
         success: res?.success ?? 0,
         skipped: res?.skipped ?? 0,
-        failed:  res?.failed  ?? 0,
-        total:   res?.total   ?? 0,
+        failed: res?.failed ?? 0,
+        total: res?.total ?? 0,
         results: res?.results ?? []
       }
 
@@ -2452,23 +2603,27 @@ async function runImport() {
         results: res?.results ?? []
       }
 
-    } else if (importMode.value === 'sub2api') {
-      res = await api.post('/openai/import/sub2api', importSub2APIFile.value)
-      importResults.value = {
-        success: res?.success ?? 0,
-        skipped: res?.skipped ?? 0,
-        failed:  res?.failed  ?? 0,
-        total:   res?.total   ?? 0,
-        results: res?.results ?? []
+    } else if (importMode.value === 'cpa') {
+      const formData = new FormData()
+      for (const item of importCPAFiles.value) {
+        formData.append('files', item.file)
       }
-
-    } else if (importMode.value === 'cockpit-tools') {
-      res = await api.post('/openai/import/cockpit-tools', importCockpitToolsFile.value)
+      const token = localStorage.getItem('easyllm_token')
+      const fetchRes = await fetch('/api/v1/openai/import/cpa', {
+        method: 'POST',
+        body: formData,
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      })
+      if (!fetchRes.ok) {
+        const errData = await fetchRes.json().catch(() => ({}))
+        throw new Error(errData.error || `HTTP ${fetchRes.status}`)
+      }
+      res = await fetchRes.json()
       importResults.value = {
         success: res?.success ?? 0,
         skipped: res?.skipped ?? 0,
-        failed:  res?.failed  ?? 0,
-        total:   res?.total   ?? 0,
+        failed: res?.failed ?? 0,
+        total: res?.total ?? 0,
         results: res?.results ?? []
       }
 
@@ -2491,12 +2646,14 @@ async function runImport() {
     }
 
     const restoredLocalAccess = importMode.value === 'from-export' && !!importBackupFile.value?.local_access
-    if (restoredLocalAccess) {
-      await Promise.all([loadServiceConfig(), loadLocalAccess()])
+    const importedCount = importResults.value?.success ?? 0
+    if (restoredLocalAccess || importedCount > 0) {
+      const reloadTasks = [loadServiceConfig(), loadLocalAccess()]
+      if (importedCount > 0) reloadTasks.push(loadAccounts())
+      await Promise.all(reloadTasks)
     }
 
-    if ((importResults.value?.success ?? 0) > 0) {
-      await loadAccounts()
+    if (importedCount > 0) {
       showToast(restoredLocalAccess ? `成功导入 ${importResults.value.success} 个账号，并恢复本地服务配置` : `成功导入 ${importResults.value.success} 个账号`, 'success')
     } else if (restoredLocalAccess) {
       showToast('本地服务配置已恢复', 'success')
@@ -2516,9 +2673,9 @@ function closeImportDialog() {
   importTokens.value = []
   importFiles.value = []
   importBackupFile.value = null
-  importSub2APIFile.value = null
-  importCockpitToolsFile.value = null
-  importCockpitToolsCount.value = 0
+  importCPAFiles.value = []
+  importCPAAccountCount.value = 0
+  importAutoFiles.value = []
   importResults.value = null
 }
 
@@ -2671,10 +2828,10 @@ async function exchangeOAuthCode() {
       } else {
         payload.code = manualInput
       }
-    }
-    const res = await openaiAPI.exchangeOAuthCode(payload)
-    await loadAccounts()
-    showOAuthDialog.value = false
+	}
+	const res = await openaiAPI.exchangeOAuthCode(payload)
+	await Promise.all([loadAccounts(), loadServiceConfig(), loadLocalAccess()])
+	showOAuthDialog.value = false
     resetOAuthState()
     const email = res?.account?.email || ''
     if (res?.auto_joined_proxy) {
@@ -2690,6 +2847,22 @@ async function exchangeOAuthCode() {
 }
 
 // ---- API Account ----
+function providerDisplayName(provider) {
+  const key = String(provider || '').trim().toLowerCase()
+  return providerDisplayNames[key] || provider || 'API'
+}
+
+function createAPIForm() {
+  return { model_provider: '', model: '', base_url: '', api_key: '', wire_api: 'responses', model_reasoning_effort: '' }
+}
+
+function openAddAPIDialog() {
+  editingAPIAccount.value = null
+  apiForm.value = createAPIForm()
+  apiFormError.value = ''
+  showAddAPIDialog.value = true
+}
+
 function editAPIAccount(account) {
   editingAPIAccount.value = account
   apiForm.value = {
@@ -2707,7 +2880,7 @@ function editAPIAccount(account) {
 function closeAPIDialog() {
   showAddAPIDialog.value = false
   editingAPIAccount.value = null
-  apiForm.value = { model_provider: '', model: '', base_url: '', api_key: '', wire_api: 'responses', model_reasoning_effort: '' }
+  apiForm.value = createAPIForm()
   apiFormError.value = ''
 }
 
@@ -2916,18 +3089,6 @@ async function saveLocalAccessAccounts() {
   )
 }
 
-async function updateLocalAccessPort() {
-  const port = Number(localAccessPortInput.value)
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    showToast('端口必须是 1-65535', 'error')
-    return
-  }
-  await localAccessAction(
-    () => api.put('/openai/local-access/port', { port }),
-    'Codex API 服务端口已更新'
-  )
-}
-
 async function updateLocalAccessRouting(strategy) {
   await localAccessAction(
     () => api.put('/openai/local-access/routing', { strategy }),
@@ -2936,7 +3097,14 @@ async function updateLocalAccessRouting(strategy) {
 }
 
 async function rotateLocalAccessKey() {
-  if (!confirm('重置后当前 Codex API 服务 Key 会失效，确认继续吗？')) return
+  const confirmed = await requestOperationConfirm({
+    title: '重置服务 Key',
+    message: '重置后当前 Codex API 服务 Key 会立即失效。',
+    details: '需要更新外部调用方使用的新 Key 后才能继续访问服务。',
+    confirmText: '重置 Key',
+    tone: 'danger',
+  })
+  if (!confirmed) return
   await localAccessAction(
     () => api.post('/openai/local-access/rotate-key'),
     'Codex API 服务 Key 已重置并重新注入'
@@ -2944,7 +3112,14 @@ async function rotateLocalAccessKey() {
 }
 
 async function clearLocalAccessStats() {
-  if (!confirm('确认清空旧版 Codex API 服务统计数据吗？')) return
+  const confirmed = await requestOperationConfirm({
+    title: '清空统计数据',
+    message: '确认清空旧版 Codex API 服务统计数据吗？',
+    details: '此操作只影响旧版本地统计记录，不会删除账号或服务配置。',
+    confirmText: '清空统计',
+    tone: 'danger',
+  })
+  if (!confirmed) return
   await localAccessAction(
     () => api.delete('/openai/local-access/stats'),
     'Codex API 服务统计已清空'
@@ -3216,14 +3391,22 @@ async function confirmBulkDelete() {
   }
 }
 
-function hasQuotaData(account) {
-  return account.quota_5h_used_percent != null ||
-    account.quota_7d_used_percent != null ||
-    (account.quota_total && account.quota_total > 0)
+function isTeamPlan(account) {
+  return accountPlanType(account) === 'team'
 }
 
-function hasWindowQuotaData(account) {
-  return account.quota_5h_used_percent != null || account.quota_7d_used_percent != null
+function shouldShow5hQuota(account) {
+  return !isTeamPlan(account) && account?.quota_5h_used_percent != null
+}
+
+function shouldShow7dQuota(account) {
+  return account?.quota_7d_used_percent != null
+}
+
+function hasDisplayQuotaData(account) {
+  return shouldShow5hQuota(account) ||
+    shouldShow7dQuota(account) ||
+    (account?.quota_total && account.quota_total > 0)
 }
 
 function pctBarClass(remainPct) {
@@ -3246,7 +3429,7 @@ function accountId(id) {
 function accountDisplayLabel(account) {
   if (!account) return ''
   if (account.account_type === 'api') {
-    const provider = account.model_provider || 'API'
+    const provider = providerDisplayName(account.model_provider)
     const model = account.model ? ` / ${account.model}` : ''
     const baseURL = account.base_url ? ` @ ${account.base_url}` : ''
     return `${provider}${model}${baseURL}`
@@ -3266,10 +3449,24 @@ function accountDisplayTitle(account) {
   return accountDisplayLabel(account)
 }
 
+const scanImportFormatLabels = {
+  'easyllm-export': 'EasyLLM',
+  'cpa': 'CPA',
+  'token': 'Token',
+}
+
 function importResultDisplayLabel(result) {
   if (!result) return ''
-  if (result.email && hideAccountEmails.value) return 'OAuth 账号（邮箱已隐藏）'
-  return result.email || result.filename || result.token_preview || ''
+  const formatTag = result.format ? scanImportFormatLabels[result.format] || result.format : ''
+  let base = ''
+  if (result.email && hideAccountEmails.value) {
+    base = 'OAuth 账号（邮箱已隐藏）'
+  } else {
+    base = result.email || result.filename || result.token_preview || ''
+  }
+  if (formatTag && base) return `${base} · ${formatTag}`
+  if (formatTag) return formatTag
+  return base
 }
 
 function getSelectedIds(type) {
@@ -3474,8 +3671,12 @@ function isExpiringSoon(d) {
 }
 
 function showToast(message, type = 'success') {
-  toast.value = { show: true, message, type }
-  setTimeout(() => { toast.value.show = false }, 3500)
+  notify?.(message, type)
+}
+
+async function requestOperationConfirm(options) {
+  if (typeof confirmOperation !== 'function') return false
+  return await confirmOperation(options)
 }
 
 watch([filteredOAuthAccounts, filteredAPIAccounts], () => {
@@ -3488,6 +3689,16 @@ watch([filteredOAuthAccounts, filteredAPIAccounts], () => {
   }
 })
 
+watch([searchQuery, quotaFilter], () => {
+  oauthPage.value = 1
+  clearOAuthSelection()
+})
+
+watch(apiSearchQuery, () => {
+  apiPage.value = 1
+  clearAPISelection()
+})
+
 onMounted(loadAccounts)
 onBeforeUnmount(() => {
   const sessionId = oauthState.value.sessionId
@@ -3497,6 +3708,58 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.import-dialog-overlay {
+  background: rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(6px);
+}
+.import-dialog-panel {
+  background: #0f172a;
+  border-color: rgba(148, 163, 184, 0.28);
+  color: #e5e7eb;
+}
+.import-dialog-panel .border-gray-700 {
+  border-color: rgba(148, 163, 184, 0.24) !important;
+}
+.import-dialog-panel .bg-gray-800,
+.import-dialog-panel [class~='bg-gray-800'] {
+  background: #1f2937 !important;
+}
+.import-dialog-panel .text-gray-300 {
+  color: #e5e7eb !important;
+}
+.import-dialog-panel .text-gray-400 {
+  color: #cbd5e1 !important;
+}
+.import-dialog-panel .text-gray-500,
+.import-dialog-panel .text-gray-600 {
+  color: #94a3b8 !important;
+}
+.import-dialog-panel .border-gray-600 {
+  border-color: rgba(148, 163, 184, 0.58) !important;
+}
+.import-dialog-panel .border-dashed {
+  background: #111827;
+}
+.import-dialog-panel [class~='bg-green-900/20'] {
+  background: #0f2a1c !important;
+}
+.import-dialog-panel [class~='bg-blue-900/20'] {
+  background: #10213f !important;
+}
+.import-dialog-panel [class~='bg-yellow-900/20'] {
+  background: #2d260f !important;
+}
+.import-dialog-panel [class~='bg-violet-900/20'],
+.import-dialog-panel [class~='bg-purple-900/20'] {
+  background: #25183f !important;
+}
+.import-dialog-panel [class~='bg-cyan-900/20'] {
+  background: #0d2c35 !important;
+}
+.import-dialog-panel [class~='text-blue-400/70'] {
+  color: #93c5fd !important;
+}
+
 .account-card-compact {
   @apply rounded-lg border px-3.5 py-3 transition-all;
   background: var(--app-surface);
@@ -3621,6 +3884,31 @@ onBeforeUnmount(() => {
   @apply grid w-full items-center gap-1.5 overflow-visible;
   grid-template-columns: auto minmax(128px, 1fr) auto auto auto;
 }
+.account-toolbar--oauth {
+  display: grid !important;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(72px, 1fr);
+  grid-template-columns: none;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  white-space: nowrap;
+}
+.account-toolbar--oauth .toolbar-section {
+  display: contents;
+}
+.account-toolbar--oauth .toolbar-btn {
+  @apply min-w-0 px-1.5;
+}
+.account-toolbar--oauth .toolbar-btn--layout,
+.account-toolbar--oauth .toolbar-btn--select {
+  @apply min-w-0;
+}
+.account-toolbar--oauth .toolbar-section--selection {
+  @apply justify-start;
+}
 .account-toolbar--api {
   grid-template-columns: minmax(160px, 1fr) auto auto;
 }
@@ -3705,7 +3993,7 @@ onBeforeUnmount(() => {
   @apply w-full min-w-[116px];
 }
 .account-toolbar--oauth .toolbar-search {
-  @apply w-[132px] min-w-[116px] max-w-[132px];
+  @apply w-full min-w-0 max-w-none;
 }
 .toolbar-select {
   @apply w-[86px] min-w-[86px] max-w-[86px] shrink-0 truncate;
@@ -3714,19 +4002,19 @@ onBeforeUnmount(() => {
   @apply w-[112px] min-w-[112px] max-w-[160px];
 }
 .toolbar-select--plan {
-  @apply w-[88px] min-w-[88px] max-w-[96px];
+  @apply w-[78px] min-w-[78px] max-w-[84px];
+}
+.toolbar-select--sort {
+  @apply w-[96px] min-w-[96px] max-w-[104px];
 }
 .toolbar-select--quota {
-  @apply w-[76px] min-w-[76px] max-w-[76px];
+  @apply w-[68px] min-w-[68px] max-w-[68px];
 }
 .toolbar-status {
   @apply inline-flex h-8 shrink-0 items-center px-1 text-[11px] whitespace-nowrap;
   color: var(--app-text-muted);
 }
 @media (max-width: 1420px) {
-  .account-toolbar--oauth {
-    grid-template-columns: auto minmax(140px, 1fr) auto;
-  }
   .account-toolbar--oauth .toolbar-section--filter,
   .account-toolbar--oauth .toolbar-section--selection {
     @apply justify-start;
@@ -3734,12 +4022,14 @@ onBeforeUnmount(() => {
 }
 @media (max-width: 1080px) {
   .account-toolbar,
-  .account-toolbar--api,
-  .account-toolbar--oauth {
+  .account-toolbar--api {
     grid-template-columns: minmax(0, 1fr);
   }
   .toolbar-section {
     @apply flex-wrap justify-start;
+  }
+  .account-toolbar--oauth .toolbar-section {
+    display: contents;
   }
   .toolbar-section--search .toolbar-search {
     @apply max-w-none;
@@ -3747,6 +4037,23 @@ onBeforeUnmount(() => {
   .account-toolbar--oauth .toolbar-search {
     @apply w-full max-w-none;
   }
+}
+.account-toolbar--oauth :is(.toolbar-btn, .toolbar-input, .toolbar-select, .toolbar-status) {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+.account-toolbar--oauth .toolbar-search {
+  min-width: 0;
+}
+.account-toolbar--oauth .toolbar-select--plan {
+  min-width: 0;
+}
+.account-toolbar--oauth .toolbar-select--quota {
+  min-width: 0;
+}
+.account-toolbar--oauth .toolbar-status {
+  justify-content: center;
 }
 .stable-tabs {
   @apply flex w-full max-w-full gap-1 overflow-x-auto rounded-lg border p-1 sm:w-fit;
@@ -3817,6 +4124,27 @@ onBeforeUnmount(() => {
 .btn-sm {
   @apply px-2.5 py-1.5 text-xs;
 }
+.pagination-bar {
+  @apply mt-4 flex flex-col items-center justify-between gap-2 text-sm sm:flex-row;
+}
+.pagination-page-size {
+  @apply inline-flex h-8 items-center gap-2 rounded-lg border px-2 text-xs;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+  color: var(--app-text-secondary);
+}
+.pagination-page-size-select {
+  @apply h-6 rounded-md border px-1.5 text-xs focus:outline-none;
+  background: var(--app-surface);
+  border-color: var(--app-border);
+  color: var(--app-text);
+}
+.pagination-page-size-select:focus {
+  border-color: var(--app-accent);
+}
+.pagination-nav {
+  @apply flex flex-wrap items-center justify-center gap-2;
+}
 .input {
   @apply rounded-lg border px-3 py-2 text-sm focus:outline-none;
   background: var(--app-control-bg);
@@ -3824,6 +4152,19 @@ onBeforeUnmount(() => {
   color: var(--app-text);
 }
 .input:focus {
+  border-color: var(--app-accent);
+}
+.preset-btn {
+  @apply flex min-w-0 flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
+}
+.preset-btn:hover {
+  background: var(--app-control-hover-bg);
+  border-color: var(--app-accent-soft);
+}
+.preset-btn--active {
+  background: var(--app-accent-tint);
   border-color: var(--app-accent);
 }
 

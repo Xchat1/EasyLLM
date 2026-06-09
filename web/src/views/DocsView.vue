@@ -3,7 +3,7 @@
     <!-- Header -->
     <div class="mb-8">
       <h1 class="text-3xl font-bold text-white mb-2">📖 使用文档</h1>
-      <p class="text-gray-400">快速上手 EasyLLM，管理你的 AI 开发工具与账号</p>
+      <p class="text-gray-400">快速上手 EasyLLM，管理你的 OpenAI / Codex 账号与本地代理</p>
     </div>
 
     <!-- Quick nav -->
@@ -29,8 +29,8 @@
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           <div class="bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-lg p-4">
             <div class="text-2xl mb-2">🤖</div>
-            <div class="text-sm font-semibold text-white mb-1">多平台账号管理</div>
-            <div class="text-xs text-gray-400">OpenAI / Codex、Antigravity、GitHub Copilot、Kiro、Gemini CLI 统一管理</div>
+            <div class="text-sm font-semibold text-white mb-1">Codex 账号管理</div>
+            <div class="text-xs text-gray-400">OpenAI OAuth、API Key、Token 刷新、配额查询统一管理</div>
           </div>
           <div class="bg-gradient-to-br from-green-500/10 to-teal-500/10 border border-green-500/20 rounded-lg p-4">
             <div class="text-2xl mb-2">⚡</div>
@@ -46,8 +46,8 @@
         <div class="flex flex-wrap gap-2 text-xs">
           <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">Go 1.25</span>
           <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">Vue 3</span>
-          <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">SQLite / PostgreSQL</span>
-          <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">Docker 支持</span>
+          <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">本地 SQLite</span>
+          <span class="px-2 py-1 bg-gray-800 rounded text-gray-400">本地运行</span>
         </div>
       </div>
 
@@ -93,17 +93,17 @@ requires_openai_auth = true</pre>
         <!-- Method 3 -->
         <div class="mb-5">
           <h3 class="text-sm font-semibold text-white mb-2">方式三：API Key 账号</h3>
-          <p class="text-xs text-gray-400 mb-3">在 OpenAI / Codex 页面的"API 配置"标签添加第三方 Provider（如 OpenRouter、DeepSeek 等）。</p>
+          <p class="text-xs text-gray-400 mb-3">在 OpenAI / Codex 页面的「API 账号」标签添加自定义 provider、模型、Base URL 与 API Key，点击切换后写入 <code class="code">~/.codex/config.toml</code>。</p>
           <div class="doc-code">
-            <div class="doc-code-header">示例：配置 OpenRouter</div>
-            <pre>model_provider = "openrouter"
-model = "deepseek/deepseek-chat"
+            <div class="doc-code-header">示例：自定义 API 账号</div>
+            <pre>model_provider = "my-provider"
+model = "gpt-4o"
 
-[model_providers.openrouter]
-name = "openrouter"
-base_url = "https://openrouter.ai/api/v1"
-wire_api = "chat"</pre>
-            <button @click="copyCurl('openrouter')" class="doc-code-copy">复制</button>
+[model_providers.my-provider]
+name = "my-provider"
+base_url = "https://api.example.com/v1"
+wire_api = "responses"</pre>
+            <button @click="copyCurl('api-account')" class="doc-code-copy">复制</button>
           </div>
         </div>
 
@@ -182,7 +182,7 @@ client = OpenAI(
 
 response = client.responses.create(
     model="gpt-5.4",
-    input="用 Python 写一个 HTTP 服务器",
+    input="用 Python 写一个命令行参数解析示例",
 )
 
 print(response.output_text)</pre>
@@ -217,7 +217,7 @@ print(response.output_text)</pre>
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">📦</span> 批量导入
         </h2>
-        <p class="text-sm text-gray-400 mb-4">支持 token 文件、扫描目录、refresh_token、Sub2API、cockpit-tools 导出文件，以及 EasyLLM 备份文件。</p>
+        <p class="text-sm text-gray-400 mb-4">支持 token 文件、自适应导入（上传单个/多个 JSON 自动识别格式）、refresh_token、CPA JSON，以及 EasyLLM 备份文件。</p>
 
         <div class="space-y-4">
           <div>
@@ -237,14 +237,15 @@ print(response.output_text)</pre>
           </div>
 
           <div>
-            <h3 class="text-sm font-semibold text-white mb-2">扫描目录导入</h3>
-            <p class="text-xs text-gray-400 mb-2">将 token JSON 文件放在 <code class="code">./auth/</code> 目录下，然后调用扫描接口自动导入。</p>
+            <h3 class="text-sm font-semibold text-white mb-2">自适应导入（上传 JSON）</h3>
+            <p class="text-xs text-gray-400 mb-2">在 Web 端选择单个或多个 JSON 文件即可自动识别并导入；也可用 API 上传 multipart 文件。</p>
             <div class="doc-code">
               <div class="doc-code-header">bash</div>
-              <pre>curl -X POST http://localhost:{{ port }}/api/v1/openai/import/scan-dir \
-  -H "Content-Type: application/json" \
-  -d '{"dir": "./auth"}'</pre>
-              <button @click="copyCurl('openai-scan')" class="doc-code-copy">复制</button>
+              <pre>curl -X POST http://localhost:{{ port }}/api/v1/openai/import/auto-files \
+  -H "Authorization: Bearer TOKEN" \
+  -F "files=@account1.json" \
+  -F "files=@account2-cpa.json"</pre>
+              <button @click="copyCurl('openai-auto')" class="doc-code-copy">复制</button>
             </div>
           </div>
 
@@ -304,35 +305,6 @@ least_used         — 选择请求次数最少的账号</pre>
         </div>
       </div>
 
-      <!-- Docker -->
-      <div id="sec-docker" class="card doc-section p-4 sm:p-5">
-        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
-          <span class="text-2xl">🐳</span> Docker 部署
-        </h2>
-        <p class="text-sm text-gray-400 mb-4">使用 Docker 快速部署 EasyLLM。</p>
-
-        <div class="doc-code mb-4">
-          <div class="doc-code-header">docker-compose.yml</div>
-          <pre>services:
-  easyllm:
-    build: .
-    ports:
-      - "8022:8022"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - SERVER_PORT=8022
-      - DB_TYPE=sqlite
-    restart: unless-stopped</pre>
-          <button @click="copyCurl('docker')" class="doc-code-copy">复制</button>
-        </div>
-
-        <div class="doc-code">
-          <div class="doc-code-header">启动命令</div>
-          <pre>docker compose up -d</pre>
-        </div>
-      </div>
-
       <!-- FAQ -->
       <div id="sec-faq" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
@@ -375,17 +347,16 @@ const sections = [
   { id: 'sec-quota', icon: '📊', label: '配额查询' },
   { id: 'sec-import', icon: '📦', label: '批量导入' },
   { id: 'sec-auth', icon: '🔒', label: '鉴权' },
-  { id: 'sec-docker', icon: '🐳', label: 'Docker' },
   { id: 'sec-faq', icon: '❓', label: 'FAQ' },
 ]
 
 const faqs = [
   { q: 'Codex CLI 报 "Token data is not available." 怎么办？', a: '确保 auth.json 中 last_refresh 在顶层而非 tokens 内部。在 EasyLLM 中重新点击"切换"即可自动修复。' },
-  { q: '代理池请求返回 401 Unauthorized', a: '检查是否在服务配置中设置了 API Key。如果设置了，所有 /v1/* 请求都需要在 Header 中携带 Authorization: Bearer YOUR_KEY。' },
+  { q: '代理池请求返回 401 Unauthorized', a: '若返回 {"detail":"Unauthorized"} 且带 cf-ray，通常是代理池里 OAuth access_token 已失效。EasyLLM 会自动轮换账号并尝试 refresh_token 刷新；若全部账号 refresh 失败，请重新 OAuth 登录或导入带有效 refresh_token 的 CPA/Token 文件。若返回 {"error":{"message":"Invalid API key"}} 则是本地 proxy_api_key 与 Codex 配置不一致。' },
   { q: 'Token 过期了怎么办？', a: '在 OpenAI 账号列表中点击"刷新 Token"按钮，或使用"刷新所有 Token"一键刷新所有 OAuth 账号；刷新完成后会自动触发账号导出。' },
   { q: '配额查询显示 Forbidden', a: '该账号可能没有 Codex 访问权限（需要 ChatGPT Plus/Pro 订阅），或 Token 已失效。' },
-  { q: '如何更改数据库？', a: '在设置 → 数据库页面切换为 PostgreSQL 并填写 DSN，保存后重启服务即可。' },
-  { q: '如何在公网暴露服务？', a: '建议在前面加 Nginx 反向代理并启用 HTTPS。同时务必设置代理池 API Key 和 IP 黑名单来保护端点。' },
+  { q: '如何更改数据库位置？', a: '在设置 → 运行状态中修改 SQLite 数据库路径，保存后重启 EasyLLM 即可。' },
+  { q: 'EasyLLM 是否适合对公网开放？', a: '不适合。EasyLLM 面向本机 Codex/OpenAI 编码对接，后端默认只监听 127.0.0.1。' },
   { q: '5h 和 7d 配额是什么意思？', a: '5h 是短期会话限制，7d 是长期总量限制。在 OpenAI 页面点击"刷新配额"可查看最新使用情况。' },
 ]
 
@@ -398,13 +369,13 @@ name = "EasyLLM API Service"
 base_url = "http://localhost:PORT/v1"
 wire_api = "responses"
 requires_openai_auth = true`,
-  openrouter: `model_provider = "openrouter"
-model = "deepseek/deepseek-chat"
+  'api-account': `model_provider = "my-provider"
+model = "gpt-4o"
 
-[model_providers.openrouter]
-name = "openrouter"
-base_url = "https://openrouter.ai/api/v1"
-wire_api = "chat"`,
+[model_providers.my-provider]
+name = "my-provider"
+base_url = "https://api.example.com/v1"
+wire_api = "responses"`,
   'codex-pool': `chatgpt_base_url = "http://localhost:PORT"`,
   responses: `curl http://localhost:PORT/v1/responses \\
   -H "Content-Type: application/json" \\
@@ -426,7 +397,7 @@ client = OpenAI(
 
 response = client.responses.create(
     model="gpt-5.4",
-    input="用 Python 写一个 HTTP 服务器",
+    input="用 Python 写一个命令行参数解析示例",
 )
 
 print(response.output_text)`,
@@ -438,20 +409,10 @@ print(response.output_text)`,
       "REFRESH_TOKEN_2"
     ]
   }'`,
-  'openai-scan': `curl -X POST http://localhost:PORT/api/v1/openai/import/scan-dir \\
-  -H "Content-Type: application/json" \\
-  -d '{"dir": "./auth"}'`,
-  docker: `services:
-  easyllm:
-    build: .
-    ports:
-      - "8022:8022"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - SERVER_PORT=8022
-      - DB_TYPE=sqlite
-    restart: unless-stopped`,
+  'openai-auto': `curl -X POST http://localhost:PORT/api/v1/openai/import/auto-files \\
+  -H "Authorization: Bearer TOKEN" \\
+  -F "files=@account1.json" \\
+  -F "files=@account2-cpa.json"`,
 }
 
 async function copyCurl(key) {

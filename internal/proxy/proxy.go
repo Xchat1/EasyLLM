@@ -50,87 +50,119 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	upstreamURL := buildUpstreamURL(r.URL.Path, r.URL.RawQuery)
-
-	upstreamReq, err := http.NewRequest(r.Method, upstreamURL, bytes.NewReader(body))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to create upstream request", "internal_error")
-		return
-	}
-
-	// Copy headers; in passthrough mode keep original Authorization
-	for key, values := range r.Header {
-		lower := strings.ToLower(key)
-		if lower == "chatgpt-account-id" {
-			continue
-		}
-		if lower == "authorization" && !passthrough {
-			continue
-		}
-		for _, v := range values {
-			upstreamReq.Header.Add(key, v)
-		}
-	}
+	maxAttempts := 1
 	if !passthrough {
-		upstreamReq.Header.Set("Authorization", "Bearer "+entry.accessToken)
+		maxAttempts = 20
+	}
+	tried := map[string]bool{}
+	if entry != nil && entry.accessToken != "" {
+		tried[entry.accessToken] = true
 	}
 
-	// chatgpt-account-id is required by the ChatGPT Codex backend API
-	if entry.chatgptAccountID != "" {
-		upstreamReq.Header.Set("chatgpt-account-id", entry.chatgptAccountID)
-	}
-
-	setCodexCLIHeaders(upstreamReq)
-
-	resp, err := p.httpClient.Do(upstreamReq)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("Upstream request failed: %v", err), "upstream_error")
-		return
-	}
-	defer resp.Body.Close()
-
-	// Capture rate-limit headers and persist to the OpenAI account
-	p.saveRateLimits(entry, resp)
-
-	// Persist stats for codex-source accounts
-	if entry.source == "codex" && p.codexDB != nil {
-		p.codexDB.IncrementRequestCount(entry.id)
-	}
-	if entry.requests != nil {
-		atomicAddInt64(entry.requests, 1)
-	}
-
-	// For /models responses in passthrough mode, disable WebSocket support
-	// so Codex CLI falls back to HTTP (which respects chatgpt_base_url).
-	isModelsReq := r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/models")
-	if isModelsReq && passthrough {
-		respBody, readErr := io.ReadAll(resp.Body)
-		if readErr == nil {
-			respBody = disableWebSocketInModels(respBody)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		upstreamReq, err := http.NewRequest(r.Method, upstreamURL, bytes.NewReader(body))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to create upstream request", "internal_error")
+			return
 		}
-		copyResponseHeaders(w, resp)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(respBody)))
-		w.WriteHeader(resp.StatusCode)
-		w.Write(respBody) //nolint:errcheck
-		return
-	}
 
-	copyResponseHeaders(w, resp)
-	w.WriteHeader(resp.StatusCode)
-
-	// Stream the response body without retaining request or response content.
-	flusher, canFlush := w.(http.Flusher)
-	buf := make([]byte, 8192)
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			w.Write(buf[:n]) //nolint:errcheck
-			if canFlush {
-				flusher.Flush()
+		// Copy headers; in passthrough mode keep original Authorization
+		for key, values := range r.Header {
+			lower := strings.ToLower(key)
+			if lower == "chatgpt-account-id" {
+				continue
+			}
+			if lower == "authorization" && !passthrough {
+				continue
+			}
+			for _, v := range values {
+				upstreamReq.Header.Add(key, v)
 			}
 		}
-		if readErr != nil {
-			break
+		if !passthrough {
+			upstreamReq.Header.Set("Authorization", "Bearer "+entry.accessToken)
 		}
+
+		if entry.chatgptAccountID != "" {
+			upstreamReq.Header.Set("chatgpt-account-id", entry.chatgptAccountID)
+		}
+
+		setCodexCLIHeaders(upstreamReq)
+
+		resp, err := p.httpClient.Do(upstreamReq)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, fmt.Sprintf("Upstream request failed: %v", err), "upstream_error")
+			return
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			errBody, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if !passthrough && isRetryableAuthFailure(resp.StatusCode, errBody) && attempt < maxAttempts-1 {
+				if p.refreshPoolEntryToken(entry) {
+					tried[entry.accessToken] = true
+					continue
+				}
+				if next := p.pickEntryExcluding(tried); next != nil {
+					entry = next
+					tried[entry.accessToken] = true
+					continue
+				}
+			}
+			copyResponseHeaders(w, resp)
+			w.WriteHeader(resp.StatusCode)
+			if len(errBody) > 0 {
+				w.Write(errBody) //nolint:errcheck
+			}
+			return
+		}
+
+		// Capture rate-limit headers and persist to the OpenAI account
+		p.saveRateLimits(entry, resp)
+
+		// Persist stats for codex-source accounts
+		if entry.source == "codex" && p.codexDB != nil {
+			p.codexDB.IncrementRequestCount(entry.id)
+		}
+		if entry.requests != nil {
+			atomicAddInt64(entry.requests, 1)
+		}
+
+		// For /models responses in passthrough mode, disable WebSocket support
+		// so Codex CLI falls back to HTTP (which respects chatgpt_base_url).
+		isModelsReq := r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/models")
+		if isModelsReq && passthrough {
+			respBody, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr == nil {
+				respBody = disableWebSocketInModels(respBody)
+			}
+			copyResponseHeaders(w, resp)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(respBody)))
+			w.WriteHeader(resp.StatusCode)
+			w.Write(respBody) //nolint:errcheck
+			return
+		}
+
+		copyResponseHeaders(w, resp)
+		w.WriteHeader(resp.StatusCode)
+
+		flusher, canFlush := w.(http.Flusher)
+		buf := make([]byte, 8192)
+		for {
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				w.Write(buf[:n]) //nolint:errcheck
+				if canFlush {
+					flusher.Flush()
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		_ = resp.Body.Close()
+		return
 	}
 }
 
@@ -250,7 +282,11 @@ func (p *CodexProxy) ProxyChatCompletions(w http.ResponseWriter, r *http.Request
 			_ = resp.Body.Close()
 
 			// Retry only for rotated pool mode when the chosen account can't auth.
-			if !passthrough && isRetryableAuthFailure(body) && attempt < maxAttempts-1 {
+			if !passthrough && isRetryableAuthFailure(resp.StatusCode, body) && attempt < maxAttempts-1 {
+				if p.refreshPoolEntryToken(entry) {
+					tried[entry.accessToken] = true
+					continue
+				}
 				// Pick a different entry for next attempt.
 				if next := p.pickEntryExcluding(tried); next != nil {
 					entry = next

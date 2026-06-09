@@ -30,12 +30,15 @@ is_blocked_path() {
   case "$path" in
     .env|.env.*|*/.env|*/.env.*|\
     cred.json|*/cred.json|big_token.json|*/big_token.json|\
-    auth/*.json|*/auth/*.json|\
+    auth/*|*/auth/*|exports/*|*/exports/*|backups/*|*/backups/*|\
+    token*.json|*/token*.json|*token*.json|*tokens*.json|*/codex_tokens_*.json|\
+    *refresh*.json|*cpa*.json|*backup*.json|*export*.json|easyllm-accounts-*.json|easyllm_accounts_*.json|\
     data/*|*/data/*|logs/*|*/logs/*|\
     *.log|*.db|*.db-*|*.sqlite|*.sqlite-*|*.sqlite3|*.sqlite3-*|\
     build/*|*/build/*|web/dist/*|*/web/dist/*|node_modules/*|*/node_modules/*|\
+    dist/*|*/dist/*|\
     easyllm|easyllm_new|*.app|*.app/*|\
-    .codex_tmp/*|*/.codex_tmp/*|\
+    .codex_tmp/*|*/.codex_tmp/*|.claude/*|*/.claude/*|.codex/*|*/.codex/*|.agents/*|*/.agents/*|.cursor/*|*/.cursor/*|\
     *.pem|*.key|*.p12|*.pfx|id_rsa|id_dsa|id_ecdsa|id_ed25519)
       return 0
       ;;

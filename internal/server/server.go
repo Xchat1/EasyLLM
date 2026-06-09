@@ -28,13 +28,11 @@ type App struct {
 	cfg         *config.Config
 	auth        *handlers.AuthHandler
 	openai      *handlers.OpenAIHandler
-	antigravity *handlers.AntigravityHandler
 	settings    *handlers.SettingsHandler
-	cockpit     *handlers.CockpitHandler
-	platformExt *handlers.PlatformExtHandler
 	codexProxy  *proxy.CodexProxy
 	openaiStore *storage.OpenAIStorage
 	router      *gin.Engine
+	client      *http.Client
 }
 
 // New creates a new App with all dependencies initialized
@@ -52,11 +50,6 @@ func New(cfg *config.Config) (*App, error) {
 	// Initialize storages
 	openaiStore := storage.NewOpenAIStorage(db)
 	codexStore := storage.NewCodexStorage(db)
-	antigravityStore := storage.NewAntigravityStorage(db)
-	cockpitStore := storage.NewCockpitStorage(db)
-	if err := cockpitStore.MigrateLegacyPlatformAccounts(); err != nil {
-		return nil, fmt.Errorf("failed to migrate cockpit platform data: %w", err)
-	}
 	// Load persisted settings into config
 	loadPersistedSettings(cfg)
 
@@ -75,12 +68,19 @@ func New(cfg *config.Config) (*App, error) {
 		cfg:         cfg,
 		auth:        handlers.NewAuthHandler(),
 		openai:      handlers.NewOpenAIHandler(openaiStore, codexStore),
-		antigravity: handlers.NewAntigravityHandler(antigravityStore),
 		settings:    handlers.NewSettingsHandler(),
-		cockpit:     handlers.NewCockpitHandler(cockpitStore, openaiStore, codexStore),
-		platformExt: handlers.NewPlatformExtHandler(cockpitStore, dataDir),
 		codexProxy:  codexProxy,
 		openaiStore: openaiStore,
+		client: &http.Client{
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				ResponseHeaderTimeout: 120 * time.Second,
+				IdleConnTimeout:       90 * time.Second,
+			},
+		},
 	}
 
 	// Initialize default password if configured
@@ -98,12 +98,11 @@ func (a *App) setupRouter() {
 	}
 
 	r := gin.New()
-	// Allow large multipart uploads (batch import token JSON files).
-	// Gin defaults to 32 MiB which easily triggers "multipart: message too large".
-	// Setting a very large value effectively removes the limit (bounded by machine resources).
-	r.MaxMultipartMemory = 8 << 30 // 8 GiB
+	// Allow moderately large multipart uploads for batch token JSON imports.
+	r.MaxMultipartMemory = 100 << 20 // 100 MiB
 	r.Use(conditionalLogger(a.cfg))
 	r.Use(gin.Recovery())
+	r.Use(GzipMiddleware())
 	r.Use(ipBlacklistMiddleware(a.cfg))
 
 	// CORS - allow all origins since this is a local tool
@@ -134,10 +133,7 @@ func (a *App) setupRouter() {
 
 	a.auth.RegisterProtectedRoutes(protected)
 	a.openai.RegisterRoutes(protected)
-	a.antigravity.RegisterRoutes(protected)
 	a.settings.RegisterRoutes(protected)
-	a.cockpit.RegisterRoutes(protected)
-	a.platformExt.RegisterRoutes(protected)
 
 	// Legacy API endpoint (compatible with original ATM API)
 	legacy := r.Group("/api")
@@ -224,7 +220,7 @@ func (a *App) proxyV1Request(c *gin.Context) {
 	// API key authentication: if proxy_api_key is set, require it (same as codex proxy).
 	if requiredKey, ok := storage.GetSetting("proxy_api_key"); ok && requiredKey != "" {
 		token := extractBearerToken(c.GetHeader("Authorization"))
-		if token != requiredKey {
+		if token != requiredKey && !a.isActiveAPIAccountToken(token) {
 			rejectUnauthorized(c)
 			return
 		}
@@ -300,7 +296,7 @@ func (a *App) proxyV1Request(c *gin.Context) {
 		return
 	}
 
-	upstreamURL := strings.TrimRight(baseURL, "/") + c.Request.URL.Path
+	upstreamURL := buildAPIAccountUpstreamURL(baseURL, c.Request.URL.Path)
 	if q := c.Request.URL.RawQuery; q != "" {
 		upstreamURL += "?" + q
 	}
@@ -313,23 +309,22 @@ func (a *App) proxyV1Request(c *gin.Context) {
 		return
 	}
 
-	// Copy headers except Authorization/Host; set upstream Authorization to the API account key.
+	// Copy headers except upstream auth/Host; apply provider-specific API auth below.
 	for k, vals := range c.Request.Header {
 		lk := strings.ToLower(k)
-		if lk == "authorization" || lk == "host" || lk == "content-length" {
+		if lk == "authorization" || lk == "api-key" || lk == "host" || lk == "content-length" {
 			continue
 		}
 		for _, v := range vals {
 			req.Header.Add(k, v)
 		}
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	applyAPIAccountAuthHeaders(req, active.ModelProvider, apiKey)
 	if req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	client := &http.Client{Timeout: 180 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := a.httpClient().Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{"message": "Upstream request failed: " + err.Error(), "type": "upstream_error"},
@@ -351,12 +346,46 @@ func (a *App) proxyV1Request(c *gin.Context) {
 	_, _ = io.Copy(c.Writer, resp.Body)
 }
 
+func (a *App) isActiveAPIAccountToken(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" || a.openaiStore == nil {
+		return false
+	}
+	active, err := a.openaiStore.GetCodexActive()
+	if err != nil || active == nil || active.AccountType != models.OpenAIAccountTypeAPI {
+		return false
+	}
+	if active.APIKey == nil {
+		return false
+	}
+	return token == strings.TrimSpace(*active.APIKey)
+}
+
+func (a *App) httpClient() *http.Client {
+	return a.client
+}
+
+func applyAPIAccountAuthHeaders(req *http.Request, provider *string, apiKey string) {
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+}
+
+func buildAPIAccountUpstreamURL(baseURL, requestPath string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	path := "/" + strings.TrimLeft(requestPath, "/")
+	if strings.HasSuffix(base, "/v1") && strings.HasPrefix(path, "/v1/") {
+		path = strings.TrimPrefix(path, "/v1")
+	}
+	return base + path
+}
+
 func isWebSocketUpgrade(r *http.Request) bool {
 	for _, v := range r.Header["Connection"] {
-		if strings.EqualFold(strings.TrimSpace(v), "upgrade") {
-			for _, u := range r.Header["Upgrade"] {
-				if strings.EqualFold(strings.TrimSpace(u), "websocket") {
-					return true
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), "upgrade") {
+				for _, u := range r.Header["Upgrade"] {
+					if strings.EqualFold(strings.TrimSpace(u), "websocket") {
+						return true
+					}
 				}
 			}
 		}
@@ -397,7 +426,7 @@ func (a *App) Run() error {
 		Addr:         addr,
 		Handler:      a.router,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 120 * time.Second,
+		WriteTimeout: 0, // no timeout — streaming endpoints (SSE) can run for minutes
 	}
 
 	// Start server in goroutine

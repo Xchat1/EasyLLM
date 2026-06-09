@@ -2,7 +2,7 @@ package proxy
 
 import (
 	"easyllm/internal/models"
-	openaiplatform "easyllm/internal/platforms/openai"
+	openaiplatform "easyllm/internal/openai"
 	"easyllm/internal/storage"
 	"encoding/json"
 	"math/rand"
@@ -296,6 +296,60 @@ func (p *CodexProxy) pickEntryExcluding(tried map[string]bool) *poolEntry {
 	}
 	idx := cands[rand.Intn(len(cands))]
 	return &p.pool[idx]
+}
+
+// refreshPoolEntryToken 尝试用 refresh_token 刷新池中 OAuth 账号，成功则更新内存中的 access_token。
+func (p *CodexProxy) refreshPoolEntryToken(entry *poolEntry) bool {
+	if p == nil || entry == nil || p.openaiDB == nil || entry.source != "openai" {
+		return false
+	}
+	account, err := p.openaiDB.Get(entry.id)
+	if err != nil || account == nil || account.RefreshToken == nil || strings.TrimSpace(*account.RefreshToken) == "" {
+		return false
+	}
+	tokenResp, err := openaiplatform.RefreshToken(strings.TrimSpace(*account.RefreshToken))
+	if err != nil || strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return false
+	}
+
+	oldToken := entry.accessToken
+	account.AccessToken = stringPtr(tokenResp.AccessToken)
+	if tokenResp.RefreshToken != "" {
+		account.RefreshToken = stringPtr(tokenResp.RefreshToken)
+	}
+	if tokenResp.IDToken != "" {
+		account.IDToken = stringPtr(tokenResp.IDToken)
+		if userInfo := openaiplatform.ParseIDToken(tokenResp.IDToken); userInfo != nil {
+			account.ChatGPTAccountID = userInfo.ChatGPTAccountID
+			account.ChatGPTUserID = userInfo.ChatGPTUserID
+			account.OrganizationID = userInfo.OrganizationID
+		}
+	}
+	if tokenResp.ExpiresIn > 0 {
+		t := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+		account.ExpiresAt = &t
+	}
+	account.UpdatedAt = time.Now()
+	if err := p.openaiDB.Save(account); err != nil {
+		return false
+	}
+
+	p.mu.Lock()
+	entry.accessToken = tokenResp.AccessToken
+	if account.ChatGPTAccountID != nil {
+		entry.chatgptAccountID = strings.TrimSpace(*account.ChatGPTAccountID)
+	}
+	delete(p.tokenIndex, oldToken)
+	p.tokenIndex[entry.accessToken] = entry
+	p.mu.Unlock()
+	return true
+}
+
+func stringPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // IsKnownToken checks if a Bearer token belongs to any managed account.

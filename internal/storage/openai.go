@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// --- OpenAI ---
+// --- OpenAI / Codex ---
 
 type OpenAIStorage struct{ db *gorm.DB }
 
@@ -131,55 +131,4 @@ func (s *OpenAIStorage) SetProxyForIDs(ids []string, enabled bool) (int64, error
 		Where("id IN ? AND account_type = ?", ids, models.OpenAIAccountTypeOAuth).
 		Update("proxy_enabled", enabled)
 	return res.RowsAffected, res.Error
-}
-
-// --- Antigravity ---
-
-type AntigravityStorage struct{ db *gorm.DB }
-
-func NewAntigravityStorage(db *gorm.DB) *AntigravityStorage { return &AntigravityStorage{db: db} }
-
-func (s *AntigravityStorage) Save(account *models.AntigravityAccount) error {
-	account.UpdatedAt = time.Now()
-	return s.db.Save(account).Error
-}
-func (s *AntigravityStorage) List() ([]models.AntigravityAccount, error) {
-	var list []models.AntigravityAccount
-	return list, s.db.Order("created_at desc").Find(&list).Error
-}
-func (s *AntigravityStorage) Get(id string) (*models.AntigravityAccount, error) {
-	var a models.AntigravityAccount
-	return &a, s.db.Where("id = ?", id).First(&a).Error
-}
-func (s *AntigravityStorage) Delete(id string) error {
-	res := s.db.Where("id = ?", id).Delete(&models.AntigravityAccount{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
-}
-func (s *AntigravityStorage) DeleteMany(ids []string) error {
-	return s.db.Where("id IN ?", ids).Delete(&models.AntigravityAccount{}).Error
-}
-func (s *AntigravityStorage) SetActive(id string) error {
-	var account models.AntigravityAccount
-	if err := s.db.Select("id").Where("id = ?", id).First(&account).Error; err != nil {
-		return err
-	}
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.AntigravityAccount{}).Where("1 = 1").Update("active", false).Error; err != nil {
-			return err
-		}
-		res := tx.Model(&models.AntigravityAccount{}).Where("id = ?", id).Update("active", true)
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
-		}
-		return nil
-	})
 }

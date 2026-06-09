@@ -3,7 +3,7 @@
     <section class="rounded-3xl border border-gray-800 bg-gradient-to-br from-slate-200/10 via-gray-200/5 to-gray-950 p-6">
       <h1 class="text-3xl font-semibold text-white">设置中心</h1>
       <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">
-        集中管理通用设置、自动刷新、启动路径和运行状态，同时保留代理、数据库和安全配置能力。
+        只保留 EasyLLM / Codex 本地编码对接所需的外观、网络、SQLite 和安全配置。
       </p>
     </section>
 
@@ -13,21 +13,13 @@
       </button>
     </div>
 
-    <section v-if="activeTab === 'experience'" class="card p-5 space-y-5">
+    <section v-if="activeTab === 'appearance'" class="card p-5 space-y-5">
       <div>
-        <h2 class="text-lg font-semibold text-white">通用体验</h2>
-        <p class="mt-1 text-sm text-gray-500">统一配置语言、主题、关闭行为与切号联动策略。</p>
+        <h2 class="text-lg font-semibold text-white">外观</h2>
+        <p class="mt-1 text-sm text-gray-500">前端本地保存，不再依赖额外平台设置接口。</p>
       </div>
 
       <div class="grid gap-4 md:grid-cols-3">
-        <div>
-          <label class="label">语言</label>
-          <select v-model="general.language" class="input">
-            <option value="zh-CN">简体中文</option>
-            <option value="en">English</option>
-            <option value="ja">日本語</option>
-          </select>
-        </div>
         <div class="md:col-span-2">
           <label class="label">外观模式</label>
           <div class="theme-segmented">
@@ -36,14 +28,14 @@
               :key="mode.id"
               type="button"
               class="theme-segmented-option"
-              :class="{ 'theme-segmented-option-active': general.theme === mode.id }"
+              :class="{ 'theme-segmented-option-active': appearance.mode === mode.id }"
               @click="setThemeModePreference(mode.id)"
             >
               {{ mode.label }}
             </button>
           </div>
         </div>
-        <div class="md:col-span-2">
+        <div class="md:col-span-3">
           <label class="label">Apple 风格强调色</label>
           <div class="accent-theme-grid">
             <button
@@ -51,7 +43,7 @@
               :key="accent.id"
               type="button"
               class="accent-theme-option"
-              :class="{ 'accent-theme-option-active': general.accent_theme === accent.id }"
+              :class="{ 'accent-theme-option-active': appearance.accent === accent.id }"
               :style="{ '--accent-swatch': accent.swatch }"
               @click="setAccentThemePreference(accent.id)"
             >
@@ -60,104 +52,6 @@
             </button>
           </div>
         </div>
-        <div>
-          <label class="label">关闭行为</label>
-          <select v-model="general.close_behavior" class="input">
-            <option value="ask">每次询问</option>
-            <option value="minimize">最小化到后台</option>
-            <option value="quit">直接退出</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="grid gap-4 md:grid-cols-2">
-        <label class="flex items-center justify-between rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
-          <div>
-            <div class="text-sm font-medium text-white">隐私模式</div>
-            <div class="mt-1 text-xs text-gray-500">在总览和列表里优先显示脱敏信息。</div>
-          </div>
-          <input v-model="general.privacy_mode" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
-        </label>
-
-        <label class="flex items-center justify-between rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
-          <div>
-            <div class="text-sm font-medium text-white">切换 Codex 时自动拉起</div>
-            <div class="mt-1 text-xs text-gray-500">切号时自动拉起对应的客户端。</div>
-          </div>
-          <input v-model="general.integrations.codex_launch_on_switch" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
-        </label>
-
-        <label class="flex items-center justify-between rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
-          <div>
-            <div class="text-sm font-medium text-white">同步 OpenCode 账号</div>
-            <div class="mt-1 text-xs text-gray-500">切换后同步 OpenCode 本地认证状态。</div>
-          </div>
-          <input v-model="general.integrations.opencode_sync_on_switch" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
-        </label>
-
-        <label class="flex items-center justify-between rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
-          <div>
-            <div class="text-sm font-medium text-white">覆盖 OpenCode auth</div>
-            <div class="mt-1 text-xs text-gray-500">同步时覆盖现有 auth 文件。</div>
-          </div>
-          <input v-model="general.integrations.opencode_auth_overwrite_on_switch" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
-        </label>
-      </div>
-
-      <div class="flex justify-end">
-        <button class="btn btn-primary" @click="saveGeneralSettings">保存通用设置</button>
-      </div>
-    </section>
-
-    <section v-else-if="activeTab === 'refresh'" class="card p-5 space-y-5">
-      <div>
-        <h2 class="text-lg font-semibold text-white">自动刷新策略</h2>
-        <p class="mt-1 text-sm text-gray-500">全局默认值会作为各平台的兜底间隔，支持单独覆盖。</p>
-      </div>
-
-      <div class="grid gap-4 md:grid-cols-3">
-        <div>
-          <label class="label">全局默认刷新分钟数</label>
-          <input v-model.number="general.auto_refresh_minutes" type="number" min="1" class="input" />
-        </div>
-      </div>
-
-      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <div v-for="platform in cockpitPlatforms" :key="platform.id" class="rounded-2xl border border-gray-800 bg-gray-950/60 p-4">
-          <div class="flex items-center gap-2">
-            <PlatformIcon :platform="platform" size="sm" />
-            <span class="font-medium text-white">{{ platform.label }}</span>
-          </div>
-          <label class="label mt-4">刷新分钟数</label>
-          <input
-            v-model.number="general.refresh_intervals[platform.id]"
-            type="number"
-            min="1"
-            class="input"
-          />
-        </div>
-      </div>
-
-      <div class="flex justify-end">
-        <button class="btn btn-primary" @click="saveGeneralSettings">保存刷新策略</button>
-      </div>
-    </section>
-
-    <section v-else-if="activeTab === 'paths'" class="card p-5 space-y-5">
-      <div>
-        <h2 class="text-lg font-semibold text-white">启动路径</h2>
-        <p class="mt-1 text-sm text-gray-500">集中管理各客户端的可执行文件路径，用于环境联动拉起。</p>
-      </div>
-
-      <div class="grid gap-4 md:grid-cols-2">
-        <div v-for="entry in pathEntries" :key="entry.key">
-          <label class="label">{{ entry.label }}</label>
-          <input v-model="general.app_paths[entry.key]" class="input" :placeholder="entry.placeholder" />
-        </div>
-      </div>
-
-      <div class="flex justify-end">
-        <button class="btn btn-primary" @click="saveGeneralSettings">保存路径配置</button>
       </div>
     </section>
 
@@ -166,57 +60,49 @@
         <article class="card p-5">
           <div>
             <h2 class="text-lg font-semibold text-white">运行状态</h2>
-            <p class="mt-1 text-sm text-gray-500">当前服务和数据面的一些关键指标。</p>
+            <p class="mt-1 text-sm text-gray-500">当前服务和数据面的关键指标。</p>
           </div>
           <dl class="mt-5 grid gap-3 text-sm text-gray-400 md:grid-cols-2">
-            <div class="flex items-center justify-between gap-4 rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
+            <div class="settings-stat">
               <dt>版本</dt>
-              <dd class="text-white">v{{ sysInfo.version || '-' }}</dd>
+              <dd>v{{ sysInfo.version || '-' }}</dd>
             </div>
-            <div class="flex items-center justify-between gap-4 rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
+            <div class="settings-stat">
               <dt>运行时间</dt>
-              <dd class="text-white">{{ sysInfo.uptime || '-' }}</dd>
+              <dd>{{ sysInfo.uptime || '-' }}</dd>
             </div>
-            <div class="flex items-center justify-between gap-4 rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
+            <div class="settings-stat">
               <dt>数据库</dt>
-              <dd class="text-white">{{ sysInfo.db_type || '-' }}</dd>
+              <dd>{{ sysInfo.db_type || 'sqlite' }}</dd>
             </div>
-            <div class="flex items-center justify-between gap-4 rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
+            <div class="settings-stat">
               <dt>端口</dt>
-              <dd class="text-white">{{ sysInfo.server_port || 8022 }}</dd>
+              <dd>{{ sysInfo.server_port || 8022 }}</dd>
             </div>
-            <div class="flex items-center justify-between gap-4 rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
+            <div class="settings-stat">
               <dt>Goroutines</dt>
-              <dd class="text-white">{{ sysInfo.goroutines || '-' }}</dd>
+              <dd>{{ sysInfo.goroutines || '-' }}</dd>
             </div>
-            <div class="flex items-center justify-between gap-4 rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
+            <div class="settings-stat">
               <dt>内存</dt>
-              <dd class="text-white">{{ sysInfo.memory_alloc_mb || '-' }} MB</dd>
+              <dd>{{ sysInfo.memory_alloc_mb || '-' }} MB</dd>
             </div>
           </dl>
         </article>
 
         <article class="card p-5">
           <div>
-            <h2 class="text-lg font-semibold text-white">总览摘要</h2>
-            <p class="mt-1 text-sm text-gray-500">从统一平台总览接口拉取的实时摘要。</p>
+            <h2 class="text-lg font-semibold text-white">Codex 账号</h2>
+            <p class="mt-1 text-sm text-gray-500">当前只统计 OpenAI / Codex 相关数据。</p>
           </div>
           <div class="mt-5 grid grid-cols-2 gap-3">
-            <div class="rounded-2xl border border-gray-800 bg-gray-950/60 p-4">
-              <div class="text-xs text-gray-500">账号</div>
-              <div class="mt-2 text-2xl font-semibold text-white">{{ overview.summary?.total_accounts || 0 }}</div>
+            <div class="settings-metric">
+              <div>OpenAI 账号</div>
+              <strong>{{ sysInfo.accounts?.openai || 0 }}</strong>
             </div>
-            <div class="rounded-2xl border border-gray-800 bg-gray-950/60 p-4">
-              <div class="text-xs text-gray-500">实例</div>
-              <div class="mt-2 text-2xl font-semibold text-white">{{ overview.summary?.total_instances || 0 }}</div>
-            </div>
-            <div class="rounded-2xl border border-gray-800 bg-gray-950/60 p-4">
-              <div class="text-xs text-gray-500">唤醒</div>
-              <div class="mt-2 text-2xl font-semibold text-white">{{ overview.summary?.total_wakeup_tasks || 0 }}</div>
-            </div>
-            <div class="rounded-2xl border border-gray-800 bg-gray-950/60 p-4">
-              <div class="text-xs text-gray-500">Codex 代理</div>
-              <div class="mt-2 text-2xl font-semibold text-white">{{ overview.proxy?.enabled_accounts || 0 }} / {{ overview.proxy?.accounts || 0 }}</div>
+            <div class="settings-metric">
+              <div>Codex 池账号</div>
+              <strong>{{ sysInfo.accounts?.codex_pool || 0 }}</strong>
             </div>
           </div>
         </article>
@@ -225,7 +111,7 @@
       <article class="card p-5 space-y-5">
         <div>
           <h2 class="text-lg font-semibold text-white">系统开关与连接</h2>
-          <p class="mt-1 text-sm text-gray-500">保留 EasyLLM 自身的网络和数据库配置能力。</p>
+          <p class="mt-1 text-sm text-gray-500">保留 EasyLLM 本机网络和 SQLite 路径配置。</p>
         </div>
 
         <div class="grid gap-4 md:grid-cols-2">
@@ -239,7 +125,7 @@
           <label class="flex items-center justify-between rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3">
             <div>
               <div class="text-sm font-medium text-white">HTTP 代理</div>
-              <div class="mt-1 text-xs text-gray-500">上游请求统一经过代理服务器。</div>
+              <div class="mt-1 text-xs text-gray-500">上游请求统一经过本机配置的 HTTP 代理。</div>
             </div>
             <input v-model="switches.proxy_enabled" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
           </label>
@@ -254,19 +140,12 @@
             <label class="label">代理端口</label>
             <input v-model.number="proxy.port" type="number" class="input" placeholder="7890" />
           </div>
-          <div>
-            <label class="label">数据库类型</label>
-            <select v-model="database.type" class="input">
-              <option value="sqlite">SQLite</option>
-              <option value="postgres">PostgreSQL</option>
-            </select>
-          </div>
-          <div>
-            <label class="label">数据库路径 / DSN</label>
+          <div class="md:col-span-2">
+            <label class="label">SQLite 数据库路径</label>
             <input
-              v-model="databasePathOrDSN"
+              v-model="database.sqlite_path"
               class="input"
-              :placeholder="database.type === 'sqlite' ? './data/easyllm.db' : 'postgres dsn'"
+              placeholder="默认: 系统应用数据目录/EasyLLM/data/easyllm.db"
             />
           </div>
         </div>
@@ -274,7 +153,7 @@
         <div class="flex justify-end gap-2">
           <button class="btn btn-secondary" @click="saveSwitches">保存开关</button>
           <button class="btn btn-secondary" @click="saveProxy">保存代理</button>
-          <button class="btn btn-primary" @click="saveDatabase">保存数据库</button>
+          <button class="btn btn-primary" @click="saveDatabase">保存 SQLite 路径</button>
         </div>
       </article>
     </section>
@@ -292,7 +171,7 @@
         </div>
         <div>
           <label class="label">{{ passwordSet ? '新密码' : '设置密码' }}</label>
-          <input v-model="pwForm.newPassword" type="password" class="input" placeholder="至少 4 位" />
+          <input v-model="pwForm.newPassword" type="password" class="input" :placeholder="`至少 ${minPasswordLength} 位`" />
         </div>
         <div>
           <label class="label">确认密码</label>
@@ -314,152 +193,65 @@
 
 <script setup>
 import { computed, inject, onMounted, ref } from 'vue'
-import { authAPI, cockpitAPI, settingsAPI } from '@/api'
-import PlatformIcon from '@/components/PlatformIcon.vue'
-import { ACCENT_THEMES, DEFAULT_APPEARANCE, THEME_MODES } from '@/config/theme'
+import { authAPI, settingsAPI } from '@/api'
+import { ACCENT_THEMES, THEME_MODES } from '@/config/theme'
 import { useAppearance } from '@/composables/useAppearance'
-import { cockpitPlatforms } from '@/lib/platforms'
 
 const notify = inject('notify')
-const { setAppearance } = useAppearance()
+const { themeMode, accentTheme, setThemeMode, setAccentTheme } = useAppearance()
 const themeModes = THEME_MODES
 const accentThemes = ACCENT_THEMES
 
 const tabs = [
-  { id: 'experience', label: '通用体验' },
-  { id: 'refresh', label: '自动刷新' },
-  { id: 'paths', label: '启动路径' },
+  { id: 'appearance', label: '外观' },
   { id: 'runtime', label: '运行状态' },
   { id: 'security', label: '安全' },
 ]
 
-const pathEntries = [
-  { key: 'opencode', label: 'OpenCode 路径', placeholder: '/Applications/OpenCode.app' },
-  { key: 'antigravity', label: 'Antigravity 路径', placeholder: '/Applications/Antigravity.app' },
-  { key: 'codex', label: 'Codex 路径', placeholder: '/Applications/Codex.app' },
-  { key: 'vscode', label: 'VS Code 路径', placeholder: '/Applications/Visual Studio Code.app' },
-  { key: 'kiro', label: 'Kiro 路径', placeholder: '/Applications/Kiro.app' },
-  { key: 'gemini', label: 'Gemini CLI 路径', placeholder: '/usr/local/bin/gemini' },
-]
-
-const activeTab = ref('experience')
-
-const general = ref(defaultGeneralSettings())
+const activeTab = ref('appearance')
 const switches = ref({ ip_blacklist_enabled: false, proxy_enabled: false })
 const proxy = ref({ enabled: false, host: '', port: 0, username: '', password: '' })
-const database = ref({ type: 'sqlite', sqlite_path: './data/easyllm.db', dsn: '' })
+const database = ref({ type: 'sqlite', sqlite_path: '' })
 const sysInfo = ref({})
-const overview = ref({ summary: {}, proxy: {} })
 const passwordSet = ref(false)
 
 const pwForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
 const pwError = ref('')
 const pwSaving = ref(false)
+const minPasswordLength = 8
 
-const databasePathOrDSN = computed({
-  get() {
-    return database.value.type === 'sqlite' ? database.value.sqlite_path : database.value.dsn
-  },
-  set(value) {
-    if (database.value.type === 'sqlite') {
-      database.value.sqlite_path = value
-    } else {
-      database.value.dsn = value
-    }
-  },
-})
+const appearance = computed(() => ({
+  mode: themeMode.value,
+  accent: accentTheme.value,
+}))
 
 onMounted(loadSettings)
 
 async function loadSettings() {
   try {
-    const [generalData, switchData, proxyData, databaseData, sysData, overviewData, authData] = await Promise.all([
-      cockpitAPI.getGeneralSettings(),
+    const [switchData, proxyData, databaseData, sysData, authData] = await Promise.all([
       settingsAPI.getSwitches(),
       settingsAPI.getProxy(),
       settingsAPI.getDatabase(),
       settingsAPI.systemInfo(),
-      cockpitAPI.overview(),
       authAPI.check(),
     ])
-    general.value = mergeGeneralSettings(generalData)
-    applyAppearanceFromSettings()
     switches.value = switchData
     proxy.value = { ...proxy.value, ...proxyData }
     database.value = { ...database.value, ...databaseData }
     sysInfo.value = sysData
-    overview.value = overviewData
     passwordSet.value = !!authData.password_set
   } catch (error) {
     notify?.(error.message || '加载设置失败', 'error')
   }
 }
 
-function defaultGeneralSettings() {
-  return {
-    language: 'zh-CN',
-    theme: DEFAULT_APPEARANCE.mode,
-    accent_theme: DEFAULT_APPEARANCE.accent,
-    close_behavior: 'ask',
-    privacy_mode: false,
-    auto_refresh_minutes: 5,
-    refresh_intervals: Object.fromEntries(cockpitPlatforms.map((platform) => [platform.id, 10])),
-    app_paths: Object.fromEntries(pathEntries.map((entry) => [entry.key, ''])),
-    integrations: {
-      codex_launch_on_switch: true,
-      opencode_sync_on_switch: false,
-      opencode_auth_overwrite_on_switch: false,
-    },
-  }
-}
-
-function mergeGeneralSettings(data) {
-  const defaults = defaultGeneralSettings()
-  return {
-    ...defaults,
-    ...data,
-    theme: data?.theme || defaults.theme,
-    accent_theme: data?.accent_theme || defaults.accent_theme,
-    refresh_intervals: {
-      ...defaults.refresh_intervals,
-      ...(data?.refresh_intervals || {}),
-    },
-    app_paths: {
-      ...defaults.app_paths,
-      ...(data?.app_paths || {}),
-    },
-    integrations: {
-      ...defaults.integrations,
-      ...(data?.integrations || {}),
-    },
-  }
-}
-
-async function saveGeneralSettings() {
-  try {
-    general.value = mergeGeneralSettings(await cockpitAPI.updateGeneralSettings(general.value))
-    applyAppearanceFromSettings()
-    notify?.('设置已保存', 'success')
-  } catch (error) {
-    notify?.(error.message || '保存失败', 'error')
-  }
-}
-
 function setThemeModePreference(mode) {
-  general.value.theme = mode
-  applyAppearanceFromSettings()
+  setThemeMode(mode)
 }
 
 function setAccentThemePreference(accent) {
-  general.value.accent_theme = accent
-  applyAppearanceFromSettings()
-}
-
-function applyAppearanceFromSettings() {
-  setAppearance({
-    mode: general.value.theme,
-    accent: general.value.accent_theme,
-  })
+  setAccentTheme(accent)
 }
 
 async function saveSwitches() {
@@ -486,10 +278,9 @@ async function saveProxy() {
 async function saveDatabase() {
   try {
     await settingsAPI.updateDatabase({
-      ...database.value,
-      dsn: database.value.dsn === '[configured]' ? '' : database.value.dsn,
+      sqlite_path: database.value.sqlite_path,
     })
-    notify?.('数据库配置已保存，重启后生效', 'success')
+    notify?.('SQLite 路径已保存，重启后生效', 'success')
   } catch (error) {
     notify?.(error.message || '保存失败', 'error')
   }
@@ -497,8 +288,8 @@ async function saveDatabase() {
 
 async function savePassword() {
   pwError.value = ''
-  if (!pwForm.value.newPassword || pwForm.value.newPassword.length < 4) {
-    pwError.value = '新密码至少需要 4 位'
+  if (passwordLength(pwForm.value.newPassword) < minPasswordLength) {
+    pwError.value = `新密码至少需要 ${minPasswordLength} 位`
     return
   }
   if (pwForm.value.newPassword !== pwForm.value.confirmPassword) {
@@ -518,63 +309,105 @@ async function savePassword() {
       passwordSet.value = true
     }
     pwForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
-    notify?.('密码已保存', 'success')
+    notify?.('密码已更新', 'success')
   } catch (error) {
-    pwError.value = error.message || '保存失败'
+    pwError.value = error.message || '密码保存失败'
   } finally {
     pwSaving.value = false
   }
+}
+
+function passwordLength(value) {
+  return Array.from(value || '').length
 }
 </script>
 
 <style scoped>
 .theme-segmented {
-  @apply grid grid-cols-3 gap-1 rounded-2xl border p-1;
+  display: inline-flex;
+  border: 1px solid var(--app-border);
+  border-radius: 0.75rem;
   background: var(--app-control-bg);
-  border-color: var(--app-border);
+  padding: 0.25rem;
 }
 
 .theme-segmented-option {
-  @apply rounded-xl px-3 py-2 text-sm font-medium transition-colors;
-  color: var(--app-text-secondary);
-}
-
-.theme-segmented-option:hover {
-  background: var(--app-control-hover-bg);
-  color: var(--app-text);
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  color: var(--app-text-muted);
+  font-size: 0.875rem;
+  transition: color 0.2s ease, background 0.2s ease;
 }
 
 .theme-segmented-option-active {
-  color: #fff;
-  background: linear-gradient(135deg, var(--app-accent), var(--app-accent-strong));
-  box-shadow: 0 10px 24px var(--app-accent-shadow);
+  background: var(--app-control-active-bg);
+  color: var(--app-text);
 }
 
 .accent-theme-grid {
-  @apply grid gap-2 sm:grid-cols-2 xl:grid-cols-5;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
 }
 
 .accent-theme-option {
-  @apply flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm transition-colors;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.75rem;
   background: var(--app-control-bg);
-  border-color: var(--app-border);
+  padding: 0.5rem 0.75rem;
   color: var(--app-text-secondary);
-}
-
-.accent-theme-option:hover {
-  background: var(--app-control-hover-bg);
-  color: var(--app-text);
+  font-size: 0.875rem;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
 }
 
 .accent-theme-option-active {
-  border-color: var(--app-accent-soft);
+  border-color: var(--app-accent);
   color: var(--app-text);
-  box-shadow: inset 0 0 0 1px var(--app-accent-soft);
 }
 
 .accent-theme-dot {
-  @apply h-3.5 w-3.5 rounded-full;
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 9999px;
   background: var(--accent-swatch);
-  box-shadow: 0 0 0 3px var(--app-surface-muted);
+}
+
+.settings-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--app-border);
+  border-radius: 1rem;
+  background: var(--app-control-bg);
+  padding: 0.75rem 1rem;
+}
+
+.settings-stat dd {
+  color: var(--app-text);
+}
+
+.settings-metric {
+  border: 1px solid var(--app-border);
+  border-radius: 1rem;
+  background: var(--app-control-bg);
+  padding: 1rem;
+}
+
+.settings-metric div {
+  color: var(--app-text-faint);
+  font-size: 0.75rem;
+}
+
+.settings-metric strong {
+  display: block;
+  margin-top: 0.5rem;
+  color: var(--app-text);
+  font-size: 1.5rem;
+  font-weight: 600;
 }
 </style>
