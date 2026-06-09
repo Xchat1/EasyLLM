@@ -2,6 +2,14 @@
 
 本文档覆盖 EasyLLM 的日常使用流程：登录、导入账号、接入 Codex CLI、启用代理池以及调用本地 API。
 
+安装包下载请进入 [GitHub Releases](https://github.com/Xchat1/EasyLLM/releases)：
+
+| 系统 / 设备 | 下载文件 |
+| --- | --- |
+| Windows 10/11 64 位 | `EasyLLM-*-windows-amd64.zip` |
+| Mac Apple Silicon（M1/M2/M3/M4） | `EasyLLM-*-macos-arm64.zip` |
+| Mac Intel 芯片 | `EasyLLM-*-macos-amd64.zip` |
+
 ## 1. 登录与初始化
 
 首次启动后访问：
