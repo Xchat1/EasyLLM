@@ -117,5 +117,5 @@ GET  /api/health
 
 - 默认不保留代理请求日志。
 - 导出的账号备份包含敏感 Token，请只保存在可信位置。
-- EasyLLM 面向本机 Codex/OpenAI 对接，默认监听 `127.0.0.1`，不要对公网开放。
+- EasyLLM 面向本机 Codex/OpenAI 对接，脚本模式默认监听 `127.0.0.1:8022`，不要对公网开放。
 - 不要将 `.env`、数据库、Token JSON 或导出备份提交到 Git。
