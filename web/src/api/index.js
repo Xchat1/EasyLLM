@@ -28,13 +28,7 @@ api.interceptors.request.use(attachToken)
 longApi.interceptors.request.use(attachToken)
 
 function handleResponseError(error) {
-  if (error.response?.status === 401) {
-    const path = window.location.pathname
-    if (path !== '/login') {
-      localStorage.removeItem('easyllm_token')
-      window.location.href = '/login'
-    }
-  }
+  // 401 redirect removed
   const message = error.response?.data?.error || error.message || 'Unknown error'
   return Promise.reject(new Error(message))
 }

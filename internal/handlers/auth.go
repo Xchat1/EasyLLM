@@ -174,18 +174,6 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		auth := c.GetHeader("Authorization")
-		if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, models.APIError{Error: "Authentication required", Code: "UNAUTHORIZED"})
-			return
-		}
-
-		token := auth[7:]
-		if err := verifyJWT(token, config.Get().App.SecretKey); err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, models.APIError{Error: "Invalid or expired token", Code: "UNAUTHORIZED"})
-			return
-		}
-
 		c.Next()
 	}
 }
