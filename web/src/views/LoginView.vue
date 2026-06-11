@@ -12,7 +12,7 @@
           <input
             v-model="password"
             :type="showPassword ? 'text' : 'password'"
-            :placeholder="isSetup ? `设置密码（至少 ${minPasswordLength} 位）` : '输入密码'"
+            :placeholder="isSetup ? '设置密码' : '输入密码'"
             class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
             autofocus
           />
@@ -59,7 +59,6 @@ const showPassword = ref(false)
 const loading = ref(false)
 const error = ref('')
 const isSetup = ref(false)
-const minPasswordLength = 8
 
 onMounted(async () => {
   try {
@@ -72,11 +71,6 @@ onMounted(async () => {
 
 async function handleSubmit() {
   error.value = ''
-
-  if (passwordLength(password.value) < minPasswordLength) {
-    error.value = `密码至少 ${minPasswordLength} 位`
-    return
-  }
 
   if (isSetup.value) {
     if (password.value !== confirmPassword.value) {
@@ -105,10 +99,6 @@ async function handleSubmit() {
       loading.value = false
     }
   }
-}
-
-function passwordLength(value) {
-  return Array.from(value || '').length
 }
 </script>
 

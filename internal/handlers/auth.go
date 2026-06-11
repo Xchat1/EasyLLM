@@ -12,15 +12,12 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct{}
-
-const minPasswordLength = 8
 
 func NewAuthHandler() *AuthHandler {
 	return &AuthHandler{}
@@ -31,9 +28,6 @@ func (h *AuthHandler) InitializeDefaultPassword() error {
 	defaultPwd := config.Get().App.DefaultPassword
 	if defaultPwd == "" {
 		return nil // No default password configured
-	}
-	if !passwordMeetsMinimum(defaultPwd) {
-		return fmt.Errorf("DEFAULT_PASSWORD must be at least %d characters", minPasswordLength)
 	}
 
 	// Check if password is already set
@@ -85,8 +79,8 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 	var req struct {
 		Password string `json:"password" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || !passwordMeetsMinimum(req.Password) {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: fmt.Sprintf("Password must be at least %d characters", minPasswordLength), Code: "INVALID_REQUEST"})
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "Password is required", Code: "INVALID_REQUEST"})
 		return
 	}
 
@@ -149,11 +143,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		NewPassword string `json:"new_password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: fmt.Sprintf("Old password and new password (min %d chars) are required", minPasswordLength), Code: "INVALID_REQUEST"})
-		return
-	}
-	if !passwordMeetsMinimum(req.NewPassword) {
-		c.JSON(http.StatusBadRequest, models.APIError{Error: fmt.Sprintf("New password must be at least %d characters", minPasswordLength), Code: "INVALID_REQUEST"})
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "Old password and new password are required", Code: "INVALID_REQUEST"})
 		return
 	}
 
@@ -198,10 +188,6 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
-}
-
-func passwordMeetsMinimum(password string) bool {
-	return utf8.RuneCountInString(password) >= minPasswordLength
 }
 
 // Simple JWT implementation using HMAC-SHA256 (no external dependency needed)

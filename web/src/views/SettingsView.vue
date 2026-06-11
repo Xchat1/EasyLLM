@@ -171,7 +171,7 @@
         </div>
         <div>
           <label class="label">{{ passwordSet ? '新密码' : '设置密码' }}</label>
-          <input v-model="pwForm.newPassword" type="password" class="input" :placeholder="`至少 ${minPasswordLength} 位`" />
+          <input v-model="pwForm.newPassword" type="password" class="input" placeholder="输入密码" />
         </div>
         <div>
           <label class="label">确认密码</label>
@@ -218,7 +218,6 @@ const passwordSet = ref(false)
 const pwForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
 const pwError = ref('')
 const pwSaving = ref(false)
-const minPasswordLength = 8
 
 const appearance = computed(() => ({
   mode: themeMode.value,
@@ -288,8 +287,8 @@ async function saveDatabase() {
 
 async function savePassword() {
   pwError.value = ''
-  if (passwordLength(pwForm.value.newPassword) < minPasswordLength) {
-    pwError.value = `新密码至少需要 ${minPasswordLength} 位`
+  if (!pwForm.value.newPassword) {
+    pwError.value = '请输入新密码'
     return
   }
   if (pwForm.value.newPassword !== pwForm.value.confirmPassword) {
@@ -315,10 +314,6 @@ async function savePassword() {
   } finally {
     pwSaving.value = false
   }
-}
-
-function passwordLength(value) {
-  return Array.from(value || '').length
 }
 </script>
 
