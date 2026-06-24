@@ -57,6 +57,7 @@ Thumbs.db
 .idea/
 .claude/
 .codex/
+.codebuddy/
 .agents/
 .cursor/
 .kilo/
