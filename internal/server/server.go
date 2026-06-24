@@ -25,14 +25,15 @@ import (
 
 // App holds all application dependencies
 type App struct {
-	cfg         *config.Config
-	auth        *handlers.AuthHandler
-	openai      *handlers.OpenAIHandler
-	settings    *handlers.SettingsHandler
-	codexProxy  *proxy.CodexProxy
-	openaiStore *storage.OpenAIStorage
-	router      *gin.Engine
-	client      *http.Client
+	cfg           *config.Config
+	auth          *handlers.AuthHandler
+	openai        *handlers.OpenAIHandler
+	settings      *handlers.SettingsHandler
+	codexProxy    *proxy.CodexProxy
+	openaiStore   *storage.OpenAIStorage
+	relayHandler  *proxy.RelayHandler
+	router        *gin.Engine
+	client        *http.Client
 }
 
 // New creates a new App with all dependencies initialized
@@ -65,12 +66,13 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Build handlers
 	app := &App{
-		cfg:         cfg,
-		auth:        handlers.NewAuthHandler(),
-		openai:      handlers.NewOpenAIHandler(openaiStore, codexStore),
-		settings:    handlers.NewSettingsHandler(),
-		codexProxy:  codexProxy,
-		openaiStore: openaiStore,
+		cfg:           cfg,
+		auth:          handlers.NewAuthHandler(),
+		openai:        handlers.NewOpenAIHandler(openaiStore, codexStore),
+		settings:      handlers.NewSettingsHandler(),
+		codexProxy:    codexProxy,
+		openaiStore:   openaiStore,
+		relayHandler:  proxy.NewRelayHandler(nil),
 		client: &http.Client{
 			Transport: &http.Transport{
 				DialContext: (&net.Dialer{
@@ -152,7 +154,7 @@ func (a *App) setupRouter() {
 				"total_accounts":   0,
 				"enabled_accounts": 0,
 				"total_requests":   0,
-				"accounts":         []interface{}{},
+				"accounts":         []any{},
 			})
 			return
 		}
@@ -160,13 +162,28 @@ func (a *App) setupRouter() {
 		c.JSON(http.StatusOK, status)
 	})
 
-	// OpenAI-compatible proxy (v1/*)
+	// OpenAI-compatible proxy (v1/*) — wildcard catches all /v1/… paths.
+	// /v1/responses and /v1/models are dispatched inside proxyV1Request to avoid Gin route conflicts.
 	r.Any("/v1/*path", a.proxyV1Request)
 
 	// ChatGPT-native Codex path — used by Codex CLI when chatgpt_base_url points here.
 	// CLI appends "codex/*" to chatgpt_base_url, resulting in /backend-api/codex/* paths.
 	r.Any("/backend-api/codex/*path", a.proxyCodexRequest)
 	r.Any("/backend-api/codex", a.proxyCodexRequest)
+
+	// Relay config API (protected)
+	relayConfig := protected.Group("/relay")
+	{
+		relayConfig.GET("/config", a.relayHandler.HandleGetRelayConfig)
+		relayConfig.PUT("/config", a.relayHandler.HandleUpdateRelayConfig)
+		relayConfig.POST("/sessions/clear", a.relayHandler.HandleClearRelaySessions)
+		relayConfig.GET("/sessions/stats", a.relayHandler.HandleGetRelaySessionStats)
+		relayConfig.GET("/usage", a.relayHandler.HandleGetRelayUsage)
+		relayConfig.GET("/logs", a.relayHandler.HandleGetRelayLogs)
+		relayConfig.GET("/logs/stream", a.relayHandler.HandleStreamRelayLogs)
+		relayConfig.DELETE("/logs", a.relayHandler.HandleClearRelayLogs)
+		relayConfig.POST("/inject-codex", a.relayHandler.HandleInjectCodexConfig)
+	}
 
 	// SPA fallback - serve index.html for all unmatched routes
 	r.NoRoute(func(c *gin.Context) {
@@ -213,6 +230,19 @@ func (a *App) proxyCodexRequest(c *gin.Context) {
 }
 
 func (a *App) proxyV1Request(c *gin.Context) {
+	path := c.Param("path")
+
+	// Relay: /v1/responses (Responses API → Chat Completions translation)
+	if path == "/responses" && c.Request.Method == http.MethodPost {
+		a.relayHandler.HandleRelayResponses(c)
+		return
+	}
+	// Relay: /v1/models (proxied from upstream)
+	if path == "/models" {
+		a.relayHandler.HandleRelayModels(c)
+		return
+	}
+
 	if !allowLocalProxyFallback(c) {
 		return
 	}
@@ -365,7 +395,7 @@ func (a *App) httpClient() *http.Client {
 	return a.client
 }
 
-func applyAPIAccountAuthHeaders(req *http.Request, provider *string, apiKey string) {
+func applyAPIAccountAuthHeaders(req *http.Request, _ *string, apiKey string) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 }
 
@@ -502,7 +532,7 @@ func parseInt(s string) int {
 	return i
 }
 
-func conditionalLogger(cfg *config.Config) gin.HandlerFunc {
+func conditionalLogger(_ *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
 	}
@@ -541,8 +571,9 @@ func ipBlacklistMiddleware(cfg *config.Config) gin.HandlerFunc {
 }
 
 // extractBearerToken extracts the token from an Authorization: Bearer <token> header.
+// Case-insensitive per RFC 7235.
 func extractBearerToken(auth string) string {
-	if len(auth) > 7 && (auth[:7] == "Bearer " || auth[:7] == "bearer ") {
+	if len(auth) > 7 && strings.EqualFold(auth[:7], "bearer ") {
 		return auth[7:]
 	}
 	return ""

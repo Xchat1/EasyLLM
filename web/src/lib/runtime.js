@@ -28,3 +28,8 @@ export function localServiceOrigin() {
 export function localServiceAPIBaseURL() {
   return `${localServiceOrigin()}/v1`
 }
+
+/** Relay 协议转换端点 — /v1/responses 已统一挂在 /v1 根下，与 OpenAI 兼容 API 同根。 */
+export function localRelayServiceURL() {
+  return localServiceAPIBaseURL()
+}

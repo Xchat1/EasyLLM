@@ -219,6 +219,8 @@ func generateJWT(secret string) (string, error) {
 	return signingInput + "." + signature, nil
 }
 
+// verifyJWT validates a JWT token signed with HMAC-SHA256.
+// Kept for future re-enabling of AuthMiddleware; currently auth is bypassed.
 func verifyJWT(tokenStr, secret string) error {
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) != 3 {

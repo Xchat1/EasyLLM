@@ -84,3 +84,28 @@ func TestSwitchCodexAPIServiceWritesLocalProviderAndPreservesOtherConfig(t *test
 		t.Fatalf("expected stale managed service config to be removed, got:\n%s", config)
 	}
 }
+
+func TestSwitchCodexRelayProviderAndState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Relay now uses /v1 (same root as the OpenAI-compatible API) instead of the
+	// old /relay/v1 sub-path.
+	if err := SwitchCodexRelayProvider("http://localhost:18080/v1", "deepseek-chat", "localhost:18080"); err != nil {
+		t.Fatalf("SwitchCodexRelayProvider: %v", err)
+	}
+
+	state := GetCodexRelayState()
+	if !state.Injected {
+		t.Fatal("expected codex relay to be injected")
+	}
+	if state.ModelProvider != "relay" {
+		t.Fatalf("expected model_provider relay, got %q", state.ModelProvider)
+	}
+	if state.Model != "deepseek-chat" {
+		t.Fatalf("expected model deepseek-chat, got %q", state.Model)
+	}
+	if state.BaseURL != "http://localhost:18080/v1" {
+		t.Fatalf("unexpected base_url %q", state.BaseURL)
+	}
+}

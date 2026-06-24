@@ -18,6 +18,11 @@ export const codexRoutes = [
 
 export const codexRouteMap = Object.fromEntries(codexRoutes.map((item) => [item.id, item]))
 
+// codexModeRoutes — Codex 对接模式入口，显示在 Codex 分区账号列表之下
+export const codexModeRoutes = [
+  { path: '/relay', icon: '🔗', label: 'Relay' },
+]
+
 export const systemRoutes = [
   { path: '/dashboard', icon: '📊', label: '总览' },
   { path: '/docs', icon: '📖', label: '文档' },

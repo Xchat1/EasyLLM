@@ -40,6 +40,12 @@ const routes = [
     component: () => import('@/views/SettingsView.vue'),
     meta: { title: '设置', icon: '⚙️' },
   },
+  {
+    path: '/relay',
+    name: 'relay',
+    component: () => import('@/views/RelayConfigView.vue'),
+    meta: { title: 'Relay', icon: '🔗' },
+  },
 ]
 
 const router = createRouter({

@@ -91,5 +91,17 @@ export const settingsAPI = {
   apiServerStatus: () => api.get('/api-server/status'),
 }
 
+// Relay Config API
+export const relayAPI = {
+  getConfig: () => api.get('/relay/config'),
+  updateConfig: (data) => api.put('/relay/config', data),
+  clearSessions: () => api.post('/relay/sessions/clear'),
+  getSessionStats: () => api.get('/relay/sessions/stats'),
+  getUsage: () => api.get('/relay/usage'),
+  getLogs: (limit = 100) => api.get('/relay/logs', { params: { limit } }),
+  clearLogs: () => api.delete('/relay/logs'),
+  injectCodex: (data) => api.post('/relay/inject-codex', data),
+}
+
 export { longApi }
 export default api

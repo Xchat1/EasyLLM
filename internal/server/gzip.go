@@ -24,6 +24,15 @@ func (g *gzipWriter) WriteString(s string) (int, error) {
 // GzipMiddleware compresses responses with gzip to optimize transfer speed and performance.
 func GzipMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// SSE streams must not be gzip-compressed (breaks real-time delivery).
+		if strings.Contains(c.GetHeader("Accept"), "text/event-stream") {
+			c.Next()
+			return
+		}
+		if c.Request.URL.Path == "/v1/responses" {
+			c.Next()
+			return
+		}
 		// Only compress if client accepts gzip and it's not a WebSocket upgrade request
 		if !strings.Contains(c.GetHeader("Accept-Encoding"), "gzip") {
 			c.Next()

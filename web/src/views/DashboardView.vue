@@ -1,15 +1,15 @@
 <template>
   <div class="dashboard-page flex flex-col gap-5 p-5">
-    <section class="rounded-2xl border border-gray-800 bg-gradient-to-br from-sky-500/15 via-cyan-400/5 to-gray-950 p-5 shadow-2xl shadow-black/20">
+    <section class="dashboard-hero">
       <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
         <div class="max-w-3xl space-y-3">
-          <div class="inline-flex items-center gap-2 rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-xs text-sky-200">
+          <div class="dashboard-hero__badge">
             <span>🤖</span>
             <span>Codex</span>
           </div>
           <div>
-            <h1 class="text-3xl font-semibold text-white">Codex 总览</h1>
-            <p class="mt-2 text-sm leading-6 text-gray-300">
+            <h1 class="dashboard-hero__title">Codex 总览</h1>
+            <p class="dashboard-hero__desc">
               查看 OpenAI OAuth 账号、API 账号、Codex 代理池和本机运行状态。
             </p>
           </div>
@@ -25,27 +25,107 @@
     </section>
 
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-      <div class="card p-4 select-none">
-        <div class="text-xs uppercase tracking-wide text-gray-500">OAuth 账号</div>
-        <div class="mt-2 text-2xl font-semibold text-white">{{ oauthAccounts.length }}</div>
-        <div class="mt-1 text-sm text-gray-400">{{ activeOAuthCount }} 个当前激活</div>
-      </div>
-      <div class="card p-4 select-none">
-        <div class="text-xs uppercase tracking-wide text-gray-500">API 账号</div>
-        <div class="mt-2 text-2xl font-semibold text-white">{{ apiAccounts.length }}</div>
-        <div class="mt-1 text-sm text-gray-400">{{ activeAPICount }} 个当前激活</div>
-      </div>
-      <div class="card p-4 select-none">
-        <div class="text-xs uppercase tracking-wide text-gray-500">代理池</div>
-        <div class="mt-2 text-2xl font-semibold text-white">{{ effectivePoolSize }} / {{ joinedProxyCount }}</div>
-        <div class="mt-1 text-sm text-gray-400">{{ poolStatusText }}</div>
-      </div>
-      <div class="card p-4 select-none">
-        <div class="text-xs uppercase tracking-wide text-gray-500">累计请求</div>
-        <div class="mt-2 text-2xl font-semibold text-white">{{ pool.total_requests || 0 }}</div>
-        <div class="mt-1 text-sm text-gray-400">策略 {{ pool.strategy || 'round_robin' }}</div>
+      <div
+        v-for="stat in dashboardStatCards"
+        :key="stat.label"
+        class="card dashboard-stat-card p-4 select-none"
+      >
+        <div class="dashboard-stat-card__label">{{ stat.label }}</div>
+        <div class="dashboard-stat-card__value">{{ stat.value }}</div>
+        <div class="dashboard-stat-card__sub">{{ stat.sub }}</div>
       </div>
     </div>
+
+    <section class="relay-panel">
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div class="relay-panel__badge">
+            <span>🔗</span>
+            <span>Relay 模式</span>
+          </div>
+          <h2 class="relay-panel__title">Relay 调用统计</h2>
+          <p class="relay-panel__desc">
+            <span v-if="relayUsage.upstream_label" class="relay-panel__provider">{{ relayUsage.upstream_label }}</span>
+            <span v-if="relayUsage.default_model" class="relay-panel__model"> · {{ relayUsage.default_model }}</span>
+            <span> — Codex 经本地 Relay 转发的累计请求与 Token 消耗。</span>
+            <span v-if="relayUsage.upstream_configured" class="relay-panel__status-ok">上游已配置</span>
+            <span v-else class="relay-panel__status-warn">上游未配置</span>
+            <span v-if="relayUsage.codex_injected" class="relay-panel__status-ok"> · Codex 已注入</span>
+          </p>
+        </div>
+        <button class="btn btn-secondary shrink-0" @click="router.push('/relay')">Relay 配置</button>
+      </div>
+
+      <div class="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <div class="card relay-stat-card p-4 select-none">
+          <div class="relay-stat-card__label">请求次数</div>
+          <div class="relay-stat-card__value">{{ relayUsage.usage?.request_count || 0 }}</div>
+          <div class="relay-stat-card__sub">流式 {{ relayUsage.usage?.stream_count || 0 }}</div>
+        </div>
+        <div class="card relay-stat-card p-4 select-none">
+          <div class="relay-stat-card__label">输入 Tokens</div>
+          <div class="relay-stat-card__value">{{ formatTokens(relayUsage.usage?.input_tokens) }}</div>
+          <div class="relay-stat-card__sub">缓存 {{ formatTokens(relayUsage.usage?.cached_tokens) }}</div>
+        </div>
+        <div class="card relay-stat-card p-4 select-none">
+          <div class="relay-stat-card__label">输出 Tokens</div>
+          <div class="relay-stat-card__value">{{ formatTokens(relayUsage.usage?.output_tokens) }}</div>
+          <div class="relay-stat-card__sub">模型回复消耗</div>
+        </div>
+        <div class="card relay-stat-card relay-stat-card--highlight p-4 select-none">
+          <div class="relay-stat-card__label">总 Tokens</div>
+          <div class="relay-stat-card__value">{{ formatTokens(relayUsage.usage?.total_tokens) }}</div>
+          <div class="relay-stat-card__sub">累计消耗</div>
+        </div>
+        <div class="card relay-stat-card p-4 select-none">
+          <div class="relay-stat-card__label">最近调用</div>
+          <div class="relay-stat-card__value relay-stat-card__value--sm" :title="relayUsage.usage?.last_model || '-'">
+            {{ relayUsage.usage?.last_model || '暂无' }}
+          </div>
+          <div class="relay-stat-card__sub">{{ formatRelayTime(relayUsage.usage?.last_request_at) }}</div>
+        </div>
+      </div>
+
+      <div class="mt-5">
+        <div class="mb-3 flex items-center justify-between gap-3">
+          <h3 class="relay-panel__subtitle">最近调用记录</h3>
+          <span class="relay-panel__hint">每 10 秒自动刷新</span>
+        </div>
+        <div v-if="recentRelayCalls.length === 0" class="relay-call-empty">
+          暂无 Relay 调用记录。通过小米 MiMo Relay 在 Codex 中发起对话后，记录会显示在这里。
+        </div>
+        <div v-else class="relay-call-wrap overflow-x-auto">
+          <table class="relay-call-table w-full min-w-[720px] text-left text-sm">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>上游</th>
+                <th>Codex 模型</th>
+                <th>上游模型</th>
+                <th>类型</th>
+                <th>输入</th>
+                <th>输出</th>
+                <th>总计</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(call, index) in recentRelayCalls" :key="`${call.timestamp}-${index}`">
+                <td class="cell-muted whitespace-nowrap">{{ formatRelayTime(call.timestamp) }}</td>
+                <td class="cell-accent whitespace-nowrap">{{ call.provider || relayUsage.upstream_label || '-' }}</td>
+                <td class="cell-text whitespace-nowrap">{{ call.codex_model || '-' }}</td>
+                <td class="cell-secondary whitespace-nowrap">{{ call.upstream_model || '-' }}</td>
+                <td class="whitespace-nowrap">
+                  <span class="relay-type-tag">{{ call.stream ? '流式' : '非流式' }}</span>
+                </td>
+                <td class="cell-secondary whitespace-nowrap">{{ formatTokens(call.input_tokens) }}</td>
+                <td class="cell-secondary whitespace-nowrap">{{ formatTokens(call.output_tokens) }}</td>
+                <td class="cell-highlight whitespace-nowrap">{{ formatTokens(call.total_tokens) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
 
     <div class="grid min-h-0 flex-1 items-stretch gap-5 xl:grid-cols-[minmax(0,1.4fr)_360px]">
       <section class="card flex min-h-[420px] flex-col p-5">
@@ -150,9 +230,9 @@
 </template>
 
 <script setup>
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import api, { openaiAPI, settingsAPI } from '@/api'
+import api, { openaiAPI, relayAPI, settingsAPI } from '@/api'
 import { filterAPIAccounts, filterOAuthAccounts } from '@/lib/accounts'
 
 const notify = inject('notify')
@@ -161,6 +241,8 @@ const loading = ref(false)
 const accounts = ref([])
 const pool = ref({})
 const sysInfo = ref({})
+const relayUsage = ref({ usage: {}, recent_calls: [] })
+let relayRefreshTimer = null
 const accountOverviewPage = ref(1)
 const ACCOUNT_OVERVIEW_PAGE_SIZE = 12
 
@@ -187,6 +269,16 @@ const poolStatusText = computed(() => {
   }
   return effectivePoolSize.value > 0 ? '已启用' : '已启用，暂无可用账号'
 })
+const recentRelayCalls = computed(() => {
+  const calls = relayUsage.value?.recent_calls
+  return Array.isArray(calls) ? calls : []
+})
+const dashboardStatCards = computed(() => [
+  { label: 'OAuth 账号', value: oauthAccounts.value.length, sub: `${activeOAuthCount.value} 个当前激活` },
+  { label: 'API 账号', value: apiAccounts.value.length, sub: `${activeAPICount.value} 个当前激活` },
+  { label: '代理池', value: `${effectivePoolSize.value} / ${joinedProxyCount.value}`, sub: poolStatusText.value },
+  { label: '累计请求', value: pool.value.total_requests || 0, sub: `策略 ${pool.value.strategy || 'round_robin'}` },
+])
 
 watch(accountOverviewTotalPages, (totalPages) => {
   if (accountOverviewPage.value > totalPages) {
@@ -194,7 +286,26 @@ watch(accountOverviewTotalPages, (totalPages) => {
   }
 })
 
-onMounted(loadDashboard)
+onMounted(() => {
+  loadDashboard()
+  relayRefreshTimer = setInterval(loadRelayUsage, 10000)
+})
+
+onUnmounted(() => {
+  if (relayRefreshTimer) {
+    clearInterval(relayRefreshTimer)
+    relayRefreshTimer = null
+  }
+})
+
+async function loadRelayUsage() {
+  try {
+    const relayData = await relayAPI.getUsage()
+    relayUsage.value = relayData || { usage: {}, recent_calls: [] }
+  } catch (error) {
+    console.error('Failed to load relay usage:', error)
+  }
+}
 
 async function loadDashboard() {
   loading.value = true
@@ -207,11 +318,26 @@ async function loadDashboard() {
     accounts.value = Array.isArray(accountData) ? accountData : []
     pool.value = poolData || {}
     sysInfo.value = systemData || {}
+    await loadRelayUsage()
   } catch (error) {
     notify?.(error.message || '加载总览失败', 'error')
   } finally {
     loading.value = false
   }
+}
+
+function formatTokens(value) {
+  const n = Number(value) || 0
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 10_000) return `${(n / 1_000).toFixed(1)}K`
+  return n.toLocaleString()
+}
+
+function formatRelayTime(iso) {
+  if (!iso) return '暂无记录'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleString()
 }
 </script>
 
@@ -248,5 +374,211 @@ async function loadDashboard() {
 .account-overview-item--active {
   background: color-mix(in srgb, var(--app-success) 12%, transparent);
   border-color: color-mix(in srgb, var(--app-success) 42%, transparent);
+}
+
+.dashboard-hero {
+  border-radius: 1rem;
+  border: 1px solid var(--app-border-soft);
+  background:
+    linear-gradient(135deg, var(--app-accent-tint), transparent 58%),
+    var(--app-surface-muted);
+  padding: 1.25rem;
+  box-shadow: var(--app-shadow-lg);
+}
+
+.dashboard-hero__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--app-accent) 25%, transparent);
+  background: var(--app-accent-tint);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--app-accent);
+}
+
+.dashboard-hero__title {
+  margin-top: 0.75rem;
+  font-size: 1.875rem;
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.dashboard-hero__desc {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.5rem;
+  color: var(--app-text-secondary);
+}
+
+.dashboard-stat-card__label,
+.relay-stat-card__label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--app-text-muted);
+}
+
+.dashboard-stat-card__value,
+.relay-stat-card__value {
+  margin-top: 0.5rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.relay-stat-card__value--sm {
+  font-size: 0.875rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-stat-card__sub,
+.relay-stat-card__sub {
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--app-text-muted);
+}
+
+.relay-panel {
+  border-radius: 1rem;
+  border: 1px solid var(--app-border-soft);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--app-accent-tint) 85%, transparent), transparent 62%),
+    var(--app-surface-muted);
+  padding: 1.25rem;
+  box-shadow: var(--app-shadow-lg);
+}
+
+.relay-panel__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--app-accent) 25%, transparent);
+  background: var(--app-accent-tint);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--app-accent);
+}
+
+.relay-panel__title {
+  margin-top: 0.75rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.relay-panel__subtitle {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--app-text);
+}
+
+.relay-panel__desc {
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--app-text-muted);
+}
+
+.relay-panel__provider {
+  color: var(--app-accent);
+}
+
+.relay-panel__model {
+  color: var(--app-text-secondary);
+}
+
+.relay-panel__status-ok {
+  color: var(--app-success);
+}
+
+.relay-panel__status-warn {
+  color: var(--app-warning);
+}
+
+.relay-panel__hint {
+  font-size: 0.75rem;
+  color: var(--app-text-muted);
+}
+
+.relay-stat-card--highlight {
+  border-color: color-mix(in srgb, var(--app-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--app-accent-tint) 75%, var(--app-surface));
+}
+
+.relay-stat-card--highlight .relay-stat-card__label {
+  color: var(--app-accent);
+}
+
+.relay-call-empty,
+.relay-call-wrap {
+  border-radius: 0.75rem;
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+}
+
+.relay-call-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--app-text-muted);
+}
+
+.relay-type-tag {
+  display: inline-block;
+  border-radius: 0.25rem;
+  background: var(--app-control-bg);
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--app-text-secondary);
+}
+
+.relay-call-table .cell-muted {
+  color: var(--app-text-muted);
+}
+
+.relay-call-table .cell-accent {
+  color: var(--app-accent);
+}
+
+.relay-call-table .cell-text {
+  color: var(--app-text);
+}
+
+.relay-call-table .cell-secondary {
+  color: var(--app-text-secondary);
+}
+
+.relay-call-table .cell-highlight {
+  color: var(--app-accent);
+  font-weight: 500;
+}
+
+.relay-call-table thead th {
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--app-text-muted);
+  background: var(--app-surface-muted);
+  border-bottom: 1px solid var(--app-border);
+}
+
+.relay-call-table tbody td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--app-border) 60%, transparent);
+}
+
+.relay-call-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.relay-call-table tbody tr:hover {
+  background: color-mix(in srgb, var(--app-control-bg) 70%, transparent);
 }
 </style>

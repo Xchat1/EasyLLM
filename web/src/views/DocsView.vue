@@ -51,12 +51,12 @@
         </div>
       </div>
 
-      <!-- Codex CLI -->
+      <!-- Codex -->
       <div id="sec-codex" class="card doc-section p-4 sm:p-5">
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
-          <span class="text-2xl">🖥️</span> Codex CLI 接入
+          <span class="text-2xl">🖥️</span> Codex 接入
         </h2>
-        <p class="text-sm text-gray-400 mb-5">将 EasyLLM 作为 Codex CLI 的代理，实现多账号轮询、本机配置注入和账号集合调度。</p>
+        <p class="text-sm text-gray-400 mb-5">将 EasyLLM 作为 Codex 客户端 / Codex CLI 的代理，实现多账号轮询、本机配置注入和账号集合调度。</p>
 
         <!-- Method 1 -->
         <div class="mb-5 p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg">
@@ -108,8 +108,26 @@ wire_api = "responses"</pre>
         </div>
 
         <!-- Method 4 -->
+        <div class="mb-5">
+          <h3 class="text-sm font-semibold text-white mb-2">方式四：Relay 第三方上游</h3>
+          <p class="text-xs text-gray-400 mb-3">在 <router-link to="/relay" class="text-blue-400 hover:underline">Relay 配置</router-link> 页填写上游 OpenAI 兼容 API，点击「启动并注入 Codex」。EasyLLM 负责 Responses API → Chat Completions 协议转换，Codex 客户端 / Codex CLI 无需直连上游。</p>
+          <div class="doc-code">
+            <div class="doc-code-header">自动配置的 ~/.codex/config.toml</div>
+            <pre>model_provider = "relay"
+model = "gpt-5-codex"
+
+[model_providers.relay]
+name = "EasyLLM Relay"
+base_url = "http://localhost:{{ port }}/v1"
+wire_api = "responses"
+requires_openai_auth = false</pre>
+            <button @click="copyCurl('codex-relay')" class="doc-code-copy">复制</button>
+          </div>
+        </div>
+
+        <!-- Method 5 -->
         <div>
-          <h3 class="text-sm font-semibold text-white mb-2">方式四：代理池模式</h3>
+          <h3 class="text-sm font-semibold text-white mb-2">方式五：代理池模式</h3>
           <p class="text-xs text-gray-400 mb-3">启用多个 OAuth 账号的"代理开关"，请求将按配置策略调度到账号池。</p>
           <div class="doc-code">
             <div class="doc-code-header">~/.codex/config.toml</div>
@@ -287,7 +305,7 @@ print(response.output_text)</pre>
           </div>
           <div class="flex gap-3 items-start p-3 bg-gray-800/30 rounded-lg">
             <span class="flex-shrink-0 w-6 h-6 bg-blue-500/20 text-blue-400 text-xs font-bold rounded-full flex items-center justify-center">3</span>
-            <span class="text-sm text-gray-300">本地 Codex CLI 通过已知的 managed token 认证（passthrough 模式），无需额外配置</span>
+            <span class="text-sm text-gray-300">本地 Codex 客户端或 Codex CLI 通过已知的 managed token 认证（passthrough 模式），无需额外配置</span>
           </div>
         </div>
 
@@ -341,7 +359,7 @@ onMounted(async () => {
 
 const sections = [
   { id: 'sec-overview', icon: '🎯', label: '简介' },
-  { id: 'sec-codex', icon: '🖥️', label: 'Codex CLI' },
+  { id: 'sec-codex', icon: '🖥️', label: 'Codex' },
   { id: 'sec-curl', icon: '📡', label: 'cURL' },
   { id: 'sec-python', icon: '🐍', label: 'Python' },
   { id: 'sec-quota', icon: '📊', label: '配额查询' },
@@ -351,7 +369,7 @@ const sections = [
 ]
 
 const faqs = [
-  { q: 'Codex CLI 报 "Token data is not available." 怎么办？', a: '确保 auth.json 中 last_refresh 在顶层而非 tokens 内部。在 EasyLLM 中重新点击"切换"即可自动修复。' },
+  { q: 'Codex 客户端 / CLI 报 "Token data is not available." 怎么办？', a: '确保 auth.json 中 last_refresh 在顶层而非 tokens 内部。在 EasyLLM 中重新点击"切换"即可自动修复。' },
   { q: '代理池请求返回 401 Unauthorized', a: '若返回 {"detail":"Unauthorized"} 且带 cf-ray，通常是代理池里 OAuth access_token 已失效。EasyLLM 会自动轮换账号并尝试 refresh_token 刷新；若全部账号 refresh 失败，请重新 OAuth 登录或导入带有效 refresh_token 的 CPA/Token 文件。若返回 {"error":{"message":"Invalid API key"}} 则是本地 proxy_api_key 与 Codex 配置不一致。' },
   { q: 'Token 过期了怎么办？', a: '在 OpenAI 账号列表中点击"刷新 Token"按钮，或使用"刷新所有 Token"一键刷新所有 OAuth 账号；刷新完成后会自动触发账号导出。' },
   { q: '配额查询显示 Forbidden', a: '该账号可能没有 Codex 访问权限（需要 ChatGPT Plus/Pro 订阅），或 Token 已失效。' },
@@ -377,6 +395,14 @@ name = "my-provider"
 base_url = "https://api.example.com/v1"
 wire_api = "responses"`,
   'codex-pool': `chatgpt_base_url = "http://localhost:PORT"`,
+  'codex-relay': `model_provider = "relay"
+model = "gpt-5-codex"
+
+[model_providers.relay]
+name = "EasyLLM Relay"
+base_url = "http://localhost:PORT/v1"
+wire_api = "responses"
+requires_openai_auth = false`,
   responses: `curl http://localhost:PORT/v1/responses \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\

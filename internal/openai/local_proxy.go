@@ -44,3 +44,9 @@ func LocalProxyOrigin(hostOverride string) string {
 func LocalProxyAPIBaseURL(hostOverride string) string {
 	return strings.TrimRight(LocalProxyOrigin(hostOverride), "/") + "/v1"
 }
+
+// LocalRelayServiceURL 返回 EasyLLM Relay 端点（/v1，与 OpenAI 兼容 API 根地址相同）。
+// /v1/responses 是 Relay 的协议转换入口，直接挂在统一的 /v1 根下。
+func LocalRelayServiceURL(hostOverride string) string {
+	return LocalProxyAPIBaseURL(hostOverride)
+}

@@ -18,6 +18,8 @@ const (
 	codexAPIServiceDefaultWireAPI  = "responses"
 	codexAPIServiceRequiresAuthKey = "requires_openai_auth"
 	codexDesktopLocalAccessID      = "codex_local_access"
+	codexRelayProviderID           = "relay"
+	codexRelayProviderName         = "EasyLLM Relay"
 )
 
 type CodexLaunchResult struct {
@@ -315,6 +317,123 @@ func GetCodexAuthInfo() (map[string]interface{}, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+// CodexRelayState describes whether Codex is configured for EasyLLM relay.
+type CodexRelayState struct {
+	Injected      bool   `json:"codex_injected"`
+	ModelProvider string `json:"model_provider"`
+	Model         string `json:"model"`
+	BaseURL       string `json:"base_url"`
+}
+
+// GetCodexRelayState reads ~/.codex/config.toml and reports relay injection status.
+func GetCodexRelayState() CodexRelayState {
+	state := CodexRelayState{}
+	codexDir, err := getCodexDir()
+	if err != nil {
+		return state
+	}
+	data, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		return state
+	}
+
+	inRelaySection := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section := strings.Trim(trimmed, "[]")
+			inRelaySection = section == "model_providers."+codexRelayProviderID
+			continue
+		}
+		if key, val, ok := parseTomlAssignment(trimmed); ok {
+			switch key {
+			case "model_provider":
+				state.ModelProvider = val
+			case "model":
+				if !inRelaySection {
+					state.Model = val
+				}
+			case "base_url":
+				if inRelaySection {
+					state.BaseURL = val
+				}
+			}
+		}
+	}
+
+	state.Injected = state.ModelProvider == codexRelayProviderID
+	return state
+}
+
+func parseTomlAssignment(line string) (key, value string, ok bool) {
+	idx := strings.Index(line, "=")
+	if idx < 0 {
+		return "", "", false
+	}
+	key = strings.TrimSpace(line[:idx])
+	value = strings.Trim(strings.TrimSpace(line[idx+1:]), `"`)
+	return key, value, true
+}
+
+// SwitchCodexRelayProvider injects Codex CLI config to route through EasyLLM relay.
+// Upstream credentials live on EasyLLM; Codex talks to the local relay without auth.
+func SwitchCodexRelayProvider(relayBaseURL, model, proxyOrigin string) error {
+	relayBaseURL = strings.TrimRight(strings.TrimSpace(relayBaseURL), "/")
+	if relayBaseURL == "" {
+		relayBaseURL = LocalRelayServiceURL(proxyOrigin)
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = codexAPIServiceDefaultModel
+	}
+
+	codexDir, err := getCodexDir()
+	if err != nil {
+		return err
+	}
+
+	authFile := filepath.Join(codexDir, "auth.json")
+	authData := map[string]interface{}{}
+	if data, err := os.ReadFile(authFile); err == nil {
+		_ = json.Unmarshal(data, &authData)
+	}
+	delete(authData, "OPENAI_API_KEY")
+	authJSON, err := json.MarshalIndent(authData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal auth.json: %w", err)
+	}
+	if err := os.WriteFile(authFile, authJSON, 0600); err != nil {
+		return fmt.Errorf("failed to write auth.json: %w", err)
+	}
+
+	configFile := filepath.Join(codexDir, "config.toml")
+	data, _ := os.ReadFile(configFile)
+	existing := stripCodexAPIServiceManagedConfig(string(data), codexRelayProviderID)
+	relayBlock := strings.Join([]string{
+		fmt.Sprintf("model_provider = %s", tomlString(codexRelayProviderID)),
+		fmt.Sprintf("model = %s", tomlString(model)),
+		"",
+		fmt.Sprintf("[model_providers.%s]", codexRelayProviderID),
+		fmt.Sprintf("name = %s", tomlString(codexRelayProviderName)),
+		fmt.Sprintf("base_url = %s", tomlString(relayBaseURL)),
+		fmt.Sprintf("wire_api = %s", tomlString(codexAPIServiceDefaultWireAPI)),
+		"requires_openai_auth = false",
+		"supports_websockets = false",
+	}, "\n") + "\n"
+	existing = strings.TrimLeft(existing, "\n")
+	configContent := relayBlock
+	if strings.TrimSpace(existing) != "" {
+		configContent += "\n" + existing
+	}
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		return fmt.Errorf("failed to write config.toml: %w", err)
+	}
+	return nil
 }
 
 func getCodexDir() (string, error) {

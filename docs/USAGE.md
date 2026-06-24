@@ -1,6 +1,6 @@
 # 使用指南
 
-本文档覆盖 EasyLLM 的日常使用流程：登录、导入账号、接入 Codex CLI、启用代理池以及调用本地 API。
+本文档覆盖 EasyLLM 的日常使用流程：登录、导入账号、接入 Codex CLI、启用代理池、Relay 模式以及调用本地 API。
 
 安装包下载请进入 [GitHub Releases](https://github.com/Xchat1/EasyLLM/releases)：
 
@@ -43,14 +43,14 @@ DEFAULT_PASSWORD=replace-before-first-start
 
 ## 3. Codex CLI 接入
 
-### OAuth 账号切换
+### 方式一：OAuth 账号切换（代理池模式）
 
 导入 OAuth 账号后，在账号卡片点击「切换」。EasyLLM 会写入本机 Codex 配置：
 
 - `~/.codex/auth.json`
 - `~/.codex/config.toml`
 
-### API Key 账号切换
+### 方式二：API Key 账号切换
 
 在「API 账号」标签添加：
 
@@ -62,13 +62,37 @@ DEFAULT_PASSWORD=replace-before-first-start
 
 点击「切换」后写入 `~/.codex/config.toml`。
 
-### 代理池模式
+### 方式三：代理池模式
 
 在「配置」里开启「代理池服务」，再将需要参与轮询的 OAuth 账号加入代理池。Codex CLI 可以指向本地服务：
 
 ```toml
 chatgpt_base_url = "http://localhost:8022"
 ```
+
+### 方式四：Relay 模式（对接第三方上游）
+
+Relay 模式让 Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容的上游提供商（DeepSeek、Kimi、Qwen、OpenRouter 等），无需依赖 chatgpt.com。
+
+进入侧边栏 **Codex → Relay**：
+
+1. 在「上游渠道」区域点击「添加渠道」，填写上游 URL 和 API Key
+2. 根据需要配置模型映射（如 `{"gpt-5.4":"deepseek-chat"}`）
+3. 点击「启动并注入 Codex」，EasyLLM 自动写入 `~/.codex/config.toml`
+
+注入后 `config.toml` 中的关键配置：
+
+```toml
+model_provider = "relay"
+model = "your-model"
+
+[model_providers.relay]
+base_url = "http://localhost:8022/v1"
+wire_api = "responses"
+requires_openai_auth = false
+```
+
+详细说明见 [Codex Relay 集成说明](./CODEX_RELAY_INTEGRATION.md)。
 
 ![Codex CLI 接入效果](../codex.png)
 
@@ -77,15 +101,21 @@ chatgpt_base_url = "http://localhost:8022"
 ### 端点
 
 ```text
-POST /v1/responses              OpenAI Responses API
+POST /v1/responses              Responses API（含 Relay 协议转换入口）
 POST /v1/chat/completions       Chat Completions API
-GET  /v1/models                 模型列表
-GET  /pool/status               兼容旧版代理池状态
+GET  /v1/models                 模型列表（代理上游或代理池）
+GET  /pool/status               代理池状态（兼容旧版）
 ```
 
 ### 示例
 
 ```bash
+# Relay 模式：非流式
+curl -X POST http://localhost:8022/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5.4","input":"你好","stream":false}'
+
+# 代理池模式：流式
 curl http://localhost:8022/v1/responses \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_PROXY_API_KEY" \
@@ -103,11 +133,15 @@ PUT  /api/v1/openai/service-config
 POST /api/v1/openai/import/auto-files
 POST /api/v1/openai/import/refresh-tokens
 POST /api/v1/openai/accounts/fetch-quotas
+GET  /api/v1/relay/config
+PUT  /api/v1/relay/config
+GET  /api/v1/relay/usage
+GET  /api/v1/relay/logs
 GET  /api/v1/system/info
 GET  /api/health
 ```
 
-自适应导入通过浏览器文件选择或 multipart 上传 JSON，不再提供后端路径扫描接口。
+自适应导入通过浏览器文件选择或 multipart 上传 JSON，不提供后端路径扫描接口。
 
 ## 6. 导出与恢复
 

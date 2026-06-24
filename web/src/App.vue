@@ -49,6 +49,17 @@
                 <CodexIcon :item="item" size="xs" />
                 <span class="truncate">{{ item.label }}</span>
               </router-link>
+              <!-- Codex 模式入口（Relay 等） -->
+              <router-link
+                v-for="item in codexModeRoutes"
+                :key="item.path"
+                :to="item.path"
+                class="nav-item"
+                :class="{ 'nav-item-active': $route.path === item.path }"
+              >
+                <span class="text-base">{{ item.icon }}</span>
+                <span>{{ item.label }}</span>
+              </router-link>
             </div>
           </section>
 
@@ -170,7 +181,7 @@
 import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import CodexIcon from '@/components/CodexIcon.vue'
-import { codexRoutes, systemRoutes as appSystemRoutes } from '@/lib/codexRoutes'
+import { codexRoutes, codexModeRoutes, systemRoutes as appSystemRoutes } from '@/lib/codexRoutes'
 import logoUrl from '@/assets/brand/easyllm-app-icon.png'
 import { useAppearance } from '@/composables/useAppearance'
 import { authAPI, settingsAPI } from './api'
@@ -181,6 +192,7 @@ const route = useRoute()
 
 const codexNavRoutes = codexRoutes
 const systemRoutes = appSystemRoutes
+// codexModeRoutes: Relay 等 Codex 对接模式，显示在 Codex 分区末尾
 
 const serverRunning = ref(false)
 const serverPort = ref(8022)
