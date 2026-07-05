@@ -123,6 +123,35 @@ func TestGetServiceConfigReturnsRawAPIKey(t *testing.T) {
 	}
 }
 
+func TestFilterCodexLocalAccessAccountIDsSkipsMissingAccounts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	statusOK := http.StatusOK
+	plan := "plus"
+	account := models.OpenAIAccount{
+		ID:              "valid-id",
+		Email:           "valid@example.com",
+		AccountType:     models.OpenAIAccountTypeOAuth,
+		AccessToken:     sPtr("access-token"),
+		Plan:            &plan,
+		QuotaHTTPStatus: &statusOK,
+		QuotaVerified:   true,
+	}
+	if err := handler.storage.Save(&account); err != nil {
+		t.Fatalf("seed account: %v", err)
+	}
+
+	got, err := handler.filterCodexLocalAccessAccountIDs([]string{"missing-id", "valid-id"}, true)
+	if err != nil {
+		t.Fatalf("filter local access accounts: %v", err)
+	}
+	if len(got) != 1 || got[0] != "valid-id" {
+		t.Fatalf("expected only valid-id, got %#v", got)
+	}
+}
+
 func TestListAccountsDoesNotLeakSecrets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupOpenAIHandlerTestDB(t)
@@ -167,6 +196,47 @@ func TestListAccountsDoesNotLeakSecrets(t *testing.T) {
 	}
 	if payload[0]["plan"] != "plus" {
 		t.Fatalf("expected plan to be inferred before secret fields are omitted, got %#v", payload[0]["plan"])
+	}
+}
+
+func TestListAccountsFiltersByWorkspaceID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+	now := time.Now()
+
+	seeds := []models.OpenAIAccount{
+		{ID: "workspace-a-1", Email: "one@example.com", AccountType: models.OpenAIAccountTypeOAuth, ChatGPTAccountID: sPtr("workspace-a"), CreatedAt: now, UpdatedAt: now},
+		{ID: "workspace-a-2", Email: "two@example.com", AccountType: models.OpenAIAccountTypeOAuth, ChatGPTAccountID: sPtr("workspace-a"), CreatedAt: now, UpdatedAt: now},
+		{ID: "workspace-b-1", Email: "three@example.com", AccountType: models.OpenAIAccountTypeOAuth, ChatGPTAccountID: sPtr("workspace-b"), CreatedAt: now, UpdatedAt: now},
+		{ID: "api-account", Email: "api@example.com", AccountType: models.OpenAIAccountTypeAPI, CreatedAt: now, UpdatedAt: now},
+	}
+	for i := range seeds {
+		if err := handler.storage.Save(&seeds[i]); err != nil {
+			t.Fatalf("seed account %s: %v", seeds[i].ID, err)
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/openai/accounts?workspace_id=workspace-a", nil)
+
+	handler.ListAccounts(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", recorder.Code)
+	}
+	var payload []models.OpenAIAccount
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 2 {
+		t.Fatalf("expected 2 workspace accounts, got %d", len(payload))
+	}
+	for _, account := range payload {
+		if derefStr(account.ChatGPTAccountID) != "workspace-a" {
+			t.Fatalf("unexpected workspace id %q", derefStr(account.ChatGPTAccountID))
+		}
 	}
 }
 
@@ -532,6 +602,289 @@ func TestUpsertImportedOAuthAccountCanEnableProxyForExistingAccount(t *testing.T
 	}
 	if !stored.ProxyEnabled {
 		t.Fatalf("expected stored account to persist proxy_enabled=true")
+	}
+}
+
+func TestFindMatchingOAuthAccountDoesNotUseEmailWhenScopedIDDiffers(t *testing.T) {
+	existingAccounts := []models.OpenAIAccount{
+		{
+			ID:               "existing-id",
+			Email:            "musfeldisolde751+9871@gmail.com",
+			AccountType:      models.OpenAIAccountTypeOAuth,
+			ChatGPTAccountID: sPtr("acct-existing"),
+			OrganizationID:   sPtr("org-existing"),
+		},
+	}
+	incoming := &models.OpenAIAccount{
+		Email:            "musfeldisolde751+9871@gmail.com",
+		AccountType:      models.OpenAIAccountTypeOAuth,
+		ChatGPTAccountID: sPtr("acct-incoming"),
+		OrganizationID:   sPtr("org-incoming"),
+	}
+	if idx := findMatchingOAuthAccountIndex(existingAccounts, incoming); idx != -1 {
+		t.Fatalf("expected no match for same email with different scoped account, got %d", idx)
+	}
+}
+
+func TestFindMatchingOAuthAccountFallsBackToEmailWithoutScopedID(t *testing.T) {
+	existingAccounts := []models.OpenAIAccount{
+		{
+			ID:          "existing-id",
+			Email:       "legacy@example.com",
+			AccountType: models.OpenAIAccountTypeOAuth,
+		},
+	}
+	incoming := &models.OpenAIAccount{
+		Email:       "legacy@example.com",
+		AccountType: models.OpenAIAccountTypeOAuth,
+	}
+	if idx := findMatchingOAuthAccountIndex(existingAccounts, incoming); idx != 0 {
+		t.Fatalf("expected legacy email fallback match at index 0, got %d", idx)
+	}
+}
+
+func TestImportCPABytesReimportsSameEmailWithoutDuplicate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	sessionJSON := []byte(`{
+		"user": {"email": "musfeldisolde751+9871@gmail.com"},
+		"expires": "2026-10-02T07:11:09.740Z",
+		"account": {
+			"id": "ff598c4d-ccaf-40c1-bfaa-cb94565764b1",
+			"planType": "k12",
+			"organizationId": "org-Kkd34iivEq9S3rRMezLxQqGG"
+		},
+		"accessToken": "at_example",
+		"sessionToken": "st_example"
+	}`)
+
+	if _, err := handler.ImportCPABytes(sessionJSON); err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	if _, err := handler.ImportCPABytes(sessionJSON); err != nil {
+		t.Fatalf("second import: %v", err)
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	var oauthCount int
+	var imported *models.OpenAIAccount
+	for _, account := range accounts {
+		if account.AccountType == models.OpenAIAccountTypeOAuth &&
+			strings.EqualFold(account.Email, "musfeldisolde751+9871@gmail.com") {
+			oauthCount++
+			imported = &account
+		}
+	}
+	if oauthCount != 1 {
+		t.Fatalf("expected exactly 1 oauth account for email, got %d", oauthCount)
+	}
+	if imported == nil {
+		t.Fatal("expected imported account")
+	}
+	if imported.OrganizationID == nil || *imported.OrganizationID != "org-Kkd34iivEq9S3rRMezLxQqGG" {
+		t.Fatalf("expected organization id to be saved, got %#v", imported.OrganizationID)
+	}
+	if imported.ChatGPTAccountID == nil || *imported.ChatGPTAccountID != "ff598c4d-ccaf-40c1-bfaa-cb94565764b1" {
+		t.Fatalf("expected chatgpt account id to be saved, got %#v", imported.ChatGPTAccountID)
+	}
+	if !imported.ProxyEnabled {
+		t.Fatalf("expected imported account to join proxy pool")
+	}
+}
+
+func TestImportCPABytesSameEmailDifferentAccountIDsStayDistinct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	raw := []byte(`[
+		{
+			"email": "shared@example.com",
+			"account_id": "acct-one",
+			"organization_id": "org-one",
+			"access_token": "at_one",
+			"plan_type": "plus"
+		},
+		{
+			"email": "shared@example.com",
+			"account_id": "acct-two",
+			"organization_id": "org-two",
+			"access_token": "at_two",
+			"plan_type": "team"
+		}
+	]`)
+
+	if _, err := handler.ImportCPABytes(raw); err != nil {
+		t.Fatalf("import cpa bytes: %v", err)
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("expected 2 accounts for same email with different account IDs, got %d", len(accounts))
+	}
+	seen := map[string]string{}
+	for _, account := range accounts {
+		if !strings.EqualFold(account.Email, "shared@example.com") {
+			continue
+		}
+		seen[derefStr(account.ChatGPTAccountID)] = derefStr(account.OrganizationID)
+	}
+	if seen["acct-one"] != "org-one" || seen["acct-two"] != "org-two" {
+		t.Fatalf("expected distinct account/org identities, got %#v", seen)
+	}
+}
+
+func TestImportCPABytesSameAccountIDWithoutOrgDifferentEmailsStayDistinct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	raw := []byte(`[
+		{
+			"email": "one@example.com",
+			"account_id": "acct-shared",
+			"access_token": "at_one",
+			"plan_type": "plus"
+		},
+		{
+			"email": "two@example.com",
+			"account_id": "acct-shared",
+			"access_token": "at_two",
+			"plan_type": "plus"
+		},
+		{
+			"email": "one@example.com",
+			"account_id": "acct-shared",
+			"access_token": "at_one_refresh",
+			"plan_type": "team"
+		}
+	]`)
+
+	out, err := handler.ImportCPABytes(raw)
+	if err != nil {
+		t.Fatalf("import cpa bytes: %v", err)
+	}
+	if out["created"] != 2 || out["updated"] != 1 {
+		t.Fatalf("expected 2 created and 1 updated, got %#v", out)
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("expected 2 accounts for same account id with different emails, got %d", len(accounts))
+	}
+	seen := map[string]string{}
+	for _, account := range accounts {
+		seen[account.Email] = derefStr(account.AccessToken)
+	}
+	if seen["one@example.com"] != "at_one_refresh" || seen["two@example.com"] != "at_two" {
+		t.Fatalf("expected same-email import to update only that account, got %#v", seen)
+	}
+}
+
+func TestImportCPABytesUsesOuterOrganizationIDWhenIDTokenOrgIsBlank(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	token := testUnsignedJWT(t, map[string]interface{}{
+		"email": "shared@example.com",
+		"https://api.openai.com/auth": map[string]interface{}{
+			"account_id":        "acct-shared",
+			"chatgpt_plan_type": "chatgpt_plus",
+			"organizations": []map[string]interface{}{
+				{"id": "", "is_default": true},
+			},
+		},
+	})
+	raw := []byte(`[
+		{
+			"email": "shared@example.com",
+			"account_id": "acct-shared",
+			"organization_id": "org-one",
+			"id_token": "` + token + `",
+			"access_token": "at_one"
+		},
+		{
+			"email": "shared@example.com",
+			"account_id": "acct-shared",
+			"organization_id": "org-two",
+			"id_token": "` + token + `",
+			"access_token": "at_two"
+		}
+	]`)
+
+	if _, err := handler.ImportCPABytes(raw); err != nil {
+		t.Fatalf("import cpa bytes: %v", err)
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("expected 2 workspace-scoped accounts, got %d", len(accounts))
+	}
+	seen := map[string]bool{}
+	for _, account := range accounts {
+		if derefStr(account.ChatGPTAccountID) != "acct-shared" {
+			t.Fatalf("expected account id acct-shared, got %q", derefStr(account.ChatGPTAccountID))
+		}
+		seen[derefStr(account.OrganizationID)] = true
+	}
+	if !seen["org-one"] || !seen["org-two"] {
+		t.Fatalf("expected outer organization ids to be preserved, got %#v", seen)
+	}
+}
+
+func TestEasyLLMExportImportPreservesOrganizationIDWithoutIDToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupOpenAIHandlerTestDB(t)
+	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
+
+	existingAccounts := []models.OpenAIAccount{}
+	payload := &easyLLMExportPayload{
+		OAuthAccounts: []exportedOAuthAccount{{
+			ID:             "old-id",
+			Email:          "backup@example.com",
+			AccessToken:    "at_backup",
+			RefreshToken:   "rt_backup",
+			AccountID:      "acct_backup",
+			OrganizationID: "org_backup",
+			Status:         "active",
+			Type:           "codex",
+		}},
+	}
+	if _, err := handler.applyEasyLLMExportPayload(payload, &existingAccounts); err != nil {
+		t.Fatalf("import export payload: %v", err)
+	}
+
+	accounts, err := handler.storage.List()
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("expected 1 account, got %d", len(accounts))
+	}
+	account := accounts[0]
+	if account.OrganizationID == nil || *account.OrganizationID != "org_backup" {
+		t.Fatalf("expected organization id to be restored, got %#v", account.OrganizationID)
+	}
+	if account.ChatGPTAccountID == nil || *account.ChatGPTAccountID != "acct_backup" {
+		t.Fatalf("expected account id to be restored, got %#v", account.ChatGPTAccountID)
+	}
+	if !account.ProxyEnabled {
+		t.Fatalf("expected restored account to join proxy pool")
 	}
 }
 

@@ -3,11 +3,13 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"easyllm/internal/codexconfig"
+	openaiplatform "easyllm/internal/openai"
+	"easyllm/internal/storage"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	openaiplatform "easyllm/internal/openai"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -45,7 +47,7 @@ func (h *RelayHandler) selectUpstreamFromConfig(config *RelayConfig) RelayUpstre
 	}
 	enabled := make([]RelayUpstream, 0, len(config.Upstreams))
 	for _, u := range config.Upstreams {
-		if u.Enabled {
+		if u.Enabled && strings.TrimSpace(u.UpstreamURL) != "" {
 			enabled = append(enabled, u)
 		}
 	}
@@ -259,11 +261,15 @@ func (h *RelayHandler) HandleRelayResponses(c *gin.Context) {
 // HandleRelayModels handles GET /v1/models.
 // It proxies to the upstream /v1/models endpoint.
 func (h *RelayHandler) HandleRelayModels(c *gin.Context) {
-	upstreamURL := h.Config.UpstreamURL
+	upstream := h.selectUpstream()
+	upstreamURL := upstream.UpstreamURL
 	if upstreamURL == "" {
 		upstreamURL = "https://api.openai.com/v1"
 	}
-	apiKey := ResolveRelayAPIKey(h.Config, c.Request.Header)
+	apiKey := upstream.APIKey
+	if apiKey == "" {
+		apiKey = ResolveRelayAPIKey(h.Config, c.Request.Header)
+	}
 
 	// Build upstream models URL — TrimRight first to normalise trailing slashes
 	// before the HasSuffix check; without this "…/v1/" fails the check and we'd
@@ -286,7 +292,7 @@ func (h *RelayHandler) HandleRelayModels(c *gin.Context) {
 	}
 
 	if apiKey != "" {
-		applyAuthHeader(req, apiKey, h.Config.AuthHeader, h.Config.AuthValuePrefix)
+		applyAuthHeader(req, apiKey, upstream.AuthHeader, upstream.AuthValuePrefix)
 	}
 
 	resp, err := h.Client.Do(req)
@@ -432,30 +438,34 @@ func (h *RelayHandler) HandleGetRelayConfig(c *gin.Context) {
 	}
 
 	relayState := openaiplatform.GetCodexRelayState()
+	codexContextConfig := loadRelayCodexContextConfig()
 	upstreams := config.Upstreams
 	if upstreams == nil {
 		upstreams = []RelayUpstream{}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		// Multi-upstream fields
-		"upstreams":          upstreams,
-		"upstream_strategy":  config.UpstreamStrategy,
+		"upstreams":         upstreams,
+		"upstream_strategy": config.UpstreamStrategy,
 		// Legacy single-upstream fields (kept for backward compat)
-		"upstream_url":        config.UpstreamURL,
-		"api_key":             config.APIKey,
-		"auth_header":         config.AuthHeader,
-		"auth_value_prefix":   config.AuthValuePrefix,
+		"upstream_url":      config.UpstreamURL,
+		"api_key":           config.APIKey,
+		"auth_header":       config.AuthHeader,
+		"auth_value_prefix": config.AuthValuePrefix,
 		// Global options
-		"default_model":       config.DefaultModel,
-		"model_map_json":      modelMapJSON,
-		"tool_denylist_str":   toolDenylistStr,
-		"max_sessions":        config.MaxSessions,
-		"max_session_bytes":   config.MaxSessionBytes,
-		"session_ttl_hours":   config.SessionTTLHours,
-		"relay_url":            openaiplatform.LocalRelayServiceURL(c.Request.Host),
-		"codex_injected":       relayState.Injected,
-		"codex_model_provider": relayState.ModelProvider,
-		"codex_model":          relayState.Model,
+		"default_model":                  config.DefaultModel,
+		"model_map_json":                 modelMapJSON,
+		"tool_denylist_str":              toolDenylistStr,
+		"max_sessions":                   config.MaxSessions,
+		"max_session_bytes":              config.MaxSessionBytes,
+		"session_ttl_hours":              config.SessionTTLHours,
+		"relay_url":                      openaiplatform.LocalRelayServiceURL(c.Request.Host),
+		"codex_injected":                 relayState.Injected,
+		"codex_model_provider":           relayState.ModelProvider,
+		"codex_model":                    relayState.Model,
+		"codex_context_mode":             codexContextConfig.Mode,
+		"model_context_window":           codexContextConfig.ModelContextWindow,
+		"model_auto_compact_token_limit": codexContextConfig.ModelAutoCompactTokenLimit,
 	})
 }
 
@@ -471,12 +481,15 @@ func (h *RelayHandler) HandleUpdateRelayConfig(c *gin.Context) {
 		AuthHeader      string `json:"auth_header"`
 		AuthValuePrefix string `json:"auth_value_prefix"`
 		// Global options
-		DefaultModel    string `json:"default_model"`
-		ModelMapJSON    string `json:"model_map_json"`
-		ToolDenylistStr string `json:"tool_denylist_str"`
-		MaxSessions     int    `json:"max_sessions"`
-		MaxSessionBytes int    `json:"max_session_bytes"`
-		SessionTTLHours int    `json:"session_ttl_hours"`
+		DefaultModel               string  `json:"default_model"`
+		ModelMapJSON               string  `json:"model_map_json"`
+		ToolDenylistStr            string  `json:"tool_denylist_str"`
+		MaxSessions                int     `json:"max_sessions"`
+		MaxSessionBytes            int     `json:"max_session_bytes"`
+		SessionTTLHours            int     `json:"session_ttl_hours"`
+		CodexContextMode           *string `json:"codex_context_mode"`
+		ModelContextWindow         *int64  `json:"model_context_window"`
+		ModelAutoCompactTokenLimit *int64  `json:"model_auto_compact_token_limit"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -489,47 +502,20 @@ func (h *RelayHandler) HandleUpdateRelayConfig(c *gin.Context) {
 		return
 	}
 
-	// Parse model map
-	modelMap := ParseModelMap(req.ModelMapJSON)
-
-	// Parse tool denylist
-	toolDenylist := ParseToolDenylist(req.ToolDenylistStr)
-
-	// Update config
-	config := h.Config
-	if config == nil {
-		config = DefaultRelayConfig()
-	}
-
-	// Multi-upstream
-	if req.Upstreams != nil {
-		config.Upstreams = req.Upstreams
-	}
-	if req.UpstreamStrategy != "" {
-		config.UpstreamStrategy = req.UpstreamStrategy
-	}
-	// Legacy single-upstream fields
-	config.UpstreamURL = req.UpstreamURL
-	config.APIKey = req.APIKey
-	config.AuthHeader = req.AuthHeader
-	config.AuthValuePrefix = req.AuthValuePrefix
-	// Global options
-	config.DefaultModel = req.DefaultModel
-	config.ModelMap = modelMap
-	config.ToolDenylist = toolDenylist
-	config.ModelMapJSON = req.ModelMapJSON
-	config.ToolDenylistStr = req.ToolDenylistStr
-
-	if req.MaxSessions > 0 {
-		config.MaxSessions = req.MaxSessions
-	}
-	if req.MaxSessionBytes > 0 {
-		config.MaxSessionBytes = req.MaxSessionBytes
-	}
-	if req.SessionTTLHours > 0 {
-		config.SessionTTLHours = req.SessionTTLHours
-	}
-
+	config := applyRelayConfigUpdate(h.Config, relayConfigUpdateRequest{
+		Upstreams:        req.Upstreams,
+		UpstreamStrategy: req.UpstreamStrategy,
+		UpstreamURL:      req.UpstreamURL,
+		APIKey:           req.APIKey,
+		AuthHeader:       req.AuthHeader,
+		AuthValuePrefix:  req.AuthValuePrefix,
+		DefaultModel:     req.DefaultModel,
+		ModelMapJSON:     req.ModelMapJSON,
+		ToolDenylistStr:  req.ToolDenylistStr,
+		MaxSessions:      req.MaxSessions,
+		MaxSessionBytes:  req.MaxSessionBytes,
+		SessionTTLHours:  req.SessionTTLHours,
+	})
 	h.Config = config
 
 	if h.Sessions != nil {
@@ -537,6 +523,27 @@ func (h *RelayHandler) HandleUpdateRelayConfig(c *gin.Context) {
 	}
 
 	saveRelayConfigToSettings(config)
+	if req.CodexContextMode != nil || req.ModelContextWindow != nil || req.ModelAutoCompactTokenLimit != nil {
+		current := loadRelayCodexContextConfig()
+		if req.CodexContextMode != nil {
+			current.Mode = *req.CodexContextMode
+		}
+		if req.ModelContextWindow != nil {
+			current.ModelContextWindow = *req.ModelContextWindow
+		}
+		if req.ModelAutoCompactTokenLimit != nil {
+			current.ModelAutoCompactTokenLimit = *req.ModelAutoCompactTokenLimit
+		}
+		if err := saveRelayCodexContextConfig(current); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{
+					"message": err.Error(),
+					"type":    "invalid_request",
+				},
+			})
+			return
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
@@ -553,20 +560,20 @@ func (h *RelayHandler) HandleClearRelaySessions(c *gin.Context) {
 func (h *RelayHandler) HandleGetRelaySessionStats(c *gin.Context) {
 	if h.Sessions == nil {
 		c.JSON(http.StatusOK, gin.H{
-			"session_count":    0,
-			"reasoning_count":  0,
-			"turn_count":       0,
-			"stored_bytes":     0,
+			"session_count":   0,
+			"reasoning_count": 0,
+			"turn_count":      0,
+			"stored_bytes":    0,
 		})
 		return
 	}
 
 	sessionCount, reasoningCount, turnCount, bytes := h.Sessions.GetStats()
 	c.JSON(http.StatusOK, gin.H{
-		"session_count":    sessionCount,
-		"reasoning_count":  reasoningCount,
-		"turn_count":       turnCount,
-		"stored_bytes":     bytes,
+		"session_count":   sessionCount,
+		"reasoning_count": reasoningCount,
+		"turn_count":      turnCount,
+		"stored_bytes":    bytes,
 	})
 }
 
@@ -586,7 +593,7 @@ func (h *RelayHandler) HandleGetRelayUsage(c *gin.Context) {
 
 	recentCalls := []RelayCallRecord{}
 	if h.Usage != nil {
-		recentCalls = h.Usage.RecentCalls(20)
+		recentCalls = h.Usage.RecentCalls(100)
 		if len(recentCalls) == 0 && snap.RequestCount > 0 {
 			recentCalls = []RelayCallRecord{{
 				Timestamp:     snap.LastRequestAt,
@@ -613,6 +620,14 @@ func (h *RelayHandler) HandleGetRelayUsage(c *gin.Context) {
 		"relay_url":           openaiplatform.LocalRelayServiceURL(c.Request.Host),
 		"recent_calls":        recentCalls,
 	})
+}
+
+// HandleClearRelayHistory handles DELETE /api/v1/relay/usage/history
+func (h *RelayHandler) HandleClearRelayHistory(c *gin.Context) {
+	if h.Usage != nil {
+		h.Usage.ClearHistory()
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // HandleGetRelayLogs handles GET /api/v1/relay/logs
@@ -682,7 +697,6 @@ func (h *RelayHandler) HandleStreamRelayLogs(c *gin.Context) {
 func (h *RelayHandler) HandleClearRelayLogs(c *gin.Context) {
 	if h.Logs != nil {
 		h.Logs.Clear()
-		h.Logs.Log("info", "日志已清空", "", "")
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
@@ -692,6 +706,31 @@ func truncateRelayLog(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+func loadRelayCodexContextConfig() codexconfig.ContextConfig {
+	return codexconfig.FromSettings(storage.GetAllSettings())
+}
+
+func saveRelayCodexContextConfig(config codexconfig.ContextConfig) error {
+	if !codexconfig.ValidMode(config.Mode) {
+		return fmt.Errorf("invalid codex_context_mode")
+	}
+	if strings.TrimSpace(config.Mode) == codexconfig.ModeCustom {
+		if config.ModelContextWindow <= 0 || config.ModelAutoCompactTokenLimit <= 0 {
+			return fmt.Errorf("custom context values must be greater than 0")
+		}
+		if config.ModelAutoCompactTokenLimit > config.ModelContextWindow {
+			return fmt.Errorf("auto compact token limit cannot exceed context window")
+		}
+	}
+	config = codexconfig.Normalize(config)
+	for key, value := range config.Settings() {
+		if err := storage.SaveSetting(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // HandleInjectCodexConfig handles POST /api/v1/relay/inject-codex.
@@ -745,7 +784,7 @@ func (h *RelayHandler) HandleInjectCodexConfig(c *gin.Context) {
 	}
 	model := PreferredCodexModel(modelMap, config.DefaultModel)
 	relayURL := openaiplatform.LocalRelayServiceURL(c.Request.Host)
-	if err := openaiplatform.SwitchCodexRelayProvider(relayURL, model, c.Request.Host); err != nil {
+	if err := openaiplatform.SwitchCodexRelayProvider(relayURL, model, c.Request.Host, loadRelayCodexContextConfig()); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to inject Codex config: " + err.Error()})
 		return
 	}
@@ -758,15 +797,14 @@ func (h *RelayHandler) HandleInjectCodexConfig(c *gin.Context) {
 
 	relayState := openaiplatform.GetCodexRelayState()
 	c.JSON(http.StatusOK, gin.H{
-		"success":              true,
-		"message":              "Codex configuration injected successfully",
-		"relay_url":            relayURL,
-		"codex_injected":       relayState.Injected,
-		"codex_model_provider": relayState.ModelProvider,
-		"codex_model":          relayState.Model,
-		"codex_app_started":    launchResult.Started,
-		"codex_app_restarted":  launchResult.Restarted,
+		"success":               true,
+		"message":               "Codex configuration injected successfully",
+		"relay_url":             relayURL,
+		"codex_injected":        relayState.Injected,
+		"codex_model_provider":  relayState.ModelProvider,
+		"codex_model":           relayState.Model,
+		"codex_app_started":     launchResult.Started,
+		"codex_app_restarted":   launchResult.Restarted,
 		"codex_app_was_running": launchResult.RunningBefore,
 	})
 }
-

@@ -91,6 +91,8 @@ func TranslateStream(ctx context.Context, args RelayStreamTranslator, w http.Res
 	var accumulatedReasoning string
 	toolCalls := make(map[int]*ToolCallAccum)
 	emittedMessageItem := false
+	messageOutputIndex := -1
+	nextOutputIndex := 0
 	streamDone := false
 	var streamUsage *ChatUsage
 
@@ -137,15 +139,17 @@ func TranslateStream(ctx context.Context, args RelayStreamTranslator, w http.Res
 				// Text content
 				if choice.Delta.Content != nil && *choice.Delta.Content != "" {
 					if !emittedMessageItem {
+						messageOutputIndex = nextOutputIndex
+						nextOutputIndex++
 						sendEvent(w, flusher, "response.output_item.added", map[string]interface{}{
-							"type": "response.output_item.added",
-							"output_index": 0,
+							"type":         "response.output_item.added",
+							"output_index": messageOutputIndex,
 							"item": map[string]interface{}{
-								"type":       "message",
-								"id":         msgItemID,
-								"role":       "assistant",
-								"status":     "in_progress",
-								"content":    []interface{}{},
+								"type":    "message",
+								"id":      msgItemID,
+								"role":    "assistant",
+								"status":  "in_progress",
+								"content": []interface{}{},
 							},
 						})
 						emittedMessageItem = true
@@ -155,7 +159,7 @@ func TranslateStream(ctx context.Context, args RelayStreamTranslator, w http.Res
 					sendEvent(w, flusher, "response.output_text.delta", map[string]interface{}{
 						"type":         "response.output_text.delta",
 						"item_id":      msgItemID,
-						"output_index": 0,
+						"output_index": messageOutputIndex,
 						"delta":        *choice.Delta.Content,
 					})
 				}
@@ -171,6 +175,7 @@ func TranslateStream(ctx context.Context, args RelayStreamTranslator, w http.Res
 							}
 						}
 						accum := toolCalls[idx]
+						ensureToolCallOutputIndex(accum, &nextOutputIndex)
 						prevArgsLen := len(accum.Args)
 						if tc.ID != nil && *tc.ID != "" {
 							accum.ID = *tc.ID
@@ -205,12 +210,12 @@ func TranslateStream(ctx context.Context, args RelayStreamTranslator, w http.Res
 	if emittedMessageItem {
 		sendEvent(w, flusher, "response.output_item.done", map[string]interface{}{
 			"type":         "response.output_item.done",
-			"output_index": 0,
+			"output_index": messageOutputIndex,
 			"item": map[string]interface{}{
-				"type":       "message",
-				"id":         msgItemID,
-				"role":       "assistant",
-				"status":     "completed",
+				"type":   "message",
+				"id":     msgItemID,
+				"role":   "assistant",
+				"status": "completed",
 				"content": []interface{}{
 					map[string]interface{}{
 						"type": "output_text",
@@ -222,18 +227,11 @@ func TranslateStream(ctx context.Context, args RelayStreamTranslator, w http.Res
 	}
 
 	// Finalize function_call items
-	baseIndex := 0
-	if emittedMessageItem {
-		baseIndex = 1
-	}
-
 	var fcItems []interface{}
 	indices := sortedToolIndices(toolCalls)
 	for _, idx := range indices {
 		tc := toolCalls[idx]
-		if tc.OutputIndex < 0 {
-			tc.OutputIndex = baseIndex + idx
-		}
+		ensureToolCallOutputIndex(tc, &nextOutputIndex)
 		if tc.ID == "" {
 			tc.ID = fmt.Sprintf("call_%s", uuid.New().String()[:12])
 		}
@@ -254,6 +252,12 @@ func TranslateStream(ctx context.Context, args RelayStreamTranslator, w http.Res
 		if !tc.Added {
 			emitToolCallStreamEvents(w, flusher, tc, args.NamespaceTools, 0)
 		}
+		sendEvent(w, flusher, "response.function_call_arguments.done", map[string]interface{}{
+			"type":         "response.function_call_arguments.done",
+			"item_id":      tc.ItemID,
+			"output_index": tc.OutputIndex,
+			"arguments":    tc.Args,
+		})
 
 		sendEvent(w, flusher, "response.output_item.done", map[string]interface{}{
 			"type":         "response.output_item.done",
@@ -308,10 +312,10 @@ func TranslateStream(ctx context.Context, args RelayStreamTranslator, w http.Res
 		var outputItems []interface{}
 		if emittedMessageItem {
 			outputItems = append(outputItems, map[string]interface{}{
-				"type":       "message",
-				"id":         msgItemID,
-				"role":       "assistant",
-				"status":     "completed",
+				"type":   "message",
+				"id":     msgItemID,
+				"role":   "assistant",
+				"status": "completed",
 				"content": []interface{}{
 					map[string]interface{}{
 						"type": "output_text",
@@ -336,9 +340,9 @@ func TranslateStream(ctx context.Context, args RelayStreamTranslator, w http.Res
 				"model":  args.Model,
 				"output": outputItems,
 				"usage": map[string]interface{}{
-					"input_tokens":        usage.PromptTokens,
-					"output_tokens":       usage.CompletionTokens,
-					"total_tokens":        usage.TotalTokens,
+					"input_tokens":  usage.PromptTokens,
+					"output_tokens": usage.CompletionTokens,
+					"total_tokens":  usage.TotalTokens,
 					"input_tokens_details": map[string]interface{}{
 						"cached_tokens": usage.CacheHit(),
 					},
@@ -409,7 +413,7 @@ type ToolCallAccum struct {
 	Name        string
 	Args        string
 	ItemID      string
-	OutputIndex int  // -1 = not yet assigned
+	OutputIndex int // -1 = not yet assigned
 	Added       bool
 }
 
@@ -420,6 +424,14 @@ func sortedToolIndices(toolCalls map[int]*ToolCallAccum) []int {
 	}
 	sort.Ints(indices)
 	return indices
+}
+
+func ensureToolCallOutputIndex(accum *ToolCallAccum, next *int) {
+	if accum == nil || next == nil || accum.OutputIndex >= 0 {
+		return
+	}
+	accum.OutputIndex = *next
+	*next = *next + 1
 }
 
 func emitToolCallStreamEvents(w http.ResponseWriter, flusher http.Flusher, accum *ToolCallAccum, nsMap NamespaceToolMap, prevArgsLen int) {

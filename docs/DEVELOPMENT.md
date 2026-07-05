@@ -2,7 +2,7 @@
 
 ## 环境要求
 
-- Go 1.22+
+- Go 1.25+
 - Node.js 18+
 - `gcc` 或等价 C 编译工具链（SQLite CGO 依赖）
 - macOS App 打包需要 `swiftc`（可选）
@@ -27,8 +27,8 @@ Windows：
 
 ```powershell
 .\scripts\start.ps1
-.\scripts\start.ps1 --build
-.\scripts\start.ps1 --prod
+.\scripts\start.ps1 -build
+.\scripts\start.ps1 -prod
 ```
 
 ```bat
@@ -52,10 +52,15 @@ npm run build
 2. `npm run audit:theme`
 3. `vite build`
 
+前端开发服务器默认监听 `127.0.0.1:5180`，用于开发 Vue 页面和热更新。它会把 `/api`、`/v1`、`/pool` 等请求代理到 Go 后端，默认目标是 `http://localhost:8022`。
+
+Go 后端默认监听 `127.0.0.1:8022`。后端除了提供 API 和 Relay 接口，也会把 `web/dist` 挂到 `/`，所以直接访问 `http://localhost:8022` 也会看到 Web UI。开发时如果同时打开 `5180` 和 `8022`，两个页面看起来可能一样；区别是 `5180` 使用当前前端源码，`8022` 使用上一次构建生成的 `web/dist`。
+
 ### 后端
 
 ```bash
 go test ./...
+go vet ./...
 CGO_ENABLED=1 go build -o easyllm .
 ```
 
@@ -70,6 +75,7 @@ open build/macos/EasyLLM.app
 
 ```bash
 ./scripts/build-macos-app.sh --package --version 2.0.0
+./scripts/check-release-archives.sh build/release/EasyLLM-2.0.0-macos-*.zip
 ```
 
 ### Windows Release
@@ -107,17 +113,16 @@ DEFAULT_PASSWORD=
 
 ## 端口占用处理
 
-如果 macOS 上出现 8022 端口被 ghost socket 占用，可选择：
+脚本模式默认使用 `SERVER_PORT=8022`。如果端口被占用，可临时换端口启动：
 
 ```bash
-sudo ./scripts/setup-pf-8022-redirect.sh
 SERVER_PORT=8026 ./scripts/start.sh
 ```
 
-此时仍可访问：
+访问：
 
 ```text
-http://localhost:8022
+http://localhost:8026
 ```
 
 ## 隐私保护
@@ -133,10 +138,23 @@ git config core.hooksPath .githooks
 - `.env`
 - `data/`
 - `auth/`
-- Token JSON
+- `exports/`
+- `backups/`
+- `build/`
+- `web/dist/`
+- `logs/`
+- Token/CPA JSON
 - EasyLLM 导出备份
 - API Key、私钥、数据库文件
 - `.claude/`、`.codex/`、`.agents/` 等本地助手配置
+
+发布包生成后执行：
+
+```bash
+./scripts/check-release-archives.sh build/release/*.zip
+```
+
+这个脚本会检查 zip 中是否包含 `.env`、Token/CPA JSON、数据库、日志、本地助手目录或疑似密钥。
 
 ## 变更建议
 
@@ -150,6 +168,7 @@ git config core.hooksPath .githooks
 
 ```bash
 go test ./...
+go vet ./...
 cd web && npm run build
 ```
 
@@ -157,6 +176,7 @@ cd web && npm run build
 
 ```bash
 ./scripts/build-macos-app.sh --package --version 2.0.0
+./scripts/check-release-archives.sh build/release/EasyLLM-2.0.0-macos-*.zip
 ```
 
 如需发布 Windows zip：

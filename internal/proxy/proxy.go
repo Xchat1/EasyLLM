@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"easyllm/internal/httputil"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,26 +21,35 @@ import (
 // Passthrough mode: when the incoming request carries an Authorization token
 // that matches a known managed account, the proxy forwards the request as-is
 // (no pool rotation). This enables Codex CLI to route through the proxy while
-// keeping its own auth; EasyLLM does not retain API call logs.
+// keeping its own auth; EasyLLM only retains metadata for the recent-call view.
 func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	// Try passthrough first: match the incoming token to a managed account
 	entry := p.matchIncomingToken(r)
 	passthrough := entry != nil
+	var reservedEntry *poolEntry
 
 	if !passthrough {
-		if !p.enabled {
+		if !p.IsEnabled() {
+			p.recordCall(entry, r, nil, http.StatusServiceUnavailable, passthrough, start, "Proxy is disabled")
 			writeError(w, http.StatusServiceUnavailable, "Proxy is disabled", "service_unavailable")
 			return
 		}
-		entry = p.pickEntry()
+		entry = p.pickEntryReserved()
 		if entry == nil {
+			p.recordCall(entry, r, nil, http.StatusServiceUnavailable, passthrough, start, "No available accounts in pool")
 			writeError(w, http.StatusServiceUnavailable, "No available accounts in pool", "no_available_account")
 			return
 		}
+		reservedEntry = entry
+		defer func() {
+			releasePoolEntry(reservedEntry)
+		}()
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		p.recordCall(entry, r, nil, http.StatusBadRequest, passthrough, start, "Failed to read request body")
 		writeError(w, http.StatusBadRequest, "Failed to read request body", "invalid_request")
 		return
 	}
@@ -52,7 +62,7 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	upstreamURL := buildUpstreamURL(r.URL.Path, r.URL.RawQuery)
 	maxAttempts := 1
 	if !passthrough {
-		maxAttempts = 20
+		maxAttempts = p.poolMaxRetryAttempts()
 	}
 	tried := map[string]bool{}
 	if entry != nil && entry.accessToken != "" {
@@ -62,6 +72,7 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		upstreamReq, err := http.NewRequest(r.Method, upstreamURL, bytes.NewReader(body))
 		if err != nil {
+			p.recordCall(entry, r, body, http.StatusInternalServerError, passthrough, start, "Failed to create upstream request")
 			writeError(w, http.StatusInternalServerError, "Failed to create upstream request", "internal_error")
 			return
 		}
@@ -89,8 +100,18 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 		setCodexCLIHeaders(upstreamReq)
 
-		resp, err := p.httpClient.Do(upstreamReq)
+		resp, err := httputil.DoWithRetries(p.httpClient, upstreamReq, 3)
 		if err != nil {
+			if !passthrough && httputil.IsTransientNetworkError(err) && attempt < maxAttempts-1 {
+				if next := p.pickEntryExcludingReserved(tried); next != nil {
+					releasePoolEntry(reservedEntry)
+					entry = next
+					reservedEntry = next
+					tried[entry.accessToken] = true
+					continue
+				}
+			}
+			p.recordCall(entry, r, body, http.StatusBadGateway, passthrough, start, err.Error())
 			writeError(w, http.StatusBadGateway, fmt.Sprintf("Upstream request failed: %v", err), "upstream_error")
 			return
 		}
@@ -98,13 +119,17 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			errBody, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
-			if !passthrough && isRetryableAuthFailure(resp.StatusCode, errBody) && attempt < maxAttempts-1 {
-				if p.refreshPoolEntryToken(entry) {
+			if !passthrough && isRetryablePoolFailure(resp.StatusCode, errBody) && attempt < maxAttempts-1 {
+				if isUsageLimitReached(resp.StatusCode, errBody) {
+					p.markPoolEntryUsageLimited(entry, errBody)
+				} else if isRetryableAuthFailure(resp.StatusCode, errBody) && p.refreshPoolEntryToken(entry) {
 					tried[entry.accessToken] = true
 					continue
 				}
-				if next := p.pickEntryExcluding(tried); next != nil {
+				if next := p.pickEntryExcludingReserved(tried); next != nil {
+					releasePoolEntry(reservedEntry)
 					entry = next
+					reservedEntry = next
 					tried[entry.accessToken] = true
 					continue
 				}
@@ -114,6 +139,7 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 			if len(errBody) > 0 {
 				w.Write(errBody) //nolint:errcheck
 			}
+			p.recordCall(entry, r, body, resp.StatusCode, passthrough, start, string(errBody))
 			return
 		}
 
@@ -141,6 +167,7 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(respBody)))
 			w.WriteHeader(resp.StatusCode)
 			w.Write(respBody) //nolint:errcheck
+			p.recordCall(entry, r, body, resp.StatusCode, passthrough, start, "")
 			return
 		}
 
@@ -162,6 +189,7 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_ = resp.Body.Close()
+		p.recordCall(entry, r, body, resp.StatusCode, passthrough, start, "")
 		return
 	}
 }
@@ -173,35 +201,46 @@ func (p *CodexProxy) ProxyRequest(w http.ResponseWriter, r *http.Request) {
 // This is primarily for curl/testing and simple integrations; it supports non-streaming
 // usage. If the client requests stream=true, the request is rejected for now.
 func (p *CodexProxy) ProxyChatCompletions(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	// Pick account (passthrough token match first, otherwise pool rotation).
 	entry := p.matchIncomingToken(r)
 	passthrough := entry != nil
+	var reservedEntry *poolEntry
 	if !passthrough {
-		if !p.enabled {
+		if !p.IsEnabled() {
+			p.recordCall(entry, r, nil, http.StatusServiceUnavailable, passthrough, start, "Proxy is disabled")
 			writeError(w, http.StatusServiceUnavailable, "Proxy is disabled", "service_unavailable")
 			return
 		}
-		entry = p.pickEntry()
+		entry = p.pickEntryReserved()
 		if entry == nil {
+			p.recordCall(entry, r, nil, http.StatusServiceUnavailable, passthrough, start, "No available accounts in pool")
 			writeError(w, http.StatusServiceUnavailable, "No available accounts in pool", "no_available_account")
 			return
 		}
+		reservedEntry = entry
+		defer func() {
+			releasePoolEntry(reservedEntry)
+		}()
 	}
 
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
+		p.recordCall(entry, r, nil, http.StatusBadRequest, passthrough, start, "Failed to read request body")
 		writeError(w, http.StatusBadRequest, "Failed to read request body", "invalid_request")
 		return
 	}
 
 	var reqBody map[string]interface{}
 	if err := json.Unmarshal(raw, &reqBody); err != nil {
+		p.recordCall(entry, r, raw, http.StatusBadRequest, passthrough, start, "Invalid JSON body")
 		writeError(w, http.StatusBadRequest, "Invalid JSON body", "invalid_request")
 		return
 	}
 
 	// Reject streaming for now (the upstream requires streaming; we convert to non-stream).
 	if v, ok := reqBody["stream"].(bool); ok && v {
+		p.recordCall(entry, r, raw, http.StatusBadRequest, passthrough, start, "stream=true is not supported on this endpoint")
 		writeError(w, http.StatusBadRequest, "stream=true is not supported on this endpoint", "not_supported")
 		return
 	}
@@ -214,6 +253,7 @@ func (p *CodexProxy) ProxyChatCompletions(w http.ResponseWriter, r *http.Request
 	// Convert messages[] → a simple "input" string.
 	inputText := buildPromptFromMessages(reqBody["messages"])
 	if inputText == "" {
+		p.recordCall(entry, r, raw, http.StatusBadRequest, passthrough, start, "messages is required")
 		writeError(w, http.StatusBadRequest, "messages is required", "invalid_request")
 		return
 	}
@@ -232,9 +272,7 @@ func (p *CodexProxy) ProxyChatCompletions(w http.ResponseWriter, r *http.Request
 	const upstreamURL = "https://chatgpt.com/backend-api/codex/responses?client_version=0.98.0"
 	maxAttempts := 1
 	if !passthrough {
-		// Try multiple accounts if upstream says token invalidated.
-		// Pool sizes can be large; cap retries to a reasonable number.
-		maxAttempts = 20
+		maxAttempts = p.poolMaxRetryAttempts()
 	}
 
 	var lastText string
@@ -245,6 +283,7 @@ func (p *CodexProxy) ProxyChatCompletions(w http.ResponseWriter, r *http.Request
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		upReq, err := http.NewRequest(http.MethodPost, upstreamURL, bytes.NewReader(upBytes))
 		if err != nil {
+			p.recordCall(entry, r, raw, http.StatusInternalServerError, passthrough, start, "Failed to create upstream request")
 			writeError(w, http.StatusInternalServerError, "Failed to create upstream request", "internal_error")
 			return
 		}
@@ -271,8 +310,18 @@ func (p *CodexProxy) ProxyChatCompletions(w http.ResponseWriter, r *http.Request
 		setCodexCLIHeaders(upReq)
 		upReq.Header.Set("Accept", "text/event-stream")
 
-		resp, err := p.httpClient.Do(upReq)
+		resp, err := httputil.DoWithRetries(p.httpClient, upReq, 3)
 		if err != nil {
+			if !passthrough && httputil.IsTransientNetworkError(err) && attempt < maxAttempts-1 {
+				if next := p.pickEntryExcludingReserved(tried); next != nil {
+					releasePoolEntry(reservedEntry)
+					entry = next
+					reservedEntry = next
+					tried[entry.accessToken] = true
+					continue
+				}
+			}
+			p.recordCall(entry, r, raw, http.StatusBadGateway, passthrough, start, err.Error())
 			writeError(w, http.StatusBadGateway, fmt.Sprintf("Upstream request failed: %v", err), "upstream_error")
 			return
 		}
@@ -281,20 +330,20 @@ func (p *CodexProxy) ProxyChatCompletions(w http.ResponseWriter, r *http.Request
 			body, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 
-			// Retry only for rotated pool mode when the chosen account can't auth.
-			if !passthrough && isRetryableAuthFailure(resp.StatusCode, body) && attempt < maxAttempts-1 {
-				if p.refreshPoolEntryToken(entry) {
+			if !passthrough && isRetryablePoolFailure(resp.StatusCode, body) && attempt < maxAttempts-1 {
+				if isUsageLimitReached(resp.StatusCode, body) {
+					p.markPoolEntryUsageLimited(entry, body)
+				} else if isRetryableAuthFailure(resp.StatusCode, body) && p.refreshPoolEntryToken(entry) {
 					tried[entry.accessToken] = true
 					continue
 				}
-				// Pick a different entry for next attempt.
-				if next := p.pickEntryExcluding(tried); next != nil {
+				if next := p.pickEntryExcludingReserved(tried); next != nil {
+					releasePoolEntry(reservedEntry)
 					entry = next
+					reservedEntry = next
 					tried[entry.accessToken] = true
-				} else {
-					// No more candidates; fall through and return the error.
+					continue
 				}
-				continue
 			}
 
 			w.Header().Set("Content-Type", "application/json")
@@ -306,6 +355,7 @@ func (p *CodexProxy) ProxyChatCompletions(w http.ResponseWriter, r *http.Request
 					"error": map[string]interface{}{"message": "Upstream error", "type": "upstream_error", "code": fmt.Sprintf("%d", resp.StatusCode)},
 				})
 			}
+			p.recordCall(entry, r, raw, resp.StatusCode, passthrough, start, string(body))
 			return
 		}
 
@@ -349,4 +399,5 @@ func (p *CodexProxy) ProxyChatCompletions(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(out)
+	p.recordCall(entry, r, raw, http.StatusOK, passthrough, start, "")
 }

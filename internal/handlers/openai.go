@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"easyllm/config"
+	"easyllm/internal/codexconfig"
 	"easyllm/internal/models"
 	openaiplatform "easyllm/internal/openai"
 	"easyllm/internal/proxy"
@@ -56,6 +58,15 @@ const (
 	defaultOpenAIOAuthRedirectURI  = "http://localhost:1455/auth/callback"
 	defaultOpenAIOAuthCallbackBase = "http://localhost:1455"
 	defaultOpenAIOAuthCallbackAddr = "127.0.0.1:1455"
+
+	quotaFetchTimeoutSettingKey     = "quota_fetch_timeout_seconds"
+	quotaFetchConcurrencySettingKey = "quota_fetch_concurrency"
+	defaultQuotaFetchTimeoutSeconds = 60
+	defaultQuotaFetchConcurrency    = 10
+	minQuotaFetchTimeoutSeconds     = 10
+	maxQuotaFetchTimeoutSeconds     = 600
+	minQuotaFetchConcurrency        = 1
+	maxQuotaFetchConcurrency        = 50
 
 	codexLocalAccessEnabledKey              = "codex_local_access_enabled"
 	codexLocalAccessPortKey                 = "codex_local_access_port"
@@ -198,6 +209,8 @@ func (h *OpenAIHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.POST("/codex/accounts/:id/toggle", h.ToggleCodexAccount)
 	g.GET("/codex/pool", h.GetCodexPoolStatus)
 	g.POST("/codex/pool/refresh", h.RefreshCodexPool)
+	g.GET("/codex/calls", h.GetCodexCallHistory)
+	g.DELETE("/codex/calls", h.ClearCodexCallHistory)
 
 	// Quota check
 	g.POST("/accounts/fetch-quotas", h.FetchQuotas)
@@ -225,6 +238,15 @@ func (h *OpenAIHandler) ListAccounts(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "STORAGE_ERROR"})
 		return
+	}
+	if workspaceID := strings.TrimSpace(c.Query("workspace_id")); workspaceID != "" && workspaceID != "all" {
+		filtered := make([]models.OpenAIAccount, 0, len(accounts))
+		for _, account := range accounts {
+			if strings.TrimSpace(derefStr(account.ChatGPTAccountID)) == workspaceID {
+				filtered = append(filtered, account)
+			}
+		}
+		accounts = filtered
 	}
 	c.JSON(http.StatusOK, sanitizeOpenAIAccountsForResponse(accounts))
 }
@@ -361,7 +383,11 @@ func (h *OpenAIHandler) SwitchAccount(c *gin.Context) {
 		idToken = *account.IDToken
 	}
 
-	if err := openaiplatform.SwitchCodexOAuthAccount(accessToken, refreshToken, idToken, account.ChatGPTAccountID, localProxyOriginFromRequest(c)); err != nil {
+	writeCodexOAuthAccountConfig := func() error {
+		return openaiplatform.SwitchCodexOAuthAccount(accessToken, refreshToken, idToken, account.ChatGPTAccountID, localProxyOriginFromRequest(c), loadCodexContextConfig())
+	}
+
+	if err := writeCodexOAuthAccountConfig(); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "SWITCH_ERROR"})
 		return
 	}
@@ -377,7 +403,20 @@ func (h *OpenAIHandler) SwitchAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + account.Email})
+	launchResult, err := openaiplatform.RestartCodexApp()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + account.Email, "restart_error": err.Error()})
+		return
+	}
+
+	time.Sleep(codexAPIAccountPostRestartReapplyDelay)
+	if err := writeCodexOAuthAccountConfig(); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + account.Email, "launch": launchResult, "config_reapply_error": err.Error()})
+		return
+	}
+	h.scheduleCodexAccountConfigGuard(account.ID, writeCodexOAuthAccountConfig, codexAPIAccountGuardReapplyAttempts, codexAPIAccountGuardReapplyInterval)
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + account.Email, "launch": launchResult, "config_reapplied": true, "config_guard_seconds": int(codexAPIAccountGuardReapplyAttempts)})
 }
 
 // SwitchAPIAccount switches to an API key account (writes ~/.codex/config.toml)
@@ -399,7 +438,7 @@ func (h *OpenAIHandler) SwitchAPIAccount(c *gin.Context) {
 	apiKey := derefStr(account.APIKey)
 
 	writeCodexAPIAccountConfig := func() error {
-		return openaiplatform.SwitchCodexAPIAccount(provider, model, baseURL, apiKey, account.WireAPI, account.ModelReasoningEffort, localProxyOriginFromRequest(c))
+		return openaiplatform.SwitchCodexAPIAccount(provider, model, baseURL, apiKey, account.WireAPI, account.ModelReasoningEffort, localProxyOriginFromRequest(c), loadCodexContextConfig())
 	}
 
 	if err := writeCodexAPIAccountConfig(); err != nil {
@@ -434,12 +473,12 @@ func (h *OpenAIHandler) SwitchAPIAccount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + providerModelInfo, "launch": launchResult, "config_reapply_error": err.Error()})
 		return
 	}
-	h.scheduleCodexAPIAccountConfigGuard(account.ID, writeCodexAPIAccountConfig, codexAPIAccountGuardReapplyAttempts, codexAPIAccountGuardReapplyInterval)
+	h.scheduleCodexAccountConfigGuard(account.ID, writeCodexAPIAccountConfig, codexAPIAccountGuardReapplyAttempts, codexAPIAccountGuardReapplyInterval)
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Switched to " + providerModelInfo, "launch": launchResult, "config_reapplied": true, "config_guard_seconds": int(codexAPIAccountGuardReapplyAttempts)})
 }
 
-func (h *OpenAIHandler) scheduleCodexAPIAccountConfigGuard(accountID string, write func() error, attempts int, interval time.Duration) {
+func (h *OpenAIHandler) scheduleCodexAccountConfigGuard(accountID string, write func() error, attempts int, interval time.Duration) {
 	if accountID == "" || write == nil || attempts <= 0 || interval <= 0 {
 		return
 	}
@@ -457,7 +496,7 @@ func (h *OpenAIHandler) scheduleCodexAPIAccountConfigGuard(accountID string, wri
 				return
 			}
 			if err := write(); err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "easyllm: failed to reapply Codex API account config: %v\n", err)
+				_, _ = fmt.Fprintf(os.Stderr, "easyllm: failed to reapply Codex account config: %v\n", err)
 			}
 		}
 	}()
@@ -577,24 +616,109 @@ func (h *OpenAIHandler) RefreshAllTokens(c *gin.Context) {
 
 // tokenFileData is the structure of each token JSON file in the auth/ directory
 type tokenFileData struct {
-	IDToken      string `json:"id_token"`
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	AccountID    string `json:"account_id"`
-	LastRefresh  string `json:"last_refresh"`
-	Email        string `json:"email"`
-	Type         string `json:"type"`
-	Expired      string `json:"expired"`
-	PlanType     string `json:"plan_type"`
+	IDToken               string `json:"id_token"`
+	AccessToken           string `json:"access_token"`
+	RefreshToken          string `json:"refresh_token"`
+	AccountID             string `json:"account_id"`
+	ChatGPTAccountID      string `json:"chatgpt_account_id,omitempty"`
+	CamelAccountID        string `json:"accountId,omitempty"`
+	CamelChatGPTAccountID string `json:"chatgptAccountId,omitempty"`
+	OrganizationID        string `json:"organization_id"`
+	CamelOrganizationID   string `json:"organizationId,omitempty"`
+	LastRefresh           string `json:"last_refresh"`
+	Email                 string `json:"email"`
+	Type                  string `json:"type"`
+	Expired               string `json:"expired"`
+	Expires               string `json:"expires,omitempty"`
+	PlanType              string `json:"plan_type"`
+
+	// New format fields (ChatGPT Session Dump)
+	CamelAccessToken  string `json:"accessToken,omitempty"`
+	CamelSessionToken string `json:"sessionToken,omitempty"`
+	UserObj           *struct {
+		Email string `json:"email"`
+	} `json:"user,omitempty"`
+	AccountObj *struct {
+		ID             string `json:"id"`
+		PlanType       string `json:"planType"`
+		OrganizationID string `json:"organizationId"`
+	} `json:"account,omitempty"`
+}
+
+func (t *tokenFileData) Normalize() {
+	if t.CamelAccessToken != "" && t.AccessToken == "" {
+		t.AccessToken = t.CamelAccessToken
+	}
+	if t.UserObj != nil && t.Email == "" {
+		t.Email = t.UserObj.Email
+	}
+	if t.AccountID == "" {
+		t.AccountID = firstNonEmptyTrimmed(t.ChatGPTAccountID, t.CamelAccountID, t.CamelChatGPTAccountID)
+	}
+	if t.OrganizationID == "" {
+		t.OrganizationID = strings.TrimSpace(t.CamelOrganizationID)
+	}
+	if t.AccountObj != nil {
+		if t.AccountID == "" {
+			t.AccountID = strings.TrimSpace(t.AccountObj.ID)
+		}
+		if t.PlanType == "" {
+			t.PlanType = t.AccountObj.PlanType
+		}
+		if t.OrganizationID == "" {
+			t.OrganizationID = strings.TrimSpace(t.AccountObj.OrganizationID)
+		}
+	}
+	if t.Expires != "" && t.Expired == "" {
+		t.Expired = t.Expires
+	}
+	t.AccountID = strings.TrimSpace(t.AccountID)
+	t.OrganizationID = strings.TrimSpace(t.OrganizationID)
 }
 
 type tokenImportResult struct {
-	Filename string `json:"filename"`
-	Format   string `json:"format,omitempty"` // 扫描目录自动识别：token / cpa / easyllm-export
-	Success  bool   `json:"success"`
-	Email    string `json:"email,omitempty"`
-	Skipped  bool   `json:"skipped,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Filename       string `json:"filename"`
+	Format         string `json:"format,omitempty"` // 扫描目录自动识别：token / cpa / easyllm-export
+	Success        bool   `json:"success"`
+	Email          string `json:"email,omitempty"`
+	AccountID      string `json:"account_id,omitempty"`
+	OrganizationID string `json:"organization_id,omitempty"`
+	Action         string `json:"action,omitempty"` // created / updated
+	Skipped        bool   `json:"skipped,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+func tokenImportSuccessResult(filename, format string, account *models.OpenAIAccount, action string) tokenImportResult {
+	result := tokenImportResult{
+		Filename: filename,
+		Format:   format,
+		Success:  true,
+		Action:   action,
+	}
+	if account != nil {
+		result.Email = account.Email
+		result.AccountID = strings.TrimSpace(derefStr(account.ChatGPTAccountID))
+		result.OrganizationID = strings.TrimSpace(derefStr(account.OrganizationID))
+	}
+	return result
+}
+
+func summarizeTokenImportResults(results []tokenImportResult) (successCount, skippedCount, failedCount, createdCount, updatedCount int) {
+	for _, r := range results {
+		if r.Success {
+			successCount++
+			switch r.Action {
+			case "created":
+				createdCount++
+			case "updated":
+				updatedCount++
+			}
+		} else if r.Skipped {
+			skippedCount++
+		}
+	}
+	failedCount = len(results) - successCount - skippedCount
+	return
 }
 
 func parseTokenFileEntries(raw []byte) ([]tokenFileData, error) {
@@ -611,6 +735,9 @@ func parseTokenFileEntries(raw []byte) ([]tokenFileData, error) {
 		if len(entries) == 0 {
 			return nil, fmt.Errorf("no token entries found")
 		}
+		for i := range entries {
+			entries[i].Normalize()
+		}
 		return entries, nil
 	}
 
@@ -624,6 +751,7 @@ func parseTokenFileEntries(raw []byte) ([]tokenFileData, error) {
 			}
 			return nil, err
 		}
+		entry.Normalize()
 		entries = append(entries, entry)
 	}
 
@@ -659,9 +787,17 @@ func validateCPAEntry(data *tokenFileData) error {
 	return nil
 }
 
-// importTokenFileData converts a tokenFileData into an OpenAIAccount and saves it
-// Returns (account, skipped, error)
+// importTokenFileData converts a tokenFileData into an OpenAIAccount and saves it.
+// Returns (account, skipped, error).
 func (h *OpenAIHandler) importSingleTokenFile(data *tokenFileData, existingAccounts *[]models.OpenAIAccount) (*models.OpenAIAccount, bool, error) {
+	account, _, skipped, err := h.importSingleTokenFileWithAction(data, existingAccounts)
+	return account, skipped, err
+}
+
+// importSingleTokenFileWithAction also reports whether the import created a new
+// row or updated an existing row. The identity check is account_id +
+// organization_id when those fields are present, not email.
+func (h *OpenAIHandler) importSingleTokenFileWithAction(data *tokenFileData, existingAccounts *[]models.OpenAIAccount) (*models.OpenAIAccount, string, bool, error) {
 	if data.Email == "" && data.IDToken != "" {
 		// Try to parse email from id_token
 		if userInfo := openaiplatform.ParseIDToken(data.IDToken); userInfo != nil && userInfo.Email != nil {
@@ -669,7 +805,7 @@ func (h *OpenAIHandler) importSingleTokenFile(data *tokenFileData, existingAccou
 		}
 	}
 	if data.Email == "" {
-		return nil, false, fmt.Errorf("no email found in token file")
+		return nil, "", false, fmt.Errorf("no email found in token file")
 	}
 
 	now := time.Now()
@@ -706,11 +842,19 @@ func (h *OpenAIHandler) importSingleTokenFile(data *tokenFileData, existingAccou
 	if account.Plan == nil && strings.TrimSpace(data.PlanType) != "" {
 		account.Plan = normalizedOpenAIPlanPtr(sPtr(data.PlanType))
 	}
-	if data.AccountID != "" && account.ChatGPTAccountID == nil {
+	if data.AccountID != "" && strings.TrimSpace(derefStr(account.ChatGPTAccountID)) == "" {
 		account.ChatGPTAccountID = sPtr(data.AccountID)
 	}
+	if data.OrganizationID != "" && strings.TrimSpace(derefStr(account.OrganizationID)) == "" {
+		account.OrganizationID = sPtr(data.OrganizationID)
+	}
 
-	return h.upsertImportedOAuthAccount(account, existingAccounts)
+	action := "created"
+	if existingAccounts != nil && findMatchingOAuthAccountIndex(*existingAccounts, account) >= 0 {
+		action = "updated"
+	}
+	saved, skipped, err := h.upsertImportedOAuthAccount(account, existingAccounts)
+	return saved, action, skipped, err
 }
 
 // ImportByTokenFiles handles uploading multiple token JSON files at once (multipart form)
@@ -775,14 +919,14 @@ func (h *OpenAIHandler) ImportByTokenFiles(c *gin.Context) {
 			for _, data := range entries {
 				entry := data
 				existingMu.Lock()
-				account, skipped, err := h.importSingleTokenFile(&entry, &existingAccounts)
+				account, action, skipped, err := h.importSingleTokenFileWithAction(&entry, &existingAccounts)
 				existingMu.Unlock()
 
 				if err != nil {
 					fileResults = append(fileResults, tokenImportResult{Filename: fileHeader.Filename, Success: false, Skipped: skipped, Error: err.Error(), Email: entry.Email})
 					continue
 				}
-				fileResults = append(fileResults, tokenImportResult{Filename: fileHeader.Filename, Success: true, Email: account.Email})
+				fileResults = append(fileResults, tokenImportSuccessResult(fileHeader.Filename, "", account, action))
 			}
 
 			resultsMu.Lock()
@@ -793,15 +937,7 @@ func (h *OpenAIHandler) ImportByTokenFiles(c *gin.Context) {
 
 	wg.Wait()
 
-	successCount := 0
-	skippedCount := 0
-	for _, r := range results {
-		if r.Success {
-			successCount++
-		} else if r.Skipped {
-			skippedCount++
-		}
-	}
+	successCount, skippedCount, failedCount, createdCount, updatedCount := summarizeTokenImportResults(results)
 	if successCount > 0 {
 		refreshCodexProxyPool()
 	}
@@ -810,7 +946,9 @@ func (h *OpenAIHandler) ImportByTokenFiles(c *gin.Context) {
 		"total":   len(results),
 		"success": successCount,
 		"skipped": skippedCount,
-		"failed":  len(results) - successCount - skippedCount,
+		"failed":  failedCount,
+		"created": createdCount,
+		"updated": updatedCount,
 		"results": results,
 	})
 }
@@ -829,7 +967,7 @@ func (h *OpenAIHandler) importCPAEntries(entries []tokenFileData, filename strin
 	results := make([]tokenImportResult, 0, len(entries))
 	for _, data := range entries {
 		entry := data
-		account, skipped, err := h.importSingleTokenFile(&entry, &existingAccounts)
+		account, action, skipped, err := h.importSingleTokenFileWithAction(&entry, &existingAccounts)
 		if err != nil {
 			label := entry.Email
 			if label == "" {
@@ -838,16 +976,9 @@ func (h *OpenAIHandler) importCPAEntries(entries []tokenFileData, filename strin
 			results = append(results, tokenImportResult{Filename: filename, Success: false, Skipped: skipped, Error: err.Error(), Email: label})
 			continue
 		}
-		results = append(results, tokenImportResult{Filename: filename, Success: true, Email: account.Email})
+		results = append(results, tokenImportSuccessResult(filename, "", account, action))
 	}
-	successCount, skippedCount := 0, 0
-	for _, r := range results {
-		if r.Success {
-			successCount++
-		} else if r.Skipped {
-			skippedCount++
-		}
-	}
+	successCount, skippedCount, failedCount, createdCount, updatedCount := summarizeTokenImportResults(results)
 	if successCount > 0 {
 		refreshCodexProxyPool()
 	}
@@ -855,7 +986,9 @@ func (h *OpenAIHandler) importCPAEntries(entries []tokenFileData, filename strin
 		"total":   len(results),
 		"success": successCount,
 		"skipped": skippedCount,
-		"failed":  len(results) - successCount - skippedCount,
+		"failed":  failedCount,
+		"created": createdCount,
+		"updated": updatedCount,
 		"results": results,
 	}, nil
 }
@@ -938,7 +1071,7 @@ func (h *OpenAIHandler) importCPAFromMultipart(c *gin.Context) {
 			for _, data := range entries {
 				entry := data
 				existingMu.Lock()
-				account, skipped, err := h.importSingleTokenFile(&entry, &existingAccounts)
+				account, action, skipped, err := h.importSingleTokenFileWithAction(&entry, &existingAccounts)
 				existingMu.Unlock()
 				if err != nil {
 					email := entry.Email
@@ -948,7 +1081,7 @@ func (h *OpenAIHandler) importCPAFromMultipart(c *gin.Context) {
 					fileResults = append(fileResults, tokenImportResult{Filename: fileHeader.Filename, Success: false, Skipped: skipped, Error: err.Error(), Email: email})
 					continue
 				}
-				fileResults = append(fileResults, tokenImportResult{Filename: fileHeader.Filename, Success: true, Email: account.Email})
+				fileResults = append(fileResults, tokenImportSuccessResult(fileHeader.Filename, "", account, action))
 			}
 			resultsMu.Lock()
 			results = append(results, fileResults...)
@@ -957,14 +1090,7 @@ func (h *OpenAIHandler) importCPAFromMultipart(c *gin.Context) {
 	}
 	wg.Wait()
 
-	successCount, skippedCount := 0, 0
-	for _, r := range results {
-		if r.Success {
-			successCount++
-		} else if r.Skipped {
-			skippedCount++
-		}
-	}
+	successCount, skippedCount, failedCount, createdCount, updatedCount := summarizeTokenImportResults(results)
 	if successCount > 0 {
 		refreshCodexProxyPool()
 	}
@@ -972,7 +1098,9 @@ func (h *OpenAIHandler) importCPAFromMultipart(c *gin.Context) {
 		"total":   len(results),
 		"success": successCount,
 		"skipped": skippedCount,
-		"failed":  len(results) - successCount - skippedCount,
+		"failed":  failedCount,
+		"created": createdCount,
+		"updated": updatedCount,
 		"results": results,
 	})
 }
@@ -982,49 +1110,11 @@ func findMatchingOAuthAccountIndex(existingAccounts []models.OpenAIAccount, inco
 		return -1
 	}
 
-	targetID := strings.TrimSpace(derefStr(incoming.ChatGPTAccountID))
-	targetOrgID := strings.TrimSpace(derefStr(incoming.OrganizationID))
-	if targetID != "" {
-		emptyOrgIdx := -1
-		firstScopedIdx := -1
-		firstScopedOrgID := ""
-		hasMultipleScopedOrgs := false
-
-		for i := range existingAccounts {
-			existing := existingAccounts[i]
-			if existing.AccountType != models.OpenAIAccountTypeOAuth {
-				continue
-			}
-			if strings.TrimSpace(derefStr(existing.ChatGPTAccountID)) == targetID {
-				existingOrgID := strings.TrimSpace(derefStr(existing.OrganizationID))
-				if targetOrgID != "" {
-					if existingOrgID == targetOrgID {
-						return i
-					}
-					if existingOrgID == "" && emptyOrgIdx < 0 {
-						emptyOrgIdx = i
-					}
-					continue
-				}
-
-				if existingOrgID == "" {
-					return i
-				}
-				if firstScopedIdx < 0 {
-					firstScopedIdx = i
-					firstScopedOrgID = existingOrgID
-				} else if existingOrgID != firstScopedOrgID {
-					hasMultipleScopedOrgs = true
-				}
-			}
-		}
-
-		if targetOrgID != "" {
-			return emptyOrgIdx
-		}
-		if firstScopedIdx >= 0 && !hasMultipleScopedOrgs {
-			return firstScopedIdx
-		}
+	if idx := findOAuthAccountByChatGPTID(existingAccounts, incoming); idx >= 0 {
+		return idx
+	}
+	if strings.TrimSpace(derefStr(incoming.ChatGPTAccountID)) != "" ||
+		strings.TrimSpace(derefStr(incoming.OrganizationID)) != "" {
 		return -1
 	}
 
@@ -1037,12 +1127,77 @@ func findMatchingOAuthAccountIndex(existingAccounts []models.OpenAIAccount, inco
 		if existing.AccountType != models.OpenAIAccountTypeOAuth {
 			continue
 		}
-		if !strings.EqualFold(existing.Email, targetEmail) {
-			continue
+		if strings.EqualFold(strings.TrimSpace(existing.Email), targetEmail) {
+			return i
 		}
-		return i
 	}
 
+	return -1
+}
+
+func findOAuthAccountByChatGPTID(existingAccounts []models.OpenAIAccount, incoming *models.OpenAIAccount) int {
+	if incoming == nil {
+		return -1
+	}
+
+	targetID := strings.TrimSpace(derefStr(incoming.ChatGPTAccountID))
+	if targetID == "" {
+		return -1
+	}
+	targetOrgID := strings.TrimSpace(derefStr(incoming.OrganizationID))
+	targetEmail := strings.TrimSpace(incoming.Email)
+	emailMatches := func(existing models.OpenAIAccount) bool {
+		return targetEmail != "" && strings.EqualFold(strings.TrimSpace(existing.Email), targetEmail)
+	}
+
+	emptyOrgIdx := -1
+	firstScopedIdx := -1
+	firstScopedOrgID := ""
+	hasMultipleScopedOrgs := false
+
+	for i := range existingAccounts {
+		existing := existingAccounts[i]
+		if existing.AccountType != models.OpenAIAccountTypeOAuth {
+			continue
+		}
+		if strings.TrimSpace(derefStr(existing.ChatGPTAccountID)) != targetID {
+			continue
+		}
+
+		existingOrgID := strings.TrimSpace(derefStr(existing.OrganizationID))
+		if targetOrgID != "" {
+			if existingOrgID == targetOrgID {
+				return i
+			}
+			if existingOrgID == "" && emptyOrgIdx < 0 && (targetEmail == "" || emailMatches(existing)) {
+				emptyOrgIdx = i
+			}
+			continue
+		}
+
+		if existingOrgID == "" {
+			if targetEmail == "" || emailMatches(existing) {
+				return i
+			}
+			continue
+		}
+		if targetEmail != "" && !emailMatches(existing) {
+			continue
+		}
+		if firstScopedIdx < 0 {
+			firstScopedIdx = i
+			firstScopedOrgID = existingOrgID
+		} else if existingOrgID != firstScopedOrgID {
+			hasMultipleScopedOrgs = true
+		}
+	}
+
+	if targetOrgID != "" {
+		return emptyOrgIdx
+	}
+	if firstScopedIdx >= 0 && !hasMultipleScopedOrgs {
+		return firstScopedIdx
+	}
 	return -1
 }
 
@@ -1442,6 +1597,25 @@ func (h *OpenAIHandler) ImportOAuthAccountByRefreshToken(refreshToken string) (*
 		refreshCodexProxyPool()
 	}
 	return out, err
+}
+
+// ImportOAuthSessionAccount upserts an OAuth account from a ChatGPT session export
+// (accessToken + user/account metadata) and joins default proxy membership when eligible.
+func (h *OpenAIHandler) ImportOAuthSessionAccount(incoming *models.OpenAIAccount, existingAccounts *[]models.OpenAIAccount) (*models.OpenAIAccount, error) {
+	if incoming == nil {
+		return nil, fmt.Errorf("incoming oauth account is nil")
+	}
+	out, _, err := h.upsertImportedOAuthAccount(incoming, existingAccounts)
+	if err != nil {
+		return nil, err
+	}
+	if h.applyDefaultAPIServiceMembership(out) {
+		if err := h.saveDefaultAPIServiceMembership(out); err != nil {
+			return out, err
+		}
+	}
+	refreshCodexProxyPool()
+	return out, nil
 }
 
 // GenerateOAuthURL generates an OpenAI OAuth authorization URL
@@ -2025,7 +2199,7 @@ func (h *OpenAIHandler) TestAPIAccount(c *gin.Context) {
 		return
 	}
 	if model == "" {
-		model = "gpt-4o-mini"
+		model = "gpt-5.4"
 	}
 
 	wireAPI := strings.ToLower(strings.TrimSpace(derefStr(account.WireAPI)))
@@ -2273,6 +2447,7 @@ type exportedOAuthAccount struct {
 	ID               string `json:"id,omitempty"`
 	AccessToken      string `json:"access_token"`
 	AccountID        string `json:"account_id,omitempty"`
+	OrganizationID   string `json:"organization_id,omitempty"`
 	Disabled         bool   `json:"disabled"`
 	Email            string `json:"email"`
 	Expired          string `json:"expired,omitempty"`
@@ -2383,19 +2558,20 @@ func (h *OpenAIHandler) ExportAccounts(c *gin.Context) {
 		lastRefreshStr = a.UpdatedAt.In(time.Local).Format(time.RFC3339)
 
 		resp.OAuthAccounts = append(resp.OAuthAccounts, exportedOAuthAccount{
-			ID:           a.ID,
-			AccessToken:  derefStr(a.AccessToken),
-			AccountID:    derefStr(a.ChatGPTAccountID),
-			Disabled:     a.Status != "" && a.Status != "active",
-			Email:        a.Email,
-			Expired:      expiredStr,
-			IDToken:      derefStr(a.IDToken),
-			LastRefresh:  lastRefreshStr,
-			Plan:         derefStr(a.Plan),
-			PlanType:     derefStr(a.Plan),
-			RefreshToken: derefStr(a.RefreshToken),
-			Type:         "codex",
-			Status:       a.Status,
+			ID:             a.ID,
+			AccessToken:    derefStr(a.AccessToken),
+			AccountID:      derefStr(a.ChatGPTAccountID),
+			OrganizationID: derefStr(a.OrganizationID),
+			Disabled:       a.Status != "" && a.Status != "active",
+			Email:          a.Email,
+			Expired:        expiredStr,
+			IDToken:        derefStr(a.IDToken),
+			LastRefresh:    lastRefreshStr,
+			Plan:           derefStr(a.Plan),
+			PlanType:       derefStr(a.Plan),
+			RefreshToken:   derefStr(a.RefreshToken),
+			Type:           "codex",
+			Status:         a.Status,
 		})
 	}
 
@@ -2428,6 +2604,10 @@ func (h *OpenAIHandler) ImportFromExport(c *gin.Context) {
 // Returns percentage-based 5h/7d quota data. Results are persisted to the database.
 // Accepts optional {"ids": ["id1","id2"]} to query only specific accounts.
 func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
+	quotaSettings := readQuotaFetchSettings()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(quotaSettings.TimeoutSeconds)*time.Second)
+	defer cancel()
+
 	var req struct {
 		IDs []string `json:"ids"`
 	}
@@ -2477,13 +2657,18 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 
 	results := make([]quotaResult, len(oauthAccounts))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 5)
+	sem := make(chan struct{}, quotaSettings.Concurrency)
 
 	for i, acc := range oauthAccounts {
 		wg.Add(1)
 		go func(idx int, account models.OpenAIAccount) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results[idx] = quotaResult{ID: account.ID, Email: account.Email, Success: false, Error: ctx.Err().Error()}
+				return
+			}
 			defer func() { <-sem }()
 
 			chatgptID := ""
@@ -2493,7 +2678,7 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 
 			accessToken := derefStr(account.AccessToken)
 			if accessToken == "" && derefStr(account.RefreshToken) != "" {
-				if err := h.refreshOAuthAccountTokens(&account); err != nil {
+				if err := h.refreshOAuthAccountTokensContext(ctx, &account); err != nil {
 					if saveErr := h.persistQuotaFailureState(&account, err.Error(), false); saveErr != nil {
 						results[idx] = quotaResult{ID: account.ID, Email: account.Email, Success: false, Error: fmt.Sprintf("persist quota failed: %v", saveErr)}
 						return
@@ -2505,9 +2690,9 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 				chatgptID = derefStr(account.ChatGPTAccountID)
 			}
 
-			info, err := openaiplatform.FetchQuota(accessToken, chatgptID)
+			info, err := openaiplatform.FetchQuotaContext(ctx, accessToken, chatgptID)
 			if err != nil && isQuotaUnauthorized(err) && derefStr(account.RefreshToken) != "" {
-				if refreshErr := h.refreshOAuthAccountTokens(&account); refreshErr != nil {
+				if refreshErr := h.refreshOAuthAccountTokensContext(ctx, &account); refreshErr != nil {
 					if saveErr := h.persistQuotaFailureState(&account, refreshErr.Error(), false); saveErr != nil {
 						results[idx] = quotaResult{ID: account.ID, Email: account.Email, Success: false, Error: fmt.Sprintf("persist quota failed: %v", saveErr)}
 						return
@@ -2517,7 +2702,7 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 				}
 				accessToken = derefStr(account.AccessToken)
 				chatgptID = derefStr(account.ChatGPTAccountID)
-				info, err = openaiplatform.FetchQuota(accessToken, chatgptID)
+				info, err = openaiplatform.FetchQuotaContext(ctx, accessToken, chatgptID)
 			}
 			if err != nil {
 				if saveErr := h.persistQuotaFailureState(&account, err.Error(), false); saveErr != nil {
@@ -2545,16 +2730,23 @@ func (h *OpenAIHandler) FetchQuotas(c *gin.Context) {
 			if info.IsForbidden {
 				account.QuotaIsForbidden = true
 				account.QuotaVerified = false
-				account.QuotaError = nil
-				http403 := 403
-				account.QuotaHTTPStatus = &http403
+				if strings.TrimSpace(info.ForbiddenReason) != "" {
+					account.QuotaError = &info.ForbiddenReason
+				} else {
+					account.QuotaError = nil
+				}
+				httpStatus := info.HTTPStatus
+				if httpStatus == 0 {
+					httpStatus = 403
+				}
+				account.QuotaHTTPStatus = &httpStatus
 				now := time.Now()
 				account.QuotaUpdatedAt = &now
 				if err := h.storage.Save(&account); err != nil {
 					results[idx] = quotaResult{ID: account.ID, Email: account.Email, Success: false, Error: fmt.Sprintf("persist quota failed: %v", err)}
 					return
 				}
-				results[idx] = quotaResult{ID: account.ID, Email: account.Email, Success: true, IsForbidden: true}
+				results[idx] = quotaResult{ID: account.ID, Email: account.Email, Success: true, IsForbidden: true, Error: info.ForbiddenReason, HTTPStatus: httpStatus}
 				return
 			}
 
@@ -2663,30 +2855,53 @@ func (h *OpenAIHandler) serviceConfigPayload(c *gin.Context) gin.H {
 	proxyCount, _ := h.storage.CountProxyEnabled()
 	v1ProxyMode, _ := storage.GetSetting("v1_proxy_mode")
 	codexAPIBaseURL := buildCodexAPIServiceBaseURL(c)
+	codexContextConfig := loadCodexContextConfig()
 
 	return gin.H{
-		"proxy_pool_enabled":    enabled,
-		"strategy":              strategy,
-		"pool_size":             poolSize,
-		"proxy_enabled_count":   proxyCount,
-		"total_requests":        totalReqs,
-		"request_logs_retained": false,
-		"api_key_set":           apiKey != "",
-		"api_key":               apiKey,
-		"api_key_masked":        maskedKey,
-		"v1_proxy_mode":         v1ProxyMode,
-		"codex_api_service":     enabled && v1ProxyMode == "codex",
-		"codex_api_base_url":    codexAPIBaseURL,
-		"codex_api_port_url":    strings.TrimRight(codexAPIBaseURL, "/") + "/responses",
+		"proxy_pool_enabled":             enabled,
+		"strategy":                       strategy,
+		"pool_size":                      poolSize,
+		"proxy_enabled_count":            proxyCount,
+		"total_requests":                 totalReqs,
+		"request_logs_retained":          true,
+		"api_key_set":                    apiKey != "",
+		"api_key":                        apiKey,
+		"api_key_masked":                 maskedKey,
+		"v1_proxy_mode":                  v1ProxyMode,
+		"codex_api_service":              enabled && v1ProxyMode == "codex",
+		"codex_api_base_url":             codexAPIBaseURL,
+		"codex_api_port_url":             strings.TrimRight(codexAPIBaseURL, "/") + "/responses",
+		"codex_context_mode":             codexContextConfig.Mode,
+		"model_context_window":           codexContextConfig.ModelContextWindow,
+		"model_auto_compact_token_limit": codexContextConfig.ModelAutoCompactTokenLimit,
 	}
+}
+
+func (h *OpenAIHandler) GetCodexCallHistory(c *gin.Context) {
+	p := proxy.GetProxy()
+	calls := []proxy.CodexCallRecord{}
+	if p != nil {
+		calls = p.RecentCalls(100)
+	}
+	c.JSON(http.StatusOK, gin.H{"recent_calls": calls})
+}
+
+func (h *OpenAIHandler) ClearCodexCallHistory(c *gin.Context) {
+	if p := proxy.GetProxy(); p != nil {
+		p.ClearHistory()
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // UpdateServiceConfig updates proxy pool enabled, strategy, and API key.
 func (h *OpenAIHandler) UpdateServiceConfig(c *gin.Context) {
 	var req struct {
-		ProxyPoolEnabled *bool   `json:"proxy_pool_enabled,omitempty"`
-		Strategy         *string `json:"strategy,omitempty"`
-		APIKey           *string `json:"api_key,omitempty"`
+		ProxyPoolEnabled           *bool   `json:"proxy_pool_enabled,omitempty"`
+		Strategy                   *string `json:"strategy,omitempty"`
+		APIKey                     *string `json:"api_key,omitempty"`
+		CodexContextMode           *string `json:"codex_context_mode,omitempty"`
+		ModelContextWindow         *int64  `json:"model_context_window,omitempty"`
+		ModelAutoCompactTokenLimit *int64  `json:"model_auto_compact_token_limit,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "Invalid request body", Code: "INVALID_REQUEST"})
@@ -2711,6 +2926,22 @@ func (h *OpenAIHandler) UpdateServiceConfig(c *gin.Context) {
 	if req.APIKey != nil {
 		storage.SaveSetting("proxy_api_key", strings.TrimSpace(*req.APIKey))
 	}
+	if req.CodexContextMode != nil || req.ModelContextWindow != nil || req.ModelAutoCompactTokenLimit != nil {
+		current := loadCodexContextConfig()
+		if req.CodexContextMode != nil {
+			current.Mode = strings.TrimSpace(*req.CodexContextMode)
+		}
+		if req.ModelContextWindow != nil {
+			current.ModelContextWindow = *req.ModelContextWindow
+		}
+		if req.ModelAutoCompactTokenLimit != nil {
+			current.ModelAutoCompactTokenLimit = *req.ModelAutoCompactTokenLimit
+		}
+		if err := saveCodexContextConfig(current); err != nil {
+			c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
+			return
+		}
+	}
 
 	h.GetServiceConfig(c)
 }
@@ -2723,15 +2954,16 @@ func (h *OpenAIHandler) ActivateCodexAPIService(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "LOCAL_ACCESS_ERROR"})
 		return
 	}
-	launchResult, err := openaiplatform.RestartCodexApp()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "CODEX_LAUNCH_FAILED"})
-		return
-	}
-
 	payload := h.serviceConfigPayload(c)
 	payload["codex_config_injected"] = true
 	payload["api_key_generated"] = strings.TrimSpace(apiKeyBefore) == ""
+
+	launchResult, err := openaiplatform.RestartCodexApp()
+	if err != nil {
+		payload["codex_app_error"] = err.Error()
+		c.JSON(http.StatusOK, payload)
+		return
+	}
 	payload["codex_app_started"] = launchResult.Started
 	payload["codex_app_restarted"] = launchResult.Restarted
 	payload["codex_app_was_running"] = launchResult.RunningBefore
@@ -2852,7 +3084,7 @@ func (h *OpenAIHandler) UpdateCodexLocalAccessPort(c *gin.Context) {
 	if readBoolSetting(codexLocalAccessEnabledKey, false) {
 		apiKey, _ := storage.GetSetting("proxy_api_key")
 		if apiKey != "" {
-			if err := openaiplatform.SwitchCodexAPIService(buildCodexAPIServiceBaseURL(c), apiKey); err != nil {
+			if err := openaiplatform.SwitchCodexAPIService(buildCodexAPIServiceBaseURL(c), apiKey, loadCodexContextConfig()); err != nil {
 				c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "CODEX_CONFIG_WRITE_FAILED"})
 				return
 			}
@@ -2896,7 +3128,7 @@ func (h *OpenAIHandler) RotateCodexLocalAccessAPIKey(c *gin.Context) {
 	}
 	_ = saveCodexLocalAccessTimestamp(false)
 	if readBoolSetting(codexLocalAccessEnabledKey, false) {
-		if err := openaiplatform.SwitchCodexAPIService(buildCodexAPIServiceBaseURL(c), apiKey); err != nil {
+		if err := openaiplatform.SwitchCodexAPIService(buildCodexAPIServiceBaseURL(c), apiKey, loadCodexContextConfig()); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIError{Error: err.Error(), Code: "CODEX_CONFIG_WRITE_FAILED"})
 			return
 		}
@@ -2905,6 +3137,9 @@ func (h *OpenAIHandler) RotateCodexLocalAccessAPIKey(c *gin.Context) {
 }
 
 func (h *OpenAIHandler) ClearCodexLocalAccessStats(c *gin.Context) {
+	if p := proxy.GetProxy(); p != nil {
+		p.ClearHistory()
+	}
 	c.JSON(http.StatusOK, h.codexLocalAccessState(c))
 }
 
@@ -2991,7 +3226,7 @@ func (h *OpenAIHandler) activateCodexLocalAccess(c *gin.Context) error {
 		}
 	}
 
-	return openaiplatform.SwitchCodexAPIService(buildCodexAPIServiceBaseURL(c), apiKey)
+	return openaiplatform.SwitchCodexAPIService(buildCodexAPIServiceBaseURL(c), apiKey, loadCodexContextConfig())
 }
 
 func generateCodexAPIServiceKey() (string, error) {
@@ -3012,37 +3247,11 @@ func localProxyOriginFromRequest(c *gin.Context) string {
 }
 
 func buildCodexAPIServiceBaseURL(c *gin.Context) string {
-	host := "localhost:8022"
+	host := ""
 	if c != nil && c.Request != nil {
-		if requestHost := strings.TrimSpace(c.Request.Host); requestHost != "" {
-			host = requestHost
-		}
+		host = strings.TrimSpace(c.Request.Host)
 	}
-	hostOnly, port, err := net.SplitHostPort(host)
-	if err == nil {
-		if hostOnly == "" || hostOnly == "0.0.0.0" || hostOnly == "::" || hostOnly == "[::]" || strings.EqualFold(hostOnly, "localhost") || net.ParseIP(hostOnly) != nil {
-			hostOnly = "localhost"
-		}
-		if serverPort := config.Get().Server.Port; serverPort > 0 {
-			port = strconv.Itoa(serverPort)
-		}
-		host = net.JoinHostPort(hostOnly, port)
-	} else {
-		hostOnly := strings.TrimSpace(host)
-		if hostOnly == "" || hostOnly == "0.0.0.0" || hostOnly == "::" || hostOnly == "[::]" || strings.EqualFold(hostOnly, "localhost") || net.ParseIP(hostOnly) != nil {
-			hostOnly = "localhost"
-		}
-		port := "8022"
-		if serverPort := config.Get().Server.Port; serverPort > 0 {
-			port = strconv.Itoa(serverPort)
-		}
-		host = net.JoinHostPort(hostOnly, port)
-	}
-	scheme := "http"
-	if c != nil && c.Request != nil && c.Request.TLS != nil {
-		scheme = "https"
-	}
-	return fmt.Sprintf("%s://%s/v1", scheme, host)
+	return openaiplatform.LocalCodexProxyAPIBaseURL(host)
 }
 
 func (h *OpenAIHandler) codexLocalAccessState(c *gin.Context) models.CodexLocalAccessState {
@@ -3070,7 +3279,7 @@ func (h *OpenAIHandler) codexLocalAccessState(c *gin.Context) models.CodexLocalA
 		Running:     running,
 		BaseURL:     baseURL,
 		APIPortURL:  strings.TrimRight(baseURL, "/") + "/responses",
-		ModelIDs:    []string{"gpt-5-codex", "gpt-5-codex-mini", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-image-2"},
+		ModelIDs:    []string{"gpt-5.5", "gpt-5.4"},
 		MemberCount: len(collection.AccountIDs),
 		Stats:       h.buildCodexLocalAccessStats(),
 	}
@@ -3116,7 +3325,7 @@ func (h *OpenAIHandler) filterCodexLocalAccessAccountIDs(ids []string, restrictF
 		}
 		account, ok := byID[id]
 		if !ok {
-			return nil, fmt.Errorf("账号不存在: %s", id)
+			continue
 		}
 		if !isCodexLocalAccessEligibleAccount(account, restrictFree) {
 			continue
@@ -3266,6 +3475,31 @@ func saveCodexLocalAccessTimestamp(createIfMissing bool) error {
 	return storage.SaveSetting(codexLocalAccessUpdatedAtKey, now)
 }
 
+func loadCodexContextConfig() codexconfig.ContextConfig {
+	return codexconfig.FromSettings(storage.GetAllSettings())
+}
+
+func saveCodexContextConfig(config codexconfig.ContextConfig) error {
+	if !codexconfig.ValidMode(config.Mode) {
+		return fmt.Errorf("invalid codex_context_mode")
+	}
+	if strings.TrimSpace(config.Mode) == codexconfig.ModeCustom {
+		if config.ModelContextWindow <= 0 || config.ModelAutoCompactTokenLimit <= 0 {
+			return fmt.Errorf("custom context values must be greater than 0")
+		}
+		if config.ModelAutoCompactTokenLimit > config.ModelContextWindow {
+			return fmt.Errorf("auto compact token limit cannot exceed context window")
+		}
+	}
+	config = codexconfig.Normalize(config)
+	for key, value := range config.Settings() {
+		if err := storage.SaveSetting(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func readStringSetting(key, fallback string) string {
 	if value, ok := storage.GetSetting(key); ok && strings.TrimSpace(value) != "" {
 		return strings.TrimSpace(value)
@@ -3336,6 +3570,10 @@ func isValidCodexProxyStrategy(strategy string) bool {
 // ---- helpers ----
 
 func (h *OpenAIHandler) refreshOAuthAccountTokens(account *models.OpenAIAccount) error {
+	return h.refreshOAuthAccountTokensContext(context.Background(), account)
+}
+
+func (h *OpenAIHandler) refreshOAuthAccountTokensContext(ctx context.Context, account *models.OpenAIAccount) error {
 	if account == nil {
 		return fmt.Errorf("account is nil")
 	}
@@ -3346,7 +3584,7 @@ func (h *OpenAIHandler) refreshOAuthAccountTokens(account *models.OpenAIAccount)
 		return fmt.Errorf("no refresh token available")
 	}
 
-	tokenResp, err := openaiplatform.RefreshToken(*account.RefreshToken)
+	tokenResp, err := openaiplatform.RefreshTokenContext(ctx, *account.RefreshToken)
 	if err != nil {
 		if isRefreshTokenReusedError(err) {
 			h.markOAuthAccountReauthRequired(account)
@@ -3445,6 +3683,15 @@ func (h *OpenAIHandler) markOAuthAccountReauthRequired(account *models.OpenAIAcc
 }
 
 func sPtr(s string) *string { return &s }
+
+func firstNonEmptyTrimmed(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
 
 func normalizedOpenAIPlanPtr(value *string) *string {
 	if value == nil {

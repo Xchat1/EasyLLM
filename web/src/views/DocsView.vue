@@ -68,13 +68,14 @@
           <div class="doc-code">
             <div class="doc-code-header">自动配置的 ~/.codex/config.toml</div>
             <pre>model_provider = "easyllm"
-model = "gpt-5-codex"
+model = "gpt-5.5"
 
 [model_providers.easyllm]
 name = "EasyLLM API Service"
-base_url = "http://localhost:{{ port }}/v1"
+base_url = "http://localhost:{{ port }}/backend-api/codex"
 wire_api = "responses"
-requires_openai_auth = true</pre>
+requires_openai_auth = true
+supports_websockets = false</pre>
             <button @click="copyCurl('codex-oauth')" class="doc-code-copy">复制</button>
           </div>
         </div>
@@ -97,7 +98,7 @@ requires_openai_auth = true</pre>
           <div class="doc-code">
             <div class="doc-code-header">示例：自定义 API 账号</div>
             <pre>model_provider = "my-provider"
-model = "gpt-4o"
+model = "gpt-5.4"
 
 [model_providers.my-provider]
 name = "my-provider"
@@ -110,11 +111,11 @@ wire_api = "responses"</pre>
         <!-- Method 4 -->
         <div class="mb-5">
           <h3 class="text-sm font-semibold text-white mb-2">方式四：Relay 第三方上游</h3>
-          <p class="text-xs text-gray-400 mb-3">在 <router-link to="/relay" class="text-blue-400 hover:underline">Relay 配置</router-link> 页填写上游 OpenAI 兼容 API，点击「启动并注入 Codex」。EasyLLM 负责 Responses API → Chat Completions 协议转换，Codex 客户端 / Codex CLI 无需直连上游。</p>
+          <p class="text-xs text-gray-400 mb-3">在 <router-link to="/relay" class="text-blue-400 hover:underline">Relay 配置</router-link> 页填写 DeepSeek、Mistral、OpenRouter、Kimi、Qwen、MiMo 等 OpenAI 兼容上游，点击「启动并注入 Codex」。EasyLLM 负责 Responses API → Chat Completions 协议转换，Codex 客户端 / Codex CLI 无需直连上游。</p>
           <div class="doc-code">
             <div class="doc-code-header">自动配置的 ~/.codex/config.toml</div>
             <pre>model_provider = "relay"
-model = "gpt-5-codex"
+model = "gpt-5.5"
 
 [model_providers.relay]
 name = "EasyLLM Relay"
@@ -142,7 +143,7 @@ requires_openai_auth = false</pre>
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">📡</span> cURL 调用示例
         </h2>
-        <p class="text-sm text-gray-400 mb-5">通过代理池的 OpenAI 兼容接口发送请求。</p>
+        <p class="text-sm text-gray-400 mb-5">通过代理池或 Relay 的 OpenAI 兼容接口发送请求。Relay 最近调用记录只保存时间、渠道、模型和 Token 用量，不保存提示词或响应正文。</p>
 
         <div class="space-y-4">
           <div>
@@ -375,20 +376,22 @@ const faqs = [
   { q: '配额查询显示 Forbidden', a: '该账号可能没有 Codex 访问权限（需要 ChatGPT Plus/Pro 订阅），或 Token 已失效。' },
   { q: '如何更改数据库位置？', a: '在设置 → 运行状态中修改 SQLite 数据库路径，保存后重启 EasyLLM 即可。' },
   { q: 'EasyLLM 是否适合对公网开放？', a: '不适合。EasyLLM 面向本机 Codex/OpenAI 编码对接，后端默认只监听 127.0.0.1。' },
+  { q: '哪些文件不能提交或打进发布包？', a: '不要提交 .env、data/、auth/、exports/、backups/、Token/CPA JSON、数据库、日志、build/、web/dist/ 或 .codex/.agents 等本地助手目录。发布 zip 前请运行 scripts/check-release-archives.sh。' },
   { q: '5h 和 7d 配额是什么意思？', a: '5h 是短期会话限制，7d 是长期总量限制。在 OpenAI 页面点击"刷新配额"可查看最新使用情况。' },
 ]
 
 const curlSnippets = {
   'codex-oauth': `model_provider = "easyllm"
-model = "gpt-5-codex"
+model = "gpt-5.5"
 
 [model_providers.easyllm]
 name = "EasyLLM API Service"
-base_url = "http://localhost:PORT/v1"
+base_url = "http://localhost:PORT/backend-api/codex"
 wire_api = "responses"
-requires_openai_auth = true`,
+requires_openai_auth = true
+supports_websockets = false`,
   'api-account': `model_provider = "my-provider"
-model = "gpt-4o"
+model = "gpt-5.4"
 
 [model_providers.my-provider]
 name = "my-provider"
@@ -396,7 +399,7 @@ base_url = "https://api.example.com/v1"
 wire_api = "responses"`,
   'codex-pool': `chatgpt_base_url = "http://localhost:PORT"`,
   'codex-relay': `model_provider = "relay"
-model = "gpt-5-codex"
+model = "gpt-5.5"
 
 [model_providers.relay]
 name = "EasyLLM Relay"

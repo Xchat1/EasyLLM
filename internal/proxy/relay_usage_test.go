@@ -36,9 +36,9 @@ func TestRelayUsageStoreRecordAndSnapshot(t *testing.T) {
 func TestRelayUsageStoreRecordCallHistory(t *testing.T) {
 	store := &RelayUsageStore{}
 	store.RecordCall(RelayCallRecord{
-		Provider:      "小米 MiMo",
+		Provider:      "DeepSeek",
 		CodexModel:    "gpt-5.5",
-		UpstreamModel: "mimo-v2.5-pro",
+		UpstreamModel: "deepseek-coder",
 		Stream:        true,
 		InputTokens:   100,
 		OutputTokens:  20,
@@ -49,13 +49,13 @@ func TestRelayUsageStoreRecordCallHistory(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 call record, got %d", len(calls))
 	}
-	if calls[0].Provider != "小米 MiMo" {
+	if calls[0].Provider != "DeepSeek" {
 		t.Fatalf("unexpected provider: %q", calls[0].Provider)
 	}
 }
 
 func TestResolveRelayProvider(t *testing.T) {
-	if got := resolveRelayProvider("https://token-plan-cn.xiaomimimo.com/v1"); got != "小米 MiMo" {
+	if got := resolveRelayProvider("https://api.deepseek.com/v1"); got != "DeepSeek" {
 		t.Fatalf("unexpected provider: %q", got)
 	}
 }

@@ -12,7 +12,7 @@ EasyLLM Relay (localhost:8022)
     │  协议转换 + 会话管理 + 轮询调度
     ▼
 上游 Chat Completions API
-(DeepSeek / Kimi / Qwen / OpenRouter / 任意 OpenAI 兼容服务)
+(DeepSeek / Mistral / OpenRouter / Kimi / Qwen / MiMo / 任意 OpenAI 兼容服务)
 ```
 
 ## 核心能力
@@ -23,7 +23,8 @@ EasyLLM Relay (localhost:8022)
 - **多上游轮询**：可配置多个上游渠道，按 round-robin 策略自动分流
 - **模型映射**：全局模型名映射（如 `gpt-5.4` → `deepseek-chat`）
 - **工具过滤**：通过工具拒绝列表屏蔽不被上游支持的工具类型
-- **MiMo 支持**：针对 MiMo 思考模型做了专项适配（reasoning_content 往返）
+- **MiMo 适配**：针对 Xiaomi MiMo 思考模型自动处理 thinking、tool choice、max completion tokens 和 reasoning_content 往返
+- **运行观测**：Dashboard 展示 Relay 累计 Token、最近 100 条调用元数据和渠道过滤；Relay 页面提供实时日志
 
 ## 端点
 
@@ -31,6 +32,16 @@ EasyLLM Relay (localhost:8022)
 |------|------|------|
 | `POST` | `/v1/responses` | Relay 主入口，协议转换并转发 |
 | `GET` | `/v1/models` | 代理上游模型列表 |
+| `GET` | `/api/v1/relay/config` | 查询 Relay 配置与注入状态 |
+| `PUT` | `/api/v1/relay/config` | 更新上游、模型映射、工具拒绝列表和会话限制 |
+| `POST` | `/api/v1/relay/inject-codex` | 写入 `~/.codex/config.toml` 并可拉起 Codex |
+| `GET` | `/api/v1/relay/usage` | 查询累计 Token 与最近调用元数据 |
+| `DELETE` | `/api/v1/relay/usage/history` | 清空最近调用记录，保留累计统计 |
+| `GET` | `/api/v1/relay/logs` | 查询 Relay 日志 |
+| `GET` | `/api/v1/relay/logs/stream` | 订阅 Relay 日志 SSE |
+| `DELETE` | `/api/v1/relay/logs` | 清空 Relay 日志 |
+| `POST` | `/api/v1/relay/sessions/clear` | 清空会话历史 |
+| `GET` | `/api/v1/relay/sessions/stats` | 查询会话数量和历史大小 |
 
 Relay 端点与现有 OpenAI 兼容代理共用 `/v1` 根路径，优先匹配后直接处理，无需额外配置路由前缀。
 
@@ -110,6 +121,8 @@ supports_websockets = false
 
 Codex CLI 始终连接本地 `http://localhost:8022/v1`，无感知上游切换。
 
+保存配置时会自动清理 URL、API Key、认证头和认证前缀两侧空白；空 URL 的渠道不会参与转发。`/v1/models` 也会从启用渠道池中选择上游，因此模型列表与实际 Relay 转发保持一致。
+
 ## 模型映射
 
 在「全局模型映射」中配置 JSON：
@@ -118,7 +131,7 @@ Codex CLI 始终连接本地 `http://localhost:8022/v1`，无感知上游切换�
 {
   "gpt-5.4": "deepseek-chat",
   "gpt-5.5": "deepseek-reasoner",
-  "o3": "qwen-max"
+  "o3": "mistral-large-latest"
 }
 ```
 
@@ -151,5 +164,13 @@ curl -X POST http://localhost:8022/v1/responses \
 | `internal/proxy/relay_client.go` | 上游 HTTP Client |
 | `internal/proxy/relay_log.go` | Relay 请求日志 |
 | `internal/proxy/relay_usage.go` | Token 用量统计 |
-| `internal/proxy/relay_mimo.go` | MiMo 思考模型专项适配 |
+| `internal/proxy/relay_mimo.go` | Xiaomi MiMo 思考模型专项适配 |
 | `web/src/views/RelayConfigView.vue` | Relay 配置页面 |
+| `web/src/views/DashboardView.vue` | Relay Token 统计与最近调用记录 |
+
+## 隐私边界
+
+- 上游 API Key 只保存在本地 SQLite settings 表中，不写入 Codex CLI 配置。
+- Relay 日志用于排查运行状态，只记录级别、模型、响应 ID 和截断后的错误摘要。
+- Relay 调用统计只记录时间、渠道、模型、流式标记和 Token 用量，不保存提示词或响应正文。
+- 不要提交 `.env`、数据库、Token/CPA JSON、导出备份、日志、`build/`、`web/dist/` 或 `.codex` / `.agents` 等本地助手目录。

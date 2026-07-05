@@ -16,6 +16,7 @@ EasyLLM/
 │   └── USAGE.md                 # 使用指南
 ├── internal/
 │   ├── handlers/                # HTTP Handler 与业务编排
+│   ├── httputil/                # 出站 HTTP Client、重试和网络错误判断
 │   ├── models/                  # 数据模型与响应结构
 │   ├── openai/                  # OAuth、配额、本地 Codex 配置写入
 │   ├── proxy/                   # 代理池、Relay 协议转换、WebSocket
@@ -26,7 +27,7 @@ EasyLLM/
 │   │   ├── relay_config.go      # Relay 配置持久化（settings 表）
 │   │   ├── relay_handler.go     # Relay HTTP 入口与配置 CRUD
 │   │   ├── relay_log.go         # Relay 请求日志
-│   │   ├── relay_mimo.go        # MiMo 思考模型专项适配
+│   │   ├── relay_mimo.go        # Xiaomi MiMo 思考模型专项适配
 │   │   ├── relay_session.go     # 会话历史管理（previous_response_id）
 │   │   ├── relay_stream.go      # SSE 流式转换
 │   │   ├── relay_translate.go   # Responses ↔ Chat Completions 协议转换
@@ -38,9 +39,9 @@ EasyLLM/
 ├── macos/                       # macOS App 启动器与图标生成脚本
 ├── scripts/                     # 启动、构建、系统辅助脚本
 │   ├── build-macos-app.sh
-│   ├── build.sh
+│   ├── check-release-archives.sh
 │   ├── package-windows.ps1
-│   ├── setup-pf-8022-redirect.sh
+│   ├── pre-push-privacy-check.sh
 │   ├── start.bat
 │   ├── start.ps1
 │   └── start.sh
@@ -89,7 +90,9 @@ GET  /api/v1/relay/config       Relay 配置查询
 PUT  /api/v1/relay/config       Relay 配置更新
 GET  /api/v1/relay/logs         Relay 请求日志
 GET  /api/v1/relay/logs/stream  Relay 日志 SSE 实时推送
+DELETE /api/v1/relay/logs       清空 Relay 请求日志
 GET  /api/v1/relay/usage        Relay Token 用量统计
+DELETE /api/v1/relay/usage/history 清空 Relay 最近调用记录
 POST /api/v1/relay/inject-codex 注入 ~/.codex/config.toml
 POST /api/v1/relay/sessions/clear 清空会话历史
 GET  /api/v1/relay/sessions/stats 会话统计
@@ -108,6 +111,7 @@ GET  /api/v1/relay/sessions/stats 会话统计
 - `build/`
 - `build/release/`
 - `.claude/`、`.codex/`、`.agents/` 等本地助手配置
+- `logs/`、`*.log`
 - Token JSON、CPA JSON、EasyLLM 备份、数据库文件、API Key、私钥
 
 如果敏感文件已经被 Git 跟踪，需要先执行：

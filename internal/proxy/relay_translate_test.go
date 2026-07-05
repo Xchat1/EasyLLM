@@ -166,10 +166,10 @@ func TestPreferredCodexModel(t *testing.T) {
 		{
 			name: "prefer gpt-5.5 from map",
 			modelMap: map[string]string{
-				"gpt-5.4": "mimo-v2.5",
-				"gpt-5.5": "mimo-v2.5-pro",
+				"gpt-5.4": "deepseek-chat",
+				"gpt-5.5": "deepseek-reasoner",
 			},
-			defaultModel: "mimo-v2.5-pro",
+			defaultModel: "deepseek-reasoner",
 			expected:     "gpt-5.5",
 		},
 		{
@@ -181,8 +181,8 @@ func TestPreferredCodexModel(t *testing.T) {
 		{
 			name:         "upstream default without map",
 			modelMap:     nil,
-			defaultModel: "mimo-v2.5-pro",
-			expected:     "gpt-5-codex",
+			defaultModel: "deepseek-reasoner",
+			expected:     "gpt-5.5",
 		},
 	}
 	for _, tt := range tests {
@@ -210,8 +210,8 @@ func TestMapModelName(t *testing.T) {
 		{"gpt-5.5", modelMap, "", "deepseek-v4-pro"},
 		{"unknown-model", modelMap, "", "unknown-model"},
 		{"unknown-model", modelMap, "gpt-5.5", "unknown-model"},
-		{"gpt-5.5", nil, "mimo-v2.5-pro", "mimo-v2.5-pro"},
-		{"gpt-5.5", map[string]string{"gpt-5.5": "custom"}, "mimo-v2.5-pro", "custom"},
+		{"gpt-5.5", nil, "deepseek-reasoner", "deepseek-reasoner"},
+		{"gpt-5.5", map[string]string{"gpt-5.5": "custom"}, "deepseek-reasoner", "custom"},
 		{"", nil, "gpt-5.5", "gpt-5.5"},
 	}
 

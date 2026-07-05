@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"easyllm/config"
@@ -99,13 +100,18 @@ func BuildAuthorizationURL(state, codeChallenge, redirectURI string) string {
 
 // RefreshToken exchanges a refresh_token for a new access_token + id_token
 func RefreshToken(refreshToken string) (*TokenResponse, error) {
+	return RefreshTokenContext(context.Background(), refreshToken)
+}
+
+// RefreshTokenContext exchanges a refresh_token with caller-controlled cancellation.
+func RefreshTokenContext(ctx context.Context, refreshToken string) (*TokenResponse, error) {
 	params := url.Values{}
 	params.Set("grant_type", "refresh_token")
 	params.Set("refresh_token", refreshToken)
 	params.Set("client_id", clientID)
 
 	client := createHTTPClient()
-	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(params.Encode()))
+	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(params.Encode()))
 	if err != nil {
 		return nil, err
 	}

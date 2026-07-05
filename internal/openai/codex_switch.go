@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"easyllm/internal/codexconfig"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,7 +15,7 @@ import (
 const (
 	codexAPIServiceProviderID      = "easyllm"
 	codexAPIServiceProviderName    = "EasyLLM API Service"
-	codexAPIServiceDefaultModel    = "gpt-5-codex"
+	codexAPIServiceDefaultModel    = "gpt-5.5"
 	codexAPIServiceDefaultWireAPI  = "responses"
 	codexAPIServiceRequiresAuthKey = "requires_openai_auth"
 	codexDesktopLocalAccessID      = "codex_local_access"
@@ -32,11 +33,12 @@ type CodexLaunchResult struct {
 // SwitchCodexOAuthAccount writes OAuth tokens to ~/.codex/auth.json
 // and cleans up API-related fields from ~/.codex/config.toml.
 // proxyOrigin 为 HTTP Host 或空字符串，空时使用当前服务配置端口。
-func SwitchCodexOAuthAccount(accessToken, refreshToken, idToken string, accountID *string, proxyOrigin string) error {
+func SwitchCodexOAuthAccount(accessToken, refreshToken, idToken string, accountID *string, proxyOrigin string, contextConfig ...codexconfig.ContextConfig) error {
 	codexDir, err := getCodexDir()
 	if err != nil {
 		return err
 	}
+	ctxConfig := resolveCodexContextConfig(contextConfig...)
 
 	authFile := filepath.Join(codexDir, "auth.json")
 	configFile := filepath.Join(codexDir, "config.toml")
@@ -74,17 +76,21 @@ func SwitchCodexOAuthAccount(accessToken, refreshToken, idToken string, accountI
 	if err := injectChatGPTBaseURL(configFile, LocalProxyOrigin(proxyOrigin)); err != nil {
 		return fmt.Errorf("failed to inject chatgpt_base_url: %w", err)
 	}
+	if err := applyCodexContextConfigToFile(configFile, ctxConfig); err != nil {
+		return fmt.Errorf("failed to inject Codex context config: %w", err)
+	}
 
 	return nil
 }
 
 // SwitchCodexAPIAccount writes API key config to ~/.codex/auth.json and config.toml.
 // proxyOrigin 来自 HTTP Host，与 Web 展示的本地服务地址一致。
-func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI, reasoningEffort *string, proxyOrigin string) error {
+func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI, reasoningEffort *string, proxyOrigin string, contextConfig ...codexconfig.ContextConfig) error {
 	codexDir, err := getCodexDir()
 	if err != nil {
 		return err
 	}
+	ctxConfig := resolveCodexContextConfig(contextConfig...)
 
 	modelProvider, model, baseURL, wireAPI, reasoningEffort = normalizeCodexAPIAccountConfig(modelProvider, model, baseURL, wireAPI, reasoningEffort)
 
@@ -120,6 +126,7 @@ func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI
 		fmt.Sprintf(`model_provider = "%s"`, modelProvider),
 		fmt.Sprintf(`model = "%s"`, model),
 	}
+	configLines = appendCodexContextConfigLines(configLines, ctxConfig)
 
 	if reasoningEffort != nil && *reasoningEffort != "" {
 		configLines = append(configLines, fmt.Sprintf(`model_reasoning_effort = "%s"`, *reasoningEffort))
@@ -167,7 +174,7 @@ func isLocalCodexProxyBaseURL(baseURL string) bool {
 // SwitchCodexAPIService writes the local EasyLLM API service into Codex CLI.
 // Codex sees a custom OpenAI-compatible provider, while requests are handled
 // by EasyLLM's local proxy pool.
-func SwitchCodexAPIService(baseURL, apiKey string) error {
+func SwitchCodexAPIService(baseURL, apiKey string, contextConfig ...codexconfig.ContextConfig) error {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	apiKey = strings.TrimSpace(apiKey)
 	if baseURL == "" {
@@ -200,7 +207,7 @@ func SwitchCodexAPIService(baseURL, apiKey string) error {
 		return fmt.Errorf("failed to write auth.json: %w", err)
 	}
 
-	configContent := buildCodexAPIServiceConfig(configFile, baseURL)
+	configContent := buildCodexAPIServiceConfig(configFile, baseURL, resolveCodexContextConfig(contextConfig...))
 	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("failed to write config.toml: %w", err)
 	}
@@ -382,7 +389,7 @@ func parseTomlAssignment(line string) (key, value string, ok bool) {
 
 // SwitchCodexRelayProvider injects Codex CLI config to route through EasyLLM relay.
 // Upstream credentials live on EasyLLM; Codex talks to the local relay without auth.
-func SwitchCodexRelayProvider(relayBaseURL, model, proxyOrigin string) error {
+func SwitchCodexRelayProvider(relayBaseURL, model, proxyOrigin string, contextConfig ...codexconfig.ContextConfig) error {
 	relayBaseURL = strings.TrimRight(strings.TrimSpace(relayBaseURL), "/")
 	if relayBaseURL == "" {
 		relayBaseURL = LocalRelayServiceURL(proxyOrigin)
@@ -414,9 +421,12 @@ func SwitchCodexRelayProvider(relayBaseURL, model, proxyOrigin string) error {
 	configFile := filepath.Join(codexDir, "config.toml")
 	data, _ := os.ReadFile(configFile)
 	existing := stripCodexAPIServiceManagedConfig(string(data), codexRelayProviderID)
-	relayBlock := strings.Join([]string{
+	relayLines := []string{
 		fmt.Sprintf("model_provider = %s", tomlString(codexRelayProviderID)),
 		fmt.Sprintf("model = %s", tomlString(model)),
+	}
+	relayLines = appendCodexContextConfigLines(relayLines, resolveCodexContextConfig(contextConfig...))
+	relayLines = append(relayLines,
 		"",
 		fmt.Sprintf("[model_providers.%s]", codexRelayProviderID),
 		fmt.Sprintf("name = %s", tomlString(codexRelayProviderName)),
@@ -424,7 +434,8 @@ func SwitchCodexRelayProvider(relayBaseURL, model, proxyOrigin string) error {
 		fmt.Sprintf("wire_api = %s", tomlString(codexAPIServiceDefaultWireAPI)),
 		"requires_openai_auth = false",
 		"supports_websockets = false",
-	}, "\n") + "\n"
+	)
+	relayBlock := strings.Join(relayLines, "\n") + "\n"
 	existing = strings.TrimLeft(existing, "\n")
 	configContent := relayBlock
 	if strings.TrimSpace(existing) != "" {
@@ -448,19 +459,23 @@ func getCodexDir() (string, error) {
 	return codexDir, nil
 }
 
-func buildCodexAPIServiceConfig(configFile, baseURL string) string {
+func buildCodexAPIServiceConfig(configFile, baseURL string, contextConfig codexconfig.ContextConfig) string {
 	data, _ := os.ReadFile(configFile)
 	existing := stripCodexAPIServiceManagedConfig(string(data), codexAPIServiceProviderID)
-	serviceBlock := strings.Join([]string{
+	serviceLines := []string{
 		fmt.Sprintf("model_provider = %s", tomlString(codexAPIServiceProviderID)),
 		fmt.Sprintf("model = %s", tomlString(codexAPIServiceDefaultModel)),
+	}
+	serviceLines = appendCodexContextConfigLines(serviceLines, contextConfig)
+	serviceLines = append(serviceLines,
 		"",
 		fmt.Sprintf("[model_providers.%s]", codexAPIServiceProviderID),
 		fmt.Sprintf("name = %s", tomlString(codexAPIServiceProviderName)),
 		fmt.Sprintf("base_url = %s", tomlString(baseURL)),
 		fmt.Sprintf("wire_api = %s", tomlString(codexAPIServiceDefaultWireAPI)),
 		fmt.Sprintf("%s = true", codexAPIServiceRequiresAuthKey),
-	}, "\n") + "\n"
+	)
+	serviceBlock := strings.Join(serviceLines, "\n") + "\n"
 
 	existing = strings.TrimLeft(existing, "\n")
 	if strings.TrimSpace(existing) == "" {
@@ -479,11 +494,13 @@ func stripCodexAPIServiceManagedConfig(content, providerID string) string {
 	skipProviderSection := false
 	targetSection := "model_providers." + providerID
 	topLevelKeys := map[string]bool{
-		"model_provider":         true,
-		"model":                  true,
-		"model_reasoning_effort": true,
-		"openai_base_url":        true,
-		"chatgpt_base_url":       true,
+		"model_provider":                 true,
+		"model":                          true,
+		"model_reasoning_effort":         true,
+		"model_context_window":           true,
+		"model_auto_compact_token_limit": true,
+		"openai_base_url":                true,
+		"chatgpt_base_url":               true,
 	}
 
 	for _, line := range lines {
@@ -534,6 +551,83 @@ func tomlString(value string) string {
 	return string(encoded)
 }
 
+func resolveCodexContextConfig(configs ...codexconfig.ContextConfig) codexconfig.ContextConfig {
+	if len(configs) == 0 {
+		return codexconfig.Default()
+	}
+	return codexconfig.Normalize(configs[0])
+}
+
+func appendCodexContextConfigLines(lines []string, config codexconfig.ContextConfig) []string {
+	config = codexconfig.Normalize(config)
+	if !config.Enabled() {
+		return lines
+	}
+	return append(lines,
+		fmt.Sprintf("%s = %d", codexconfig.ModelContextWindowKey, config.ModelContextWindow),
+		fmt.Sprintf("%s = %d", codexconfig.ModelAutoCompactTokenLimitKey, config.ModelAutoCompactTokenLimit),
+	)
+}
+
+func applyCodexContextConfigToFile(configFile string, config codexconfig.ContextConfig) error {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			lines := appendCodexContextConfigLines(nil, config)
+			if len(lines) == 0 {
+				return nil
+			}
+			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+		}
+		return err
+	}
+	return os.WriteFile(configFile, []byte(applyCodexContextConfig(string(data), config)), 0644)
+}
+
+func applyCodexContextConfig(content string, config codexconfig.ContextConfig) string {
+	lines := stripCodexContextConfigLines(strings.Split(content, "\n"))
+	contextLines := appendCodexContextConfigLines(nil, config)
+	if len(contextLines) == 0 {
+		return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
+	}
+
+	insertAt := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			break
+		}
+		if key := topLevelKey(trimmed); key == "model" || key == "chatgpt_base_url" {
+			insertAt = i + 1
+		}
+	}
+
+	next := make([]string, 0, len(lines)+len(contextLines))
+	next = append(next, lines[:insertAt]...)
+	next = append(next, contextLines...)
+	next = append(next, lines[insertAt:]...)
+	return strings.TrimRight(strings.Join(next, "\n"), "\n") + "\n"
+}
+
+func stripCodexContextConfigLines(lines []string) []string {
+	filtered := make([]string, 0, len(lines))
+	inSection := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inSection = true
+		}
+		if !inSection {
+			key := topLevelKey(trimmed)
+			if key == codexconfig.ModelContextWindowKey || key == codexconfig.ModelAutoCompactTokenLimitKey {
+				continue
+			}
+		}
+		filtered = append(filtered, line)
+	}
+	return filtered
+}
+
 // injectChatGPTBaseURL ensures chatgpt_base_url is set in config.toml so the
 // Codex client routes requests through the local proxy (enabling request logging).
 func injectChatGPTBaseURL(configFile, baseURL string) error {
@@ -578,11 +672,13 @@ func cleanConfigTOMLAPIFields(configFile string) error {
 
 	lines := strings.Split(string(data), "\n")
 	apiKeys := map[string]bool{
-		"model_provider":         true,
-		"model":                  true,
-		"model_reasoning_effort": true,
-		"model_providers":        true,
-		"chatgpt_base_url":       true,
+		"model_provider":                 true,
+		"model":                          true,
+		"model_reasoning_effort":         true,
+		"model_context_window":           true,
+		"model_auto_compact_token_limit": true,
+		"model_providers":                true,
+		"chatgpt_base_url":               true,
 	}
 
 	var filtered []string

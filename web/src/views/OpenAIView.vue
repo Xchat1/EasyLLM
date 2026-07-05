@@ -86,6 +86,16 @@
                 </option>
               </select>
               <select
+                v-model="workspaceFilter"
+                @change="setWorkspaceFilter(workspaceFilter)"
+                class="toolbar-select toolbar-select--workspace"
+                title="按 Workspace ID 过滤账号"
+              >
+                <option v-for="option in workspaceFilterOptions" :key="option.id" :value="option.id">
+                  {{ option.label }}
+                </option>
+              </select>
+              <select
                 v-model="accountSortMode"
                 @change="setAccountSortMode(accountSortMode)"
                 class="toolbar-select toolbar-select--sort"
@@ -103,9 +113,11 @@
                 <option value="all">全部</option>
                 <option value="200">200（成功）</option>
                 <option value="401">401（失效/未授权）</option>
-                <option value="403">403（地区受限/禁止）</option>
+                <option value="403">403（其他禁止/地区受限）</option>
+                <option value="deactivated_workspace">deactivated_workspace（工作区停用）</option>
                 <option value="429">429（限流）</option>
                 <option value="503">503（服务不可用）</option>
+                <option value="exhausted">用尽（5h/7d=0）</option>
               </select>
             </div>
 
@@ -124,8 +136,8 @@
               </button>
               <button
                 @click="toggleAccountPrivacy"
-                class="toolbar-btn toolbar-btn--layout"
-                :class="hideAccountEmails ? 'bg-sky-600/20 hover:bg-sky-600/30 border-sky-500/40 text-sky-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
+                class="toolbar-btn toolbar-btn--layout toolbar-btn--privacy"
+                :class="hideAccountEmails ? 'toolbar-btn--privacy-on' : 'toolbar-btn--privacy-off'"
                 :title="hideAccountEmails ? '隐私模式已开启：点击显示邮箱' : '隐私模式：点击隐藏账号邮箱'"
                 aria-label="切换账号邮箱隐私显示"
               >
@@ -136,7 +148,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
                 </svg>
-                {{ hideAccountEmails ? '隐私开' : '隐私' }}
+                隐私
               </button>
             </div>
 
@@ -238,6 +250,7 @@
               <span v-if="account.is_codex_active" class="shrink-0 text-[10px] font-bold text-blue-300 bg-blue-600/30 px-1.5 py-0.5 rounded">Codex</span>
               <span v-if="account.status === 'reauth_required'" class="shrink-0 text-[10px] font-bold text-red-300 bg-red-600/20 px-1.5 py-0.5 rounded">重登</span>
               <span v-if="account._quota_http_status && account._quota_http_status !== 200" class="quota-status-badge shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded" :class="quotaStatusBadgeClass(account._quota_http_status)">{{ account._quota_http_status }}</span>
+              <span v-if="isQuotaExhausted(account)" class="quota-status-badge quota-status-badge--exhausted shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded">用尽</span>
             </div>
             <div v-if="accountLayout !== 'dense' && (accountGroupNames(account).length || account.tag_name)" class="flex flex-wrap gap-1 mb-2">
               <span v-for="name in accountGroupNames(account)" :key="name" class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-200">
@@ -278,14 +291,14 @@
                 <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8 0-1.85.63-3.55 1.69-4.9L16.9 18.31C15.55 19.37 13.85 20 12 20zm6.31-3.1L7.1 5.69C8.45 4.63 10.15 4 12 4c4.42 0 8 3.58 8 8 0 1.85-.63 3.55-1.69 4.9z"/>
                 </svg>
-                账号被禁用
+                {{ quotaForbiddenLabel(account) }}
               </div>
 
               <div v-if="isRegionRestricted(account)" class="flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
                 <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 2 1 21h22L12 2zm0 6 1 7h-2l1-7zm0 10.5a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/>
                 </svg>
-                当前出口地区受限，无法刷新该账号
+                当前出口地区受限，未能查询配额
               </div>
 
               <!-- 5h quota bar -->
@@ -365,7 +378,7 @@
             </div>
             <div v-else class="dense-account-meta">
               <span v-if="planBadge(account)" class="dense-pill" :class="planBadge(account).cls">{{ planBadge(account).text }}</span>
-              <span v-if="account.quota_is_forbidden" class="dense-pill bg-red-500/15 text-red-300">禁用</span>
+              <span v-if="account.quota_is_forbidden" class="dense-pill bg-red-500/15 text-red-300">{{ isDeactivatedWorkspaceAccount(account) ? '停用' : '禁用' }}</span>
               <span v-else-if="shouldShow5hQuota(account)" class="dense-pill" :class="pctColor(100 - account.quota_5h_used_percent)">5h {{ Math.round(100 - account.quota_5h_used_percent) }}%</span>
               <span v-if="shouldShow7dQuota(account)" class="dense-pill" :class="pctColor(100 - account.quota_7d_used_percent)">7d {{ Math.round(100 - account.quota_7d_used_percent) }}%</span>
               <span v-if="isRegionRestricted(account)" class="dense-pill bg-amber-500/15 text-amber-300">地区</span>
@@ -552,76 +565,6 @@
     </div>
 
     <!-- ==================== Modals ==================== -->
-
-    <!-- Delete Confirm Dialog -->
-    <div v-if="showDeleteConfirm" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="closeDeleteConfirm">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
-        <div class="flex items-center justify-between p-6 border-b border-gray-700">
-          <h2 class="text-lg font-semibold text-white">确认删除</h2>
-          <button @click="closeDeleteConfirm" class="text-gray-400 hover:text-white" :disabled="deletingAccount">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-        <div class="p-6 space-y-3">
-          <div class="text-sm text-gray-200">
-            将永久删除该账号<span v-if="deleteTargetLabel" class="text-white font-medium">（{{ deleteTargetLabel }}）</span>，此操作不可恢复。
-          </div>
-          <div class="text-xs text-gray-500">
-            提示：删除后不会影响你本地浏览器/客户端已存在的 token 文件，只会从 EasyLLM 中移除该账号记录。
-          </div>
-        </div>
-        <div class="p-6 pt-0 flex items-center justify-end gap-2">
-          <button @click="closeDeleteConfirm" class="btn btn-secondary" :disabled="deletingAccount">取消</button>
-          <button @click="confirmDeleteAccount" class="btn btn-danger" :disabled="deletingAccount">
-            {{ deletingAccount ? '删除中...' : '删除' }}
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Bulk Delete Confirm Dialog -->
-    <div v-if="showBulkDeleteConfirm" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="closeBulkDeleteConfirm">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl">
-        <div class="flex items-center justify-between p-6 border-b border-gray-700">
-          <h2 class="text-lg font-semibold text-white">确认批量删除</h2>
-          <button @click="closeBulkDeleteConfirm" class="text-gray-400 hover:text-white" :disabled="bulkDeleting">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-        <div class="p-6 space-y-3">
-          <div class="text-sm text-gray-200">
-            将永久删除已选中的 <span class="text-white font-semibold">{{ bulkDeleteIds.length }}</span> 个 {{ bulkDeleteAccountLabel }}，此操作不可恢复。
-          </div>
-          <div v-if="bulkDeleteScopeLabel" class="text-xs text-gray-400">
-            选择范围：{{ bulkDeleteScopeLabel }}
-          </div>
-          <div v-if="bulkDeleteAllSelected" class="text-xs text-red-300 bg-red-600/10 border border-red-600/30 rounded-lg px-3 py-2">
-            警告：你当前已全选 {{ bulkDeleteAccountLabel }}。
-          </div>
-          <div class="text-xs text-gray-500">
-            提示：仅删除 EasyLLM 内的账号记录，不会删除你本地浏览器/客户端已存在的 token 文件。
-          </div>
-          <div v-if="bulkDeletePreview.length" class="bg-gray-800/60 border border-gray-700 rounded-lg p-3">
-            <div class="text-[11px] text-gray-400 mb-1">将删除（预览前 {{ bulkDeletePreview.length }} 个）：</div>
-            <div class="space-y-1 max-h-24 overflow-y-auto">
-              <div v-for="(e, i) in bulkDeletePreview" :key="i" class="text-xs text-gray-300 truncate">
-                {{ i + 1 }}. {{ e }}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="p-6 pt-0 flex items-center justify-end gap-2">
-          <button @click="closeBulkDeleteConfirm" class="btn btn-secondary" :disabled="bulkDeleting">取消</button>
-          <button @click="confirmBulkDelete" class="btn btn-danger" :disabled="bulkDeleting">
-            {{ bulkDeleting ? '删除中...' : `删除 ${bulkDeleteIds.length} 个` }}
-          </button>
-        </div>
-      </div>
-    </div>
 
     <!-- Group Manager Dialog -->
     <div v-if="showGroupManager" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="showGroupManager = false">
@@ -834,6 +777,23 @@
             </div>
           </div>
 
+          <!-- Mode: JSON Text -->
+          <div v-if="importMode === 'json-text'">
+            <div class="bg-blue-900/20 border border-blue-700/40 rounded-lg p-3 text-xs text-blue-300 mb-3">
+              支持 ChatGPT Session JSON（<code class="text-blue-200">accessToken</code> + 账号信息）、CPA 格式，以及单对象、数组或 NDJSON。
+            </div>
+            <div class="mb-3 flex items-center justify-between">
+              <span class="text-sm text-gray-300">粘贴 JSON 文本 (支持单个对象或数组)</span>
+              <button v-if="importJsonText" @click="importJsonText = ''; importResults = null" class="text-xs text-gray-500 hover:text-red-400">清空</button>
+            </div>
+            <textarea
+              v-model="importJsonText"
+              rows="12"
+              class="input w-full font-mono text-xs whitespace-pre resize-y"
+              placeholder='粘贴 ChatGPT Session JSON 或其他支持的 JSON 格式...'
+            ></textarea>
+          </div>
+
           <!-- Mode 4: CPA JSON（*-cpa.json / *.codex.cpa.json） -->
           <div v-if="importMode === 'cpa'">
             <div class="bg-violet-900/20 border border-violet-700/40 rounded-lg p-3 text-xs text-violet-300 mb-3">
@@ -934,18 +894,23 @@
             正在导入，请稍候...
           </div>
           <div v-if="importResults && !importing" class="space-y-2">
-            <div class="flex items-center gap-4 text-sm font-medium">
+            <div class="flex flex-wrap items-center gap-4 text-sm font-medium">
               <span class="text-green-400">✓ 成功 {{ importResults.success }}</span>
+              <span v-if="importResults.created" class="text-emerald-400">新增 {{ importResults.created }}</span>
+              <span v-if="importResults.updated" class="text-blue-300">更新 {{ importResults.updated }}</span>
               <span v-if="importResults.skipped" class="text-yellow-400">↷ 跳过 {{ importResults.skipped }}</span>
               <span class="text-red-400">✗ 失败 {{ importResults.failed }}</span>
               <span class="text-gray-500">共 {{ importResults.total }}</span>
             </div>
             <div class="max-h-52 overflow-y-auto bg-gray-800 rounded-lg p-3 space-y-1">
-              <div v-for="r in importResults.results" :key="r.filename || r.index" class="flex items-start gap-2 text-xs py-0.5">
+              <div v-for="(r, idx) in importResults.results" :key="importResultKey(r, idx)" class="flex items-start gap-2 text-xs py-0.5">
                 <span class="shrink-0" :class="r.success ? 'text-green-400' : r.skipped ? 'text-yellow-400' : 'text-red-400'">
                   {{ r.success ? '✓' : r.skipped ? '↷' : '✗' }}
                 </span>
                 <span class="text-gray-300 truncate flex-1">{{ importResultDisplayLabel(r) }}</span>
+                <span v-if="r.success && r.action" class="text-[10px] shrink-0 rounded bg-gray-700 px-1.5 py-0.5" :class="r.action === 'created' ? 'text-emerald-300' : 'text-blue-300'">
+                  {{ r.action === 'created' ? '新增' : '更新' }}
+                </span>
                 <span v-if="r.error && !r.skipped" class="text-red-400 shrink-0 truncate max-w-[160px]">{{ r.error }}</span>
               </div>
             </div>
@@ -1044,7 +1009,7 @@
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Model <span class="text-red-400">*</span></label>
-            <input v-model="apiForm.model" class="input w-full" placeholder="e.g. gpt-4o"/>
+            <input v-model="apiForm.model" class="input w-full" placeholder="e.g. gpt-5.4"/>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Base URL <span class="text-red-400">*</span></label>
@@ -1083,79 +1048,152 @@
         </div>
       </div>
     </div>
-    <!-- Service Config Dialog -->
+    <!-- API Service Dialog -->
     <div v-if="showServiceConfigDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-6">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-[calc(100vw-3rem)] xl:max-w-7xl shadow-2xl">
-        <div class="flex items-center justify-between p-6 border-b border-gray-700">
-          <h2 class="text-lg font-semibold text-white flex items-center gap-2">
-            <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+      <div class="api-service-shell w-full max-w-[calc(100vw-3rem)] xl:max-w-7xl">
+        <div class="api-service-header">
+          <div class="flex min-w-0 items-center gap-4">
+            <div class="api-service-icon">
+              <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 17h16M7 7v10m10-10v10"/>
+              </svg>
+            </div>
+            <h2 class="truncate text-2xl font-semibold text-white">API 服务</h2>
+          </div>
+          <button @click="showServiceConfigDialog = false" class="api-service-close" title="关闭">
+            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18 18 6M6 6l12 12"/>
             </svg>
-            服务配置
-          </h2>
-          <div class="flex items-center gap-2">
+          </button>
+        </div>
+
+        <div class="api-service-toolbar">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
+            <span class="api-service-pill" :class="localAccess.running ? 'api-service-pill--success' : 'api-service-pill--muted'">
+              {{ localAccess.running ? '运行中' : '已停止' }}
+            </span>
+            <span class="api-service-pill">仅本机</span>
+            <button class="api-service-action" @click="fetchAllQuotas" :disabled="fetchingQuotas">
+              {{ fetchingQuotas ? '测试中' : '测试' }}
+            </button>
+            <span class="api-service-action">
+              留空用全局代理
+            </span>
+            <span
+              class="api-service-icon-action"
+              :class="localAccessConfigDirty ? 'api-service-icon-action--warn' : ''"
+              :title="localAccessConfigDirty ? '账号集合有未保存改动，启动时会自动保存' : '账号集合已保存'"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path v-if="!localAccessConfigDirty" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m5 13 4 4L19 7"/>
+                <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M5.07 19h13.86a2 2 0 0 0 1.74-2.99L13.74 4a2 2 0 0 0-3.48 0L3.33 16.01A2 2 0 0 0 5.07 19Z"/>
+              </svg>
+            </span>
+          </div>
+          <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
+            <button
+              class="api-service-action"
+              :class="{ 'api-service-action--active': serviceAdvancedOpen }"
+              :aria-pressed="serviceAdvancedOpen"
+              @click="toggleServiceAdvanced"
+            >
+              {{ serviceAdvancedOpen ? '收起全部功能' : '查看全部功能' }}
+            </button>
+            <button class="api-service-icon-action" @click="refreshServicePanel" :disabled="localAccessBusy || savingServiceConfig" title="刷新">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M20 9A8 8 0 0 0 6.6 5.1M4 15a8 8 0 0 0 13.4 3.9"/>
+              </svg>
+            </button>
+            <select
+              :value="localAccess.collection?.routing_strategy || serviceConfig.strategy"
+              @change="updateLocalAccessRouting($event.target.value)"
+              class="api-service-strategy"
+            >
+              <option v-for="s in strategies" :key="s.id" :value="s.id">{{ s.label }}</option>
+            </select>
+            <button
+              class="api-service-icon-action"
+              :class="{ 'api-service-icon-action--active': serviceAdvancedOpen }"
+              :aria-pressed="serviceAdvancedOpen"
+              @click="toggleServiceAdvanced"
+              title="设置"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.827 3.31-2.37 2.37a1.724 1.724 0 0 0-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.827-2.37-2.37a1.724 1.724 0 0 0-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.827-3.31 2.37-2.37.996.608 2.296.07 2.573-1.066Z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
+              </svg>
+            </button>
+            <button class="api-service-power" @click="localAccess.running ? deactivateLocalAccess() : activateLocalAccess()" :disabled="localAccessPowerDisabled" title="启动/停止">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v10m6.364-6.364a9 9 0 1 1-12.728 0"/>
+              </svg>
+            </button>
             <button
               @click="exportAccounts"
               :disabled="exportingAccounts"
-              class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              class="api-service-action"
             >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
               </svg>
               {{ exportingAccounts ? '导出中...' : '导出账号' }}
             </button>
-            <button @click="showServiceConfigDialog = false" class="text-gray-400 hover:text-white">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
           </div>
         </div>
-        <div class="p-6 space-y-5 max-h-[80vh] overflow-y-auto">
 
-
-
-          <!-- Stats Cards -->
-          <div class="grid grid-cols-3 gap-3">
-            <div class="bg-gray-800 rounded-xl p-4 text-center">
-              <div class="text-2xl font-bold text-blue-400">{{ serviceConfig.pool_size }}</div>
-              <div class="text-xs text-gray-400 mt-1">池中账号</div>
+        <div ref="serviceBodyRef" class="api-service-body">
+          <section class="api-service-section">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div class="flex items-center gap-2">
+                <svg class="h-5 w-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 13h3l2-6 4 12 2-6h5"/>
+                </svg>
+                <h3 class="text-base font-semibold text-white">总量统计</h3>
+              </div>
+              <div class="flex items-center gap-2">
+                <div class="api-service-segment">
+                  <button :class="{ 'is-active': serviceStatsWindow === 'daily' }" @click="serviceStatsWindow = 'daily'">日</button>
+                  <button :class="{ 'is-active': serviceStatsWindow === 'weekly' }" @click="serviceStatsWindow = 'weekly'">周</button>
+                  <button :class="{ 'is-active': serviceStatsWindow === 'monthly' }" @click="serviceStatsWindow = 'monthly'">月</button>
+                </div>
+                <button class="api-service-danger" @click="clearLocalAccessStats" :disabled="localAccessBusy">
+                  清除统计
+                </button>
+              </div>
             </div>
-            <div class="bg-gray-800 rounded-xl p-4 text-center">
-              <div class="text-2xl font-bold text-green-400">{{ serviceConfig.total_requests }}</div>
-              <div class="text-xs text-gray-400 mt-1">转发请求数</div>
+            <div class="api-service-stats-grid">
+              <div v-for="card in serviceStatsCards" :key="card.id" class="api-service-stat-card" :class="card.cls">
+                <div class="text-sm font-semibold">{{ card.label }}</div>
+                <div class="mt-3 text-3xl font-bold text-white">{{ card.value }}</div>
+                <div class="mt-2 text-sm text-gray-400">{{ card.detail }}</div>
+              </div>
             </div>
-            <div class="bg-gray-800 rounded-xl p-4 text-center">
-              <div class="text-2xl font-bold text-purple-400">不保留</div>
-              <div class="text-xs text-gray-400 mt-1">调用日志</div>
-            </div>
-          </div>
+          </section>
 
           <!-- Codex API Service -->
-          <div class="bg-gray-800 rounded-xl p-4 space-y-3">
+          <div class="api-service-section space-y-3">
             <div class="flex items-start justify-between gap-4">
               <div class="min-w-0">
                 <div class="flex items-center gap-2">
-                  <div class="text-sm font-medium text-white">Codex API 服务</div>
+                  <div class="text-sm font-medium text-white">Codex App 快捷操作</div>
                   <span
                     class="text-[10px] px-2 py-0.5 rounded-full font-medium"
-                    :class="serviceConfig.codex_api_service ? 'bg-green-500/20 text-green-300' : 'bg-gray-700 text-gray-500'"
+                    :class="serviceConfig.codex_api_service || localAccess.running ? 'bg-green-500/20 text-green-300' : 'bg-gray-700 text-gray-500'"
                   >
-                    {{ serviceConfig.codex_api_service ? '已注入' : '未注入' }}
+                    {{ codexQuickStatusLabel }}
                   </span>
                 </div>
                 <div class="text-xs text-gray-400 mt-0.5">
-                  启动后自动写入本机 <code class="text-blue-300">~/.codex/auth.json</code> 和 <code class="text-blue-300">config.toml</code>，Codex 直接走 EasyLLM 本地服务。
+                  打开或重启 Codex App；服务启停、账号集合和端口在下方统一管理。
                 </div>
               </div>
               <button
                 @click="activateCodexAPIService"
-                :disabled="savingServiceConfig || oauthAccounts.length === 0"
+                :disabled="codexQuickActionDisabled"
                 class="btn btn-sm btn-primary shrink-0"
-                :title="oauthAccounts.length === 0 ? '请先导入 OAuth 账号' : '开启代理池并注入本机 Codex 配置'"
+                :title="codexQuickActionTitle"
               >
-                {{ savingServiceConfig ? '处理中...' : '启动并注入 Codex' }}
+                {{ codexQuickActionLabel }}
               </button>
             </div>
             <div class="grid md:grid-cols-2 gap-2 text-xs">
@@ -1173,10 +1211,15 @@
           </div>
 
           <!-- Codex local API service -->
-          <div class="bg-gray-800 rounded-xl p-4 space-y-4">
+          <section class="api-service-section space-y-4">
             <div class="flex items-start justify-between gap-4">
               <div>
-                <div class="text-sm font-medium text-white">Codex 本地 API 服务</div>
+                <div class="flex items-center gap-2">
+                  <svg class="h-5 w-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.75 7.5a3.75 3.75 0 0 1-5.34 3.39L6.75 14.55V18h-3v-3.75l4.55-4.55A3.75 3.75 0 1 1 15.75 7.5Z"/>
+                  </svg>
+                  <div class="text-base font-semibold text-white">服务配置</div>
+                </div>
                 <div class="text-xs text-gray-400 mt-0.5">
                   管理注入到本机 Codex 的账号集合、端口和调度策略。
                 </div>
@@ -1186,34 +1229,61 @@
                   :class="localAccess.running ? 'bg-green-500/20 text-green-300' : 'bg-gray-700 text-gray-500'">
                   {{ localAccess.running ? '运行中' : '已停止' }}
                 </span>
-                <button @click="activateLocalAccess" :disabled="localAccessBusy || oauthAccounts.length === 0" class="btn btn-sm btn-primary">
-                  {{ localAccessBusy ? '处理中...' : '启动/注入' }}
+                <button @click="activateLocalAccess" :disabled="localAccessActionDisabled" class="btn btn-sm btn-primary">
+                  {{ localAccessActionLabel }}
                 </button>
-                <button @click="deactivateLocalAccess" :disabled="localAccessBusy || !localAccess.collection?.enabled" class="btn btn-sm btn-secondary">
+                <button @click="deactivateLocalAccess" :disabled="codexServiceBusy || !localAccess.collection?.enabled" class="btn btn-sm btn-secondary">
                   停止
                 </button>
               </div>
             </div>
 
-            <div class="grid md:grid-cols-3 gap-2 text-xs">
-              <div class="bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
-                <div class="text-gray-500">成员账号</div>
-                <div class="mt-1 text-lg font-semibold text-white">{{ localAccess.member_count || 0 }}</div>
+            <div class="api-service-config-grid">
+              <div class="api-service-config-card">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="text-sm font-semibold text-gray-300">API 入口 URL</div>
+                  <button @click="copyText(localAccess.api_port_url || serviceConfig.codex_api_port_url || '')" class="api-service-mini-btn">复制</button>
+                </div>
+                <div class="api-service-value-field mt-4">
+                  <code class="api-service-value api-service-value--blue">{{ localAccess.api_port_url || serviceConfig.codex_api_port_url || '' }}</code>
+                </div>
               </div>
-              <div class="bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
-                <div class="text-gray-500">API Key</div>
-                <code class="mt-1 block text-green-300 truncate">{{ localAccess.collection?.api_key_masked || '未设置' }}</code>
+
+              <div class="api-service-config-card">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="text-sm font-semibold text-gray-300">密钥</div>
+                  <div class="flex items-center gap-2">
+                    <button @click="copyText(serviceConfig.api_key || '')" class="api-service-mini-btn" :disabled="!serviceConfig.api_key">复制</button>
+                    <button @click="rotateLocalAccessKey" :disabled="localAccessBusy" class="api-service-mini-btn">重置密钥</button>
+                  </div>
+                </div>
+                <div class="api-service-value-field mt-4">
+                  <code class="api-service-value api-service-value--green">{{ localAccess.collection?.api_key_masked || serviceConfig.api_key_masked || '未设置' }}</code>
+                </div>
               </div>
-              <div class="bg-gray-900/60 rounded-lg px-3 py-2 min-w-0">
-                <div class="text-gray-500">入口</div>
-                <div class="mt-1 flex items-center gap-2 min-w-0">
-                  <code class="text-blue-300 truncate">{{ localAccess.api_port_url || serviceConfig.codex_api_port_url || '' }}</code>
-                  <button @click="copyText(localAccess.api_port_url || serviceConfig.codex_api_port_url || '')" class="text-gray-500 hover:text-white shrink-0">复制</button>
+
+              <div class="api-service-config-card">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="text-sm font-semibold text-gray-300">服务端口</div>
+                  <button @click="copyText(localAccessPortInput)" class="api-service-mini-btn">复制</button>
+                </div>
+                <div class="api-service-value-field mt-4">
+                  <code class="api-service-value">{{ localAccessPortInput }}</code>
+                </div>
+              </div>
+
+              <div class="api-service-config-card">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="text-sm font-semibold text-gray-300">访问范围</div>
+                  <span class="api-service-mini-btn">仅本机</span>
+                </div>
+                <div class="api-service-value-field mt-4">
+                  <code class="api-service-value">127.0.0.1</code>
                 </div>
               </div>
             </div>
 
-            <div class="grid lg:grid-cols-[1fr_1fr] gap-4">
+            <div v-if="serviceAdvancedOpen" ref="serviceAdvancedRef" class="grid lg:grid-cols-[1fr_1fr] gap-4">
               <div class="space-y-3">
                 <div class="grid gap-1">
                   <input :value="localAccessPortInput" class="input text-xs" readonly />
@@ -1233,6 +1303,54 @@
                   <input v-model="localAccessRestrictFree" type="checkbox" class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500" />
                   <span>保存集合时排除免费账号</span>
                 </label>
+                <div class="rounded-xl border border-gray-700 bg-gray-900/60 p-3 space-y-3">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="text-xs font-medium text-gray-300">上下文与压缩阈值</div>
+                    <div class="flex items-center gap-2">
+                      <button class="btn btn-xs btn-secondary" @click="loadServiceConfig" :disabled="savingServiceConfig">刷新</button>
+                      <button class="btn btn-xs btn-primary" @click="saveCodexContextConfig" :disabled="savingServiceConfig || !codexContextFormValid">
+                        保存
+                      </button>
+                    </div>
+                  </div>
+                  <div class="api-service-segment api-service-segment--wrap">
+                    <button
+                      v-for="preset in codexContextPresets"
+                      :key="preset.id"
+                      :class="{ 'is-active': codexContextForm.codex_context_mode === preset.id }"
+                      @click="selectCodexContextMode(preset.id)"
+                    >
+                      {{ preset.label }}
+                    </button>
+                  </div>
+                  <div class="grid sm:grid-cols-2 gap-2">
+                    <div>
+                      <label class="block text-[11px] text-gray-500 mb-1">上下文窗口</label>
+                      <input
+                        v-model.number="codexContextForm.model_context_window"
+                        :disabled="codexContextForm.codex_context_mode !== 'custom'"
+                        type="number"
+                        min="1"
+                        class="input text-xs"
+                        placeholder="model_context_window"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-[11px] text-gray-500 mb-1">自动压缩阈值</label>
+                      <input
+                        v-model.number="codexContextForm.model_auto_compact_token_limit"
+                        :disabled="codexContextForm.codex_context_mode !== 'custom'"
+                        type="number"
+                        min="1"
+                        class="input text-xs"
+                        placeholder="model_auto_compact_token_limit"
+                      />
+                    </div>
+                  </div>
+                  <div class="text-[11px]" :class="codexContextFormValid ? 'text-gray-500' : 'text-red-400'">
+                    {{ codexContextStatusText }}
+                  </div>
+                </div>
               </div>
 
               <div class="space-y-2">
@@ -1241,8 +1359,8 @@
                   <div class="flex flex-wrap items-center gap-2">
                     <span class="text-[11px] text-gray-500">{{ localAccessSelectedCount }}/{{ localAccessEligibleCount }}</span>
                     <button @click="selectAllLocalAccessAccounts" :disabled="localAccessBusy || localAccessEligibleCount === 0" class="btn btn-xs btn-secondary">全选成功</button>
-                    <button @click="clearLocalAccessAccounts" :disabled="localAccessBusy || localAccessSelectedCount === 0" class="btn btn-xs btn-secondary">清空</button>
-                    <button @click="saveAllLocalAccessAccounts" :disabled="localAccessBusy || localAccessEligibleCount === 0" class="btn btn-xs btn-primary">加入 200</button>
+                    <button @click="clearLocalAccessAccounts" :disabled="localAccessBusy || localAccessSelectedIds.length === 0" class="btn btn-xs btn-secondary">清空</button>
+                    <button @click="saveAllLocalAccessAccounts" :disabled="localAccessBusy || localAccessEligibleCount === 0" class="btn btn-xs btn-primary">加入</button>
                     <button @click="saveLocalAccessAccounts" :disabled="localAccessBusy" class="btn btn-xs btn-primary">保存集合</button>
                   </div>
                 </div>
@@ -1263,10 +1381,10 @@
                 </div>
               </div>
             </div>
-          </div>
+          </section>
 
           <!-- Proxy Pool Toggle -->
-          <div class="flex items-center justify-between bg-gray-800 rounded-xl p-4">
+          <div v-if="serviceAdvancedOpen" class="flex items-center justify-between bg-gray-800 rounded-xl p-4">
             <div>
               <div class="text-sm font-medium text-white">代理池服务</div>
               <div class="text-xs text-gray-400 mt-0.5">控制 <code class="text-blue-300">/v1/*</code> 接口是否对外可用</div>
@@ -1283,7 +1401,7 @@
           </div>
 
           <!-- Proxy Pool Batch Toggle -->
-          <div class="bg-gray-800 rounded-xl p-4">
+          <div v-if="serviceAdvancedOpen" class="bg-gray-800 rounded-xl p-4">
             <div class="flex items-center justify-between">
               <div>
                 <div class="text-sm font-medium text-white">轮询代理池</div>
@@ -1313,7 +1431,7 @@
           </div>
 
           <!-- Proxy Endpoints -->
-          <div class="bg-gray-800 rounded-xl p-4 space-y-3">
+          <div v-if="serviceAdvancedOpen" class="bg-gray-800 rounded-xl p-4 space-y-3">
             <div class="flex items-center gap-2">
               <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
@@ -1340,7 +1458,7 @@
           </div>
 
           <!-- Strategy -->
-          <div class="bg-gray-800 rounded-xl p-4">
+          <div v-if="serviceAdvancedOpen" class="bg-gray-800 rounded-xl p-4">
             <div class="text-sm font-medium text-white mb-2">轮询策略</div>
             <div class="flex gap-2">
               <button v-for="s in strategies" :key="s.id"
@@ -1355,7 +1473,7 @@
           </div>
 
           <!-- API Key -->
-          <div class="bg-gray-800 rounded-xl p-4 space-y-3">
+          <div v-if="serviceAdvancedOpen" class="bg-gray-800 rounded-xl p-4 space-y-3">
             <div>
               <div class="text-sm font-medium text-white">对外 API Key</div>
               <div class="text-xs text-gray-400 mt-0.5">设置后，外部调用 <code class="text-blue-300">/v1/responses</code> 需在 Header 携带 <code class="text-blue-300">Authorization: Bearer &lt;key&gt;</code></div>
@@ -1365,7 +1483,7 @@
                 v-model="serviceApiKeyInput"
                 class="input flex-1 font-mono text-xs"
                 :type="showApiKey ? 'text' : 'password'"
-                placeholder="留空则不鉴权（任何人可调用）"
+                placeholder="输入新 Key；留空保存会确认清除现有 Key"
               />
               <button @click="showApiKey = !showApiKey" class="btn btn-sm btn-ghost shrink-0" :title="showApiKey ? '隐藏' : '显示'">
                 <svg v-if="showApiKey" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1401,13 +1519,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, inject, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, inject, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api, { longApi, openaiAPI } from '@/api/index.js'
 import CodexIcon from '@/components/CodexIcon.vue'
 import { getCodexRouteMeta } from '@/lib/codexRoutes'
 import { filterAPIAccounts, filterOAuthAccounts } from '@/lib/accounts'
-import { localServiceAPIBaseURL, localServiceOrigin } from '@/lib/runtime'
+import { isMacApp, localServiceAPIBaseURL, localServiceOrigin } from '@/lib/runtime'
 
 // State
 const route = useRoute()
@@ -1443,17 +1561,11 @@ const fetchingQuotas = ref(false)
 const fetchingQuotaIds = ref([])
 const quotaLastFetched = ref('')
 const planGroupFilter = ref('all')
-const quotaFilter = ref('all') // all | 200 | 401 | 403 | 429 | 503
+const workspaceFilter = ref(readStoredOption('easyllm.openai.workspaceFilter', 'all'))
+const quotaFilter = ref('all') // all | 200 | 401 | 403 | 429 | 503 | exhausted
 const searchQuery = ref('') // search by email
 const apiSearchQuery = ref('')
 const bulkDeleting = ref(false)
-const showBulkDeleteConfirm = ref(false)
-const bulkDeleteIds = ref([])
-const bulkDeletePreview = ref([])
-const bulkDeleteSelectionType = ref('oauth')
-const bulkDeleteAccountLabel = ref('OAuth 账号')
-const bulkDeleteScopeLabel = ref('')
-const bulkDeleteAllSelected = ref(false)
 const selectedOAuthIds = ref([])
 const selectedAPIIds = ref([])
 const hideAccountEmails = ref(readStoredBoolean('easyllm.openai.hideAccountEmails', false))
@@ -1477,13 +1589,19 @@ const showGroupManager = ref(false)
 const newGroupName = ref('')
 
 const quotaFilterLabel = computed(() => {
+  if (quotaFilter.value === 'deactivated_workspace') return 'deactivated_workspace（工作区停用）'
   if (quotaFilter.value === '503') return '503（服务不可用）'
+  if (quotaFilter.value === 'exhausted') return '用尽（5h/7d=0）'
   if (quotaFilter.value === '429') return '429（限流）'
-  if (quotaFilter.value === '403') return '403（地区受限/禁止）'
+  if (quotaFilter.value === '403') return '403（其他禁止/地区受限）'
   if (quotaFilter.value === '401') return '401（失效/未授权）'
   if (quotaFilter.value === '200') return '200（成功）'
   return '全部'
 })
+
+const workspaceFilterLabel = computed(() => (
+  workspaceFilter.value === 'all' ? '全部 Workspace' : `Workspace ${shortWorkspaceID(workspaceFilter.value)}`
+))
 
 // Import dialog
 const showImportDialog = ref(false)
@@ -1504,9 +1622,11 @@ const importCPAAccountCount = ref(0)
 const importMode = ref('token-files')
 const importBackupFile = ref(null)  // 从备份导入用的解析后的 JSON 对象
 const importBackupFileInput = ref(null)
+const importJsonText = ref('')
 const importModes = [
   { id: 'token-files',  label: '⚡ Token文件' },
   { id: 'auto-files',   label: '🎯 自适应' },
+  { id: 'json-text',    label: '📝 JSON 文本' },
   { id: 'refresh-tokens', label: '🔄 refresh_token' },
   { id: 'cpa',          label: '📋 CPA' },
   { id: 'from-export',  label: '📦 从备份导入' },
@@ -1539,6 +1659,10 @@ const showServiceConfigDialog = ref(false)
 const savingServiceConfig = ref(false)
 const exportingAccounts = ref(false)
 const showApiKey = ref(false)
+const serviceAdvancedOpen = ref(false)
+const serviceBodyRef = ref(null)
+const serviceAdvancedRef = ref(null)
+const serviceStatsWindow = ref('weekly')
 const serviceApiKeyInput = ref('')
 const serviceConfig = ref({
   proxy_pool_enabled: true,
@@ -1553,7 +1677,21 @@ const serviceConfig = ref({
   v1_proxy_mode: '',
   codex_api_service: false,
   codex_api_base_url: '',
-  codex_api_port_url: ''
+  codex_api_port_url: '',
+  codex_context_mode: 'default',
+  model_context_window: 0,
+  model_auto_compact_token_limit: 0
+})
+const codexContextPresets = [
+  { id: 'default', label: '默认', context: 0, compact: 0 },
+  { id: 'preset_516k', label: '预设516K', context: 516000, compact: 460000 },
+  { id: 'preset_1m', label: '预设1M', context: 1000000, compact: 900000 },
+  { id: 'custom', label: '自定义', context: 0, compact: 0 }
+]
+const codexContextForm = ref({
+  codex_context_mode: 'default',
+  model_context_window: null,
+  model_auto_compact_token_limit: null
 })
 const localAccess = ref({
   collection: {
@@ -1590,12 +1728,6 @@ const strategies = [
   { id: 'least_used', label: '最少使用' }
 ]
 
-// Delete confirm dialog
-const showDeleteConfirm = ref(false)
-const deleteTargetId = ref(null)
-const deleteTargetLabel = ref('')
-const deletingAccount = ref(false)
-
 const formatExample = `[
   "refresh_token_1_here",
   "refresh_token_2_here",
@@ -1610,20 +1742,140 @@ const proxyAllOn = computed(() => oauthAccounts.value.length > 0 && proxyEnabled
 const planGroups = computed(() => [
   { id: 'all', label: '账号类型', count: oauthAccounts.value.length },
   { id: 'team', label: 'team', count: countOAuthAccountsByPlan('team') },
+  { id: 'k12', label: 'K12', count: countOAuthAccountsByPlan('k12') },
   { id: 'plus', label: 'plus', count: countOAuthAccountsByPlan('plus') },
   { id: 'free', label: 'free', count: countOAuthAccountsByPlan('free') },
 ])
+const workspaceFilterOptions = computed(() => {
+  const counts = new Map()
+  for (const account of oauthAccounts.value) {
+    const id = workspaceIDForAccount(account)
+    if (!id) continue
+    counts.set(id, (counts.get(id) || 0) + 1)
+  }
+  const options = Array.from(counts.entries())
+    .sort(([leftID, leftCount], [rightID, rightCount]) => {
+      if (rightCount !== leftCount) return rightCount - leftCount
+      return leftID.localeCompare(rightID)
+    })
+    .map(([id, count]) => ({
+      id,
+      label: `${shortWorkspaceID(id)}（${count}）`
+    }))
+  return [
+    { id: 'all', label: `全部 Workspace（${oauthAccounts.value.length}）` },
+    ...options
+  ]
+})
 const activeGroup = computed(() => accountGroups.value.find(g => g.id === activeGroupFilter.value) || null)
 const activeGroupAccountIDs = computed(() => new Set(activeGroup.value?.account_ids || []))
 const localAccessEligibleAccounts = computed(() => oauthAccounts.value.filter(isLocalAccessEligibleAccount))
 const localAccessEligibleIDSet = computed(() => new Set(localAccessEligibleAccounts.value.map(account => accountId(account.id))))
 const localAccessSelectedCount = computed(() => localAccessSelectedIds.value.filter(id => localAccessEligibleIDSet.value.has(id)).length)
 const localAccessEligibleCount = computed(() => localAccessEligibleAccounts.value.length)
+const localAccessConfigDirty = computed(() => {
+  const savedIDs = normalizeIDList(localAccess.value.collection?.account_ids || [])
+  const selectedIDs = normalizeIDList(localAccessSelectedIds.value)
+  return !sameStringList(savedIDs, selectedIDs) ||
+    localAccessRestrictFree.value !== (localAccess.value.collection?.restrict_free_accounts !== false)
+})
+const codexContextFormValid = computed(() => {
+  if (codexContextForm.value.codex_context_mode !== 'custom') return true
+  const context = Number(codexContextForm.value.model_context_window || 0)
+  const compact = Number(codexContextForm.value.model_auto_compact_token_limit || 0)
+  return Number.isFinite(context) && Number.isFinite(compact) && context > 0 && compact > 0 && compact <= context
+})
+const codexContextConfigDirty = computed(() => (
+  (serviceConfig.value.codex_context_mode || 'default') !== codexContextForm.value.codex_context_mode ||
+  Number(serviceConfig.value.model_context_window || 0) !== Number(codexContextForm.value.model_context_window || 0) ||
+  Number(serviceConfig.value.model_auto_compact_token_limit || 0) !== Number(codexContextForm.value.model_auto_compact_token_limit || 0)
+))
+const codexContextStatusText = computed(() => {
+  if (!codexContextFormValid.value) return '自定义阈值需大于 0，且不能超过上下文窗口'
+  if (codexContextForm.value.codex_context_mode === 'default') return '默认模式会移除两个字段'
+  return `写入 ${Number(codexContextForm.value.model_context_window || 0)} / ${Number(codexContextForm.value.model_auto_compact_token_limit || 0)}`
+})
+const codexServiceBusy = computed(() => savingServiceConfig.value || localAccessBusy.value)
+const codexQuickStatusLabel = computed(() => {
+  if (localAccess.value.running) return '服务运行中'
+  return serviceConfig.value.codex_api_service ? '已注入' : '未注入'
+})
+const codexQuickActionDisabled = computed(() => codexServiceBusy.value || oauthAccounts.value.length === 0)
+const codexQuickActionTitle = computed(() => {
+  if (oauthAccounts.value.length === 0) return '请先导入 OAuth 账号'
+  if (localAccess.value.running || serviceConfig.value.codex_api_service) return '重新写入配置并打开或重启 Codex App'
+  return '启动本地服务、注入配置并打开 Codex App'
+})
+const codexQuickActionLabel = computed(() => {
+  if (codexServiceBusy.value) return '处理中...'
+  if (localAccess.value.running || serviceConfig.value.codex_api_service) return '打开/重启 Codex'
+  return '启动并打开 Codex'
+})
+const localAccessActionDisabled = computed(() => codexServiceBusy.value || oauthAccounts.value.length === 0)
+const localAccessActionLabel = computed(() => {
+  if (codexServiceBusy.value) return '处理中...'
+  return localAccess.value.running ? '重新注入' : '启动并注入'
+})
+const localAccessPowerDisabled = computed(() => (
+  codexServiceBusy.value || (!localAccess.value.running && oauthAccounts.value.length === 0)
+))
+const activeServiceStats = computed(() => {
+  const stats = localAccess.value.stats || {}
+  return stats[serviceStatsWindow.value] || stats.weekly || { totals: {} }
+})
+const serviceStatsCards = computed(() => {
+  const totals = activeServiceStats.value?.totals || {}
+  const requestCount = Number(totals.request_count || serviceConfig.value.total_requests || 0)
+  const successCount = Number(totals.success_count || 0)
+  const failureCount = Number(totals.failure_count || 0)
+  const totalTokens = Number(totals.total_tokens || 0)
+  const inputTokens = Number(totals.input_tokens || 0)
+  const outputTokens = Number(totals.output_tokens || 0)
+  const avgLatency = requestCount > 0 && Number(totals.total_latency_ms || 0) > 0
+    ? Number(totals.total_latency_ms) / requestCount / 1000
+    : null
+  const successRate = successCount + failureCount > 0
+    ? Math.round(successCount * 100 / (successCount + failureCount))
+    : null
+  return [
+    {
+      id: 'requests',
+      label: '总请求数',
+      value: formatServiceMetric(requestCount),
+      detail: `成功 ${formatServiceMetric(successCount)} / 失败 ${formatServiceMetric(failureCount)}`,
+      cls: 'api-service-stat-card--blue'
+    },
+    {
+      id: 'tokens',
+      label: '总 TOKEN 数',
+      value: totalTokens ? formatServiceMetric(totalTokens) : '暂未统计',
+      detail: `输入 ${formatServiceMetric(inputTokens)} / 输出 ${formatServiceMetric(outputTokens)}`,
+      cls: 'api-service-stat-card--green'
+    },
+    {
+      id: 'pool',
+      label: '可用账号',
+      value: formatServiceMetric(localAccessEligibleCount.value),
+      detail: `集合 ${formatServiceMetric(localAccessSelectedCount.value)} / 池中 ${formatServiceMetric(serviceConfig.value.pool_size || 0)}`,
+      cls: 'api-service-stat-card--violet'
+    },
+    {
+      id: 'latency',
+      label: '平均延迟',
+      value: avgLatency == null ? '-' : `${avgLatency.toFixed(2)}s`,
+      detail: successRate == null ? '成功率未统计' : `成功率 ${successRate}%`,
+      cls: 'api-service-stat-card--orange'
+    }
+  ]
+})
 
 const filteredOAuthAccounts = computed(() => {
   let list = oauthAccounts.value
   if (planGroupFilter.value !== 'all') {
     list = list.filter(a => accountPlanType(a) === planGroupFilter.value)
+  }
+  if (workspaceFilter.value !== 'all') {
+    list = list.filter(a => workspaceIDForAccount(a) === workspaceFilter.value)
   }
   // Search filter
   const q = searchQuery.value.trim().toLowerCase()
@@ -1633,8 +1885,17 @@ const filteredOAuthAccounts = computed(() => {
   // Quota status filter
   const f = quotaFilter.value
   if (f !== 'all') {
+    if (f === 'deactivated_workspace') {
+      list = list.filter(isDeactivatedWorkspaceAccount)
+      return sortOAuthAccounts(list)
+    }
+    if (f === 'exhausted') {
+      list = list.filter(isQuotaExhausted)
+      return sortOAuthAccounts(list)
+    }
     const want = Number(f)
     list = list.filter(a => {
+      if (want === 403 && isDeactivatedWorkspaceAccount(a)) return false
       if (Number(a._quota_http_status) === want) return true
       if (want === 401 && a.status === 'reauth_required') return true
       return false
@@ -1666,8 +1927,8 @@ const allAPISelected = computed(() => (
   filteredAPIAccounts.value.every(a => selectedAPIIds.value.includes(accountId(a.id)))
 ))
 const accountGridClass = computed(() => accountLayout.value === 'dense'
-  ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-6 gap-2'
-  : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-3'
+  ? 'account-grid account-grid--dense'
+  : 'account-grid account-grid--standard'
 )
 
 // Pagination
@@ -1701,6 +1962,7 @@ const tabs = computed(() => [
 function readStoredOption(key, fallback, allowedValues) {
   try {
     const value = localStorage.getItem(key)
+    if (!Array.isArray(allowedValues)) return value || fallback
     return allowedValues.includes(value) ? value : fallback
   } catch {
     return fallback
@@ -1798,10 +2060,26 @@ function setAccountSortMode(mode) {
 }
 
 function setPlanGroupFilter(groupID) {
-  const allowed = ['all', 'team', 'plus', 'free']
+  const allowed = ['all', 'team', 'k12', 'plus', 'free']
   planGroupFilter.value = allowed.includes(groupID) ? groupID : 'all'
   oauthPage.value = 1
   clearOAuthSelection()
+}
+
+function setWorkspaceFilter(workspaceID) {
+  const allowed = new Set(workspaceFilterOptions.value.map(option => option.id))
+  workspaceFilter.value = allowed.has(workspaceID) ? workspaceID : 'all'
+  oauthPage.value = 1
+  clearOAuthSelection()
+  writeStoredOption('easyllm.openai.workspaceFilter', workspaceFilter.value)
+}
+
+function ensureWorkspaceFilterAvailable() {
+  if (workspaceFilter.value === 'all') return
+  if (!workspaceFilterOptions.value.some(option => option.id === workspaceFilter.value)) {
+    workspaceFilter.value = 'all'
+    writeStoredOption('easyllm.openai.workspaceFilter', 'all')
+  }
 }
 
 function normalizeAccountGroup(group) {
@@ -1970,7 +2248,8 @@ function oauthRemainingQuota(account, windowKey) {
 
 function accountPlanRank(account) {
   const plan = accountPlanType(account)
-  if (plan === 'team') return 3
+  if (plan === 'team') return 4
+  if (plan === 'k12') return 3
   if (plan === 'plus') return 2
   if (plan === 'free') return 1
   return 0
@@ -2027,8 +2306,9 @@ async function loadAccounts() {
   loading.value = true
   try {
     // api interceptor returns response.data directly, so res IS the array
-    const res = await api.get('/openai/accounts')
+    const res = await api.get('/openai/accounts', { params: { _t: Date.now() } })
     accounts.value = Array.isArray(res) ? res : (res || [])
+    ensureWorkspaceFilterAvailable()
     syncAccountGroupsWithAccounts()
     pruneSelectedAccountIds()
   } catch (e) {
@@ -2041,14 +2321,18 @@ async function loadAccounts() {
 async function switchAccount(account) {
   switchingId.value = account.id
   try {
-    await api.post(`/openai/accounts/${account.id}/switch`)
+    const res = await api.post(`/openai/accounts/${account.id}/switch`)
     accounts.value.forEach(a => { a.is_codex_active = (a.id === account.id) })
     const idx = accounts.value.findIndex(a => a.id === account.id)
     if (idx > 0) {
       const [item] = accounts.value.splice(idx, 1)
       accounts.value.unshift(item)
     }
-    showToast(`已切换到 ${accountDisplayLabel(account)}，~/.codex/auth.json 已更新`, 'success')
+    if (res?.restart_error) {
+      showToast(`已切换到 ${accountDisplayLabel(account)}，但 Codex 重启失败：${res.restart_error}`, 'error')
+    } else {
+      showToast(`已切换到 ${accountDisplayLabel(account)}，Codex 已重启并重新登录`, 'success')
+    }
   } catch (e) {
     showToast('切换失败: ' + (e.response?.data?.error || e.message), 'error')
   } finally {
@@ -2059,14 +2343,18 @@ async function switchAccount(account) {
 async function switchAPIAccount(account) {
   switchingId.value = account.id
   try {
-    await api.post(`/openai/api-accounts/${account.id}/switch`)
+    const res = await api.post(`/openai/api-accounts/${account.id}/switch`)
     accounts.value.forEach(a => { a.is_codex_active = (a.id === account.id) })
     const idx = accounts.value.findIndex(a => a.id === account.id)
     if (idx > 0) {
       const [item] = accounts.value.splice(idx, 1)
       accounts.value.unshift(item)
     }
-    showToast(`已切换到 ${accountDisplayLabel(account)}，~/.codex/config.toml 已更新`, 'success')
+    if (res?.restart_error) {
+      showToast(`已切换到 ${accountDisplayLabel(account)}，但 Codex 重启失败：${res.restart_error}`, 'error')
+    } else {
+      showToast(`已切换到 ${accountDisplayLabel(account)}，Codex 已重启并应用配置`, 'success')
+    }
   } catch (e) {
     showToast('切换失败: ' + (e.response?.data?.error || e.message), 'error')
   } finally {
@@ -2147,27 +2435,15 @@ async function deleteAccount(id) {
     showToast('找不到该账号', 'error')
     return
   }
-  deleteTargetId.value = id
-  deleteTargetLabel.value = accountDisplayLabel(target)
-  showDeleteConfirm.value = true
-}
-
-function closeDeleteConfirm() {
-  if (deletingAccount.value) return
-  resetDeleteConfirm()
-}
-
-function resetDeleteConfirm() {
-  deletingAccount.value = false
-  showDeleteConfirm.value = false
-  deleteTargetId.value = null
-  deleteTargetLabel.value = ''
-}
-
-async function confirmDeleteAccount() {
-  const id = deleteTargetId.value
-  if (!id) return
-  deletingAccount.value = true
+  const label = accountDisplayLabel(target)
+  const confirmed = await requestOperationConfirm({
+    title: '删除账号',
+    message: `将永久删除该账号${label ? `（${label}）` : ''}。`,
+    details: '删除后不会影响你本地浏览器或客户端已存在的 token 文件，只会从 EasyLLM 中移除该账号记录。',
+    confirmText: '删除账号',
+    tone: 'danger',
+  })
+  if (!confirmed) return
   try {
     await api.delete(`/openai/accounts/${id}`)
     // Remove locally for instant push
@@ -2179,12 +2455,10 @@ async function confirmDeleteAccount() {
       apiPage.value = apiTotalPages.value
     }
     showToast('已删除', 'success')
-    resetDeleteConfirm()
     // Refresh list from server as fail-safe
     await loadAccounts()
   } catch (e) {
     showToast('删除失败: ' + (e.response?.data?.error || e.message), 'error')
-    deletingAccount.value = false
   }
 }
 
@@ -2319,12 +2593,25 @@ function selectImportMode(mode) {
   importCPAAccountCount.value = 0
   importAutoFiles.value = []
   importBackupFile.value = null
+  importJsonText.value = ''
+}
+
+function countJsonTextAccounts(text) {
+  const trimmed = String(text || '').trim()
+  if (!trimmed) return 0
+  try {
+    const parsed = JSON.parse(trimmed)
+    return Array.isArray(parsed) ? parsed.length : 1
+  } catch {
+    return trimmed.split('\n').filter((line) => line.trim()).length
+  }
 }
 
 const canRunImport = computed(() => {
   if (importMode.value === 'token-files') return importFiles.value.length > 0
   if (importMode.value === 'auto-files') return importAutoFiles.value.length > 0
   if (importMode.value === 'refresh-tokens') return importTokens.value.length > 0
+  if (importMode.value === 'json-text') return countJsonTextAccounts(importJsonText.value) > 0
   if (importMode.value === 'cpa') return importCPAFiles.value.length > 0
   if (importMode.value === 'from-export') return !!importBackupFile.value
   return false
@@ -2335,6 +2622,10 @@ const importButtonLabel = computed(() => {
   if (importMode.value === 'auto-files') return `自适应导入 ${importAutoFiles.value.length} 个文件`
   if (importMode.value === 'refresh-tokens') return `导入 ${importTokens.value.length} 个账号`
   if (importMode.value === 'cpa') return `导入 ${importCPAAccountCount.value} 个 CPA 账号`
+  if (importMode.value === 'json-text') {
+    const count = countJsonTextAccounts(importJsonText.value)
+    return count > 1 ? `导入 ${count} 个账号` : '导入 1 个账号'
+  }
   if (importMode.value === 'from-export') {
     const total = (importBackupFile.value?.oauth_accounts?.length ?? 0) + (importBackupFile.value?.api_accounts?.length ?? 0)
     return importBackupFile.value?.local_access ? `从备份导入 ${total} 个账号 + 本地服务配置` : `从备份导入 ${total} 个账号`
@@ -2572,6 +2863,30 @@ async function runImport() {
         results: res?.results ?? []
       }
 
+    } else if (importMode.value === 'json-text') {
+      if (!importJsonText.value) throw new Error('请输入 JSON 文本')
+      const token = localStorage.getItem('easyllm_token')
+      const fetchRes = await fetch('/api/v1/openai/import/cpa', {
+        method: 'POST',
+        body: importJsonText.value,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      })
+      if (!fetchRes.ok) {
+        const errData = await fetchRes.json().catch(() => ({}))
+        throw new Error(errData.error || `HTTP ${fetchRes.status}`)
+      }
+      res = await fetchRes.json()
+      importResults.value = {
+        success: res?.success ?? 0,
+        skipped: res?.skipped ?? 0,
+        failed: res?.failed ?? 0,
+        total: res?.total ?? 0,
+        results: res?.results ?? []
+      }
+
     } else if (importMode.value === 'auto-files') {
       const formData = new FormData()
       for (const f of importAutoFiles.value) {
@@ -2684,6 +2999,7 @@ function closeImportDialog() {
   importCPAFiles.value = []
   importCPAAccountCount.value = 0
   importAutoFiles.value = []
+  importJsonText.value = ''
   importResults.value = null
 }
 
@@ -2924,9 +3240,58 @@ async function loadServiceConfig() {
   try {
     const res = await api.get('/openai/service-config')
     Object.assign(serviceConfig.value, res)
+    applyCodexContextConfig(res)
     serviceApiKeyInput.value = ''
   } catch (e) {
     console.error('Failed to load service config:', e)
+  }
+}
+
+function applyCodexContextConfig(source = {}) {
+  const mode = source.codex_context_mode || 'default'
+  const preset = codexContextPresets.find(item => item.id === mode)
+  codexContextForm.value = {
+    codex_context_mode: preset ? mode : 'default',
+    model_context_window: Number(source.model_context_window || preset?.context || 0) || null,
+    model_auto_compact_token_limit: Number(source.model_auto_compact_token_limit || preset?.compact || 0) || null
+  }
+}
+
+function selectCodexContextMode(mode) {
+  const preset = codexContextPresets.find(item => item.id === mode) || codexContextPresets[0]
+  codexContextForm.value.codex_context_mode = preset.id
+  if (preset.id !== 'custom') {
+    codexContextForm.value.model_context_window = preset.context || null
+    codexContextForm.value.model_auto_compact_token_limit = preset.compact || null
+  }
+}
+
+function codexContextPayload() {
+  return {
+    codex_context_mode: codexContextForm.value.codex_context_mode,
+    model_context_window: Number(codexContextForm.value.model_context_window || 0),
+    model_auto_compact_token_limit: Number(codexContextForm.value.model_auto_compact_token_limit || 0)
+  }
+}
+
+async function saveCodexContextConfig(options = {}) {
+  if (!codexContextFormValid.value) {
+    showToast('上下文与压缩阈值不合法', 'error')
+    return false
+  }
+  const showSuccessToast = options?.showSuccessToast !== false
+  savingServiceConfig.value = true
+  try {
+    const res = await api.put('/openai/service-config', codexContextPayload())
+    Object.assign(serviceConfig.value, res)
+    applyCodexContextConfig(res)
+    if (showSuccessToast) showToast('上下文与压缩阈值已保存', 'success')
+    return true
+  } catch (e) {
+    showToast('保存失败: ' + e.message, 'error')
+    return false
+  } finally {
+    savingServiceConfig.value = false
   }
 }
 
@@ -2946,6 +3311,10 @@ function applyLocalAccessState(state) {
     }
   }
   localAccessSelectedIds.value = [...(localAccess.value.collection?.account_ids || [])].map(accountId)
+  if (oauthAccounts.value.length > 0) {
+    const oauthIdSet = new Set(oauthAccounts.value.map(a => accountId(a.id)))
+    localAccessSelectedIds.value = localAccessSelectedIds.value.filter(id => oauthIdSet.has(id))
+  }
   localAccessPortInput.value = String(localAccess.value.collection?.port || 8022)
   localAccessRestrictFree.value = localAccess.value.collection?.restrict_free_accounts !== false
 }
@@ -2959,11 +3328,38 @@ async function loadLocalAccess() {
   }
 }
 
+async function refreshServicePanel() {
+  await Promise.all([loadServiceConfig(), loadLocalAccess(), loadAccounts()])
+  showToast('API 服务状态已刷新', 'success')
+}
+
+function formatServiceMetric(value) {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n)) return '0'
+  if (Math.abs(n) >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(Math.round(n))
+}
+
 
 
 async function openServiceConfig() {
   showServiceConfigDialog.value = true
+  serviceAdvancedOpen.value = false
   await Promise.all([loadServiceConfig(), loadLocalAccess()])
+  await nextTick()
+  serviceBodyRef.value?.scrollTo?.({ top: 0 })
+}
+
+async function toggleServiceAdvanced() {
+  serviceAdvancedOpen.value = !serviceAdvancedOpen.value
+  await nextTick()
+  if (serviceAdvancedOpen.value) {
+    serviceAdvancedRef.value?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
+  } else {
+    serviceBodyRef.value?.scrollTo?.({ top: 0, behavior: 'smooth' })
+  }
 }
 
 async function exportAccounts(options = {}) {
@@ -2972,24 +3368,84 @@ async function exportAccounts(options = {}) {
   exportingAccounts.value = true
   try {
     const payload = await openaiAPI.exportJSON()
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `easyllm-accounts-${new Date().toISOString().slice(0, 10)}.json`
-    a.click()
-    URL.revokeObjectURL(url)
+    const filename = `easyllm-accounts-${new Date().toISOString().slice(0, 10)}.json`
+    const content = JSON.stringify(payload, null, 2)
+    await saveExportFile(filename, content)
     if (showSuccessToast) {
       showToast(`已导出 ${payload.oauth_accounts?.length ?? 0} 个 OAuth + ${payload.api_accounts?.length ?? 0} 个 API 账号（基于后端最新落库数据）`, 'success')
     }
     return payload
   } catch (e) {
-    showToast('导出失败: ' + e.message, 'error')
+    if (e?.code === 'cancelled') {
+      showToast('已取消导出', 'error')
+    } else {
+      showToast('导出失败: ' + e.message, 'error')
+    }
     if (throwOnError) throw e
     return null
   } finally {
     exportingAccounts.value = false
   }
+}
+
+async function saveExportFile(filename, content) {
+  if (isMacApp() && window.webkit?.messageHandlers?.easyllmSaveFile) {
+    await saveFileWithMacAppBridge(filename, content)
+    return
+  }
+  downloadTextFile(filename, content, 'application/json')
+}
+
+function saveFileWithMacAppBridge(filename, content) {
+  const requestId = (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`)
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer)
+      window.removeEventListener('easyllm-save-file-result', onResult)
+    }
+    const onResult = (event) => {
+      const detail = event.detail || {}
+      if (detail.request_id !== requestId) return
+      cleanup()
+      if (detail.success) {
+        resolve(detail)
+        return
+      }
+      const err = new Error(detail.error || '保存失败')
+      if (detail.error === 'cancelled') {
+        err.code = 'cancelled'
+      }
+      reject(err)
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      reject(new Error('保存超时'))
+    }, 120000)
+    window.addEventListener('easyllm-save-file-result', onResult)
+    try {
+      window.webkit.messageHandlers.easyllmSaveFile.postMessage({
+        request_id: requestId,
+        filename,
+        content,
+      })
+    } catch (err) {
+      cleanup()
+      reject(err)
+    }
+  })
+}
+
+function downloadTextFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 async function toggleServiceProxyPool() {
@@ -3021,10 +3477,24 @@ async function updateServiceStrategy(strategy) {
 async function activateCodexAPIService() {
   savingServiceConfig.value = true
   try {
+    const shouldSaveConfig = localAccessConfigDirty.value
+    if (shouldSaveConfig) {
+      await api.put('/openai/local-access/accounts', localAccessAccountsPayload())
+    }
+    if (codexContextConfigDirty.value) {
+      const savedContext = await saveCodexContextConfig({ showSuccessToast: false })
+      if (!savedContext) return
+    }
     const res = await api.post('/openai/service-config/activate-codex')
     Object.assign(serviceConfig.value, res)
     await Promise.all([loadLocalAccess(), loadAccounts()])
-    showToast(res?.codex_app_restarted ? 'Codex 已重启并注入配置' : 'Codex 已启动并注入配置', 'success')
+    const message = res?.codex_app_restarted ? 'Codex 已重启并注入配置' : 'Codex 已启动并注入配置'
+    if (res?.codex_app_error) {
+      const prefix = shouldSaveConfig ? '服务配置已保存并注入成功，' : '服务配置已注入成功，'
+      showToast(`${prefix}但 Codex App 启动/重启失败：${res.codex_app_error}`, 'error')
+    } else {
+      showToast(shouldSaveConfig ? `服务配置已保存，${message}` : message, 'success')
+    }
   } catch (e) {
     showToast('启动 Codex API 服务失败: ' + e.message, 'error')
   } finally {
@@ -3046,7 +3516,9 @@ function toggleLocalAccessAccount(id) {
 }
 
 function isLocalAccessEligibleAccount(account) {
-  return Number(account?._quota_http_status) === 200 && !account?.quota_is_forbidden
+  if (Number(account?._quota_http_status) !== 200 || account?.quota_is_forbidden) return false
+  if (localAccessRestrictFree.value && accountPlanType(account) === 'free') return false
+  return true
 }
 
 function quotaStatusBadgeClass(status) {
@@ -3064,8 +3536,30 @@ function selectAllLocalAccessAccounts() {
   localAccessSelectedIds.value = localAccessEligibleAccounts.value.map(account => accountId(account.id)).filter(Boolean)
 }
 
-function clearLocalAccessAccounts() {
-  localAccessSelectedIds.value = []
+function normalizeIDList(ids) {
+  return Array.from(new Set((ids || []).map(accountId).filter(Boolean))).sort()
+}
+
+function sameStringList(left, right) {
+  if (left.length !== right.length) return false
+  return left.every((value, index) => value === right[index])
+}
+
+function localAccessAccountsPayload() {
+  return {
+    account_ids: normalizeIDList(localAccessSelectedIds.value),
+    restrict_free_accounts: localAccessRestrictFree.value
+  }
+}
+
+async function clearLocalAccessAccounts() {
+  await localAccessAction(
+    () => api.put('/openai/local-access/accounts', {
+      ...localAccessAccountsPayload(),
+      account_ids: []
+    }),
+    'Codex API 服务账号集合已清空'
+  )
 }
 
 async function saveAllLocalAccessAccounts() {
@@ -3093,9 +3587,21 @@ async function localAccessAction(task, successText) {
 }
 
 async function activateLocalAccess() {
+  const shouldSaveConfig = localAccessConfigDirty.value
   await localAccessAction(
-    () => api.post('/openai/local-access/activate'),
-    'Codex 本地 API 服务已启动并注入配置'
+    async () => {
+      if (shouldSaveConfig) {
+        await api.put('/openai/local-access/accounts', localAccessAccountsPayload())
+      }
+      if (codexContextConfigDirty.value) {
+        const savedContext = await saveCodexContextConfig({ showSuccessToast: false })
+        if (!savedContext) throw new Error('上下文与压缩阈值未保存')
+      }
+      return api.post('/openai/local-access/activate')
+    },
+    shouldSaveConfig
+      ? 'Codex 本地 API 服务配置已保存，并已启动注入'
+      : 'Codex 本地 API 服务已启动并注入配置'
   )
 }
 
@@ -3108,10 +3614,7 @@ async function deactivateLocalAccess() {
 
 async function saveLocalAccessAccounts() {
   await localAccessAction(
-    () => api.put('/openai/local-access/accounts', {
-      account_ids: localAccessSelectedIds.value,
-      restrict_free_accounts: localAccessRestrictFree.value
-    }),
+    () => api.put('/openai/local-access/accounts', localAccessAccountsPayload()),
     'Codex API 服务账号集合已保存'
   )
 }
@@ -3154,9 +3657,20 @@ async function clearLocalAccessStats() {
 }
 
 async function saveServiceApiKey() {
+  const nextAPIKey = serviceApiKeyInput.value.trim()
+  if (!nextAPIKey && serviceConfig.value.api_key_set) {
+    const confirmed = await requestOperationConfirm({
+      title: '清除服务 Key',
+      message: '输入框为空会清除当前 Codex API 服务 Key。',
+      details: '清除后本机 /v1/* 服务将不再要求 Bearer Key，确认这是你想要的操作再继续。',
+      confirmText: '清除 Key',
+      tone: 'danger',
+    })
+    if (!confirmed) return
+  }
   savingServiceConfig.value = true
   try {
-    const res = await api.put('/openai/service-config', { api_key: serviceApiKeyInput.value })
+    const res = await api.put('/openai/service-config', { api_key: nextAPIKey })
     Object.assign(serviceConfig.value, res)
     serviceApiKeyInput.value = ''
     showToast(serviceConfig.value.api_key_set ? 'API Key 已更新' : 'API Key 已清除（无鉴权模式）', 'success')
@@ -3188,10 +3702,12 @@ function oauthAccountPriority(account) {
   if (code === 200 && !account?.quota_is_forbidden) return 0
   if (code === 429) return 1
   if (code === 503) return 2
-  if (code === 403) return 3
-  if (code === 401) return 4
-  if (account?.status === 'reauth_required') return 5
-  return 6
+  if (isQuotaExhausted(account)) return 3
+  if (isDeactivatedWorkspaceAccount(account)) return 4
+  if (code === 403) return 4
+  if (code === 401) return 5
+  if (account?.status === 'reauth_required') return 6
+  return 7
 }
 
 function reorderOAuthAccounts() {
@@ -3216,9 +3732,9 @@ function applyQuotaResult(result) {
 
   if (result.success && result.is_forbidden) {
     acc.quota_is_forbidden = true
-    acc._quota_http_status = 403
+    acc._quota_http_status = result.http_status || 403
     acc._verified = false
-    acc._quota_error = ''
+    acc._quota_error = result.error || ''
     return 'forbidden'
   }
 
@@ -3281,7 +3797,8 @@ async function fetchQuotaForAccount(account) {
     } else if (status === 'verified') {
       showToast(`${accountDisplayLabel(account) || '账号'} 账号有效，但未返回配额头`, 'success')
     } else if (status === 'forbidden') {
-      showToast(`${accountDisplayLabel(account) || '账号'} 已被禁用`, 'error')
+      const label = isDeactivatedWorkspaceAccount(accById(result.id)) ? '工作区已停用' : '已被禁用'
+      showToast(`${accountDisplayLabel(account) || '账号'} ${label}`, 'error')
     } else {
       showToast(`${accountDisplayLabel(account) || '账号'} 配额查询失败: ${result.error || '查询失败'}`, 'error')
     }
@@ -3296,6 +3813,9 @@ async function fetchQuotaForAccount(account) {
 }
 
 async function fetchQuotaBatch(ids, scopeLabel = '全部') {
+  if (fetchingQuotas.value) {
+    return
+  }
   if (!ids.length) {
     if (oauthAccounts.value.length === 0) {
       showToast(`${scopeLabel}没有OAuth账号，无法查询配额`, 'error')
@@ -3311,11 +3831,16 @@ async function fetchQuotaBatch(ids, scopeLabel = '全部') {
     let verifiedCount = 0
     let failedCount = 0
     let forbiddenCount = 0
+    let deactivatedWorkspaceCount = 0
     if (res?.results) {
       for (const r of res.results) {
         const status = applyQuotaResult(r)
         if (status === 'forbidden') {
-          forbiddenCount++
+          if (isDeactivatedWorkspaceAccount(accById(r.id))) {
+            deactivatedWorkspaceCount++
+          } else {
+            forbiddenCount++
+          }
         } else if (status === 'quota') {
           quotaCount++
         } else if (status === 'verified') {
@@ -3329,6 +3854,7 @@ async function fetchQuotaBatch(ids, scopeLabel = '全部') {
     const parts = []
     if (quotaCount > 0) parts.push(`${quotaCount} 个有配额数据`)
     if (verifiedCount > 0) parts.push(`${verifiedCount} 个账号有效`)
+    if (deactivatedWorkspaceCount > 0) parts.push(`${deactivatedWorkspaceCount} 个工作区停用`)
     if (forbiddenCount > 0) parts.push(`${forbiddenCount} 个被禁用`)
     if (failedCount > 0) parts.push(`${failedCount} 个失败`)
     reorderOAuthAccounts()
@@ -3347,10 +3873,13 @@ async function fetchQuotaBatch(ids, scopeLabel = '全部') {
 }
 
 async function fetchAllQuotas() {
+  if (fetchingQuotas.value) {
+    return
+  }
   await fetchQuotaBatch(oauthAccounts.value.map(a => a.id), '全部')
 }
 
-function openBulkDeleteConfirm() {
+async function openBulkDeleteConfirm() {
   const selectionType = activeTab.value === 'api' ? 'api' : 'oauth'
   const ids = [...getSelectedIds(selectionType)]
   if (!ids.length) {
@@ -3361,40 +3890,27 @@ function openBulkDeleteConfirm() {
   const list = (selectionType === 'api' ? apiAccounts.value : oauthAccounts.value)
     .filter(a => selectedSet.has(accountId(a.id)))
 
-  bulkDeleteIds.value = ids
-  bulkDeleteSelectionType.value = selectionType
-  bulkDeleteAccountLabel.value = selectionType === 'api' ? 'API 账号' : 'OAuth 账号'
-  bulkDeleteScopeLabel.value = selectionType === 'api'
+  const accountLabel = selectionType === 'api' ? 'API 账号' : 'OAuth 账号'
+  const scopeLabel = selectionType === 'api'
     ? (allAPISelected.value ? '当前 API 筛选结果' : '手动勾选')
-    : (allFilteredOAuthSelected.value ? `当前筛选结果（${quotaFilterLabel.value}）` : '手动勾选')
-  bulkDeleteAllSelected.value = selectionType === 'api' ? allAPISelected.value : allFilteredOAuthSelected.value
-  bulkDeletePreview.value = list
+    : (allFilteredOAuthSelected.value ? `当前筛选结果（${workspaceFilterLabel.value} / ${quotaFilterLabel.value}）` : '手动勾选')
+  const allSelected = selectionType === 'api' ? allAPISelected.value : allFilteredOAuthSelected.value
+  const preview = list
     .slice(0, 12)
     .map(accountDisplayLabel)
-  showBulkDeleteConfirm.value = true
-}
-
-function closeBulkDeleteConfirm() {
-  if (bulkDeleting.value) return
-  resetBulkDeleteConfirm()
-}
-
-function resetBulkDeleteConfirm() {
-  bulkDeleting.value = false
-  showBulkDeleteConfirm.value = false
-  bulkDeleteIds.value = []
-  bulkDeletePreview.value = []
-  bulkDeleteSelectionType.value = 'oauth'
-  bulkDeleteAccountLabel.value = 'OAuth 账号'
-  bulkDeleteScopeLabel.value = ''
-  bulkDeleteAllSelected.value = false
-}
-
-async function confirmBulkDelete() {
-  const ids = bulkDeleteIds.value
-  if (!ids.length) return
+  const confirmed = await requestOperationConfirm({
+    title: '批量删除账号',
+    message: `将永久删除已选中的 ${ids.length} 个 ${accountLabel}。`,
+    details: `选择范围：${scopeLabel}。仅删除 EasyLLM 内的账号记录，不会删除本地浏览器或客户端 token 文件。`,
+    warning: allSelected ? `你当前已全选 ${accountLabel}。` : '',
+    itemsLabel: `将删除（预览前 ${preview.length} 个）`,
+    items: preview,
+    confirmText: `删除 ${ids.length} 个`,
+    tone: 'danger',
+  })
+  if (!confirmed) return
   bulkDeleting.value = true
-  const deletingTab = bulkDeleteSelectionType.value === 'api' ? 'api' : 'oauth'
+  const deletingTab = selectionType
   try {
     await api.request({
       method: 'DELETE',
@@ -3411,10 +3927,10 @@ async function confirmBulkDelete() {
       oauthPage.value = 1
     }
     showToast(`已批量删除 ${ids.length} 个账号`, 'success')
-    resetBulkDeleteConfirm()
     await loadAccounts()
   } catch (e) {
     showToast('批量删除失败: ' + (e.response?.data?.error || e.message), 'error')
+  } finally {
     bulkDeleting.value = false
   }
 }
@@ -3429,6 +3945,19 @@ function shouldShow5hQuota(account) {
 
 function shouldShow7dQuota(account) {
   return account?.quota_7d_used_percent != null
+}
+
+function quotaRemainingFromUsedPercent(value) {
+  if (value == null) return null
+  const used = Number(value)
+  if (!Number.isFinite(used)) return null
+  return 100 - used
+}
+
+function isQuotaExhausted(account) {
+  const remain5h = quotaRemainingFromUsedPercent(account?.quota_5h_used_percent)
+  const remain7d = quotaRemainingFromUsedPercent(account?.quota_7d_used_percent)
+  return remain5h != null && remain7d != null && remain5h <= 0 && remain7d <= 0
 }
 
 function hasDisplayQuotaData(account) {
@@ -3450,8 +3979,30 @@ function shortAccountIdentifier(account) {
   return compact.slice(-6).toUpperCase()
 }
 
+function shortImportIdentifier(value) {
+  const source = String(value || '').trim()
+  if (!source) return ''
+  const compact = source.replace(/[^a-zA-Z0-9]/g, '')
+  return compact ? compact.slice(-6).toUpperCase() : source.slice(-6)
+}
+
+function workspaceIDForAccount(account) {
+  return String(account?.chatgpt_account_id || '').trim()
+}
+
+function shortWorkspaceID(value) {
+  const id = String(value || '').trim()
+  if (!id) return '无 Workspace'
+  if (id.length <= 13) return id
+  return `${id.slice(0, 8)}...${id.slice(-4)}`
+}
+
 function accountId(id) {
   return String(id)
+}
+
+function accById(id) {
+  return accounts.value.find(account => String(account.id) === String(id)) || null
 }
 
 function accountDisplayLabel(account) {
@@ -3486,15 +4037,37 @@ const scanImportFormatLabels = {
 function importResultDisplayLabel(result) {
   if (!result) return ''
   const formatTag = result.format ? scanImportFormatLabels[result.format] || result.format : ''
+  const accountID = shortImportIdentifier(result.account_id)
+  const organizationID = shortImportIdentifier(result.organization_id)
+  const identityParts = []
+  if (accountID) identityParts.push(`acct ${accountID}`)
+  if (organizationID) identityParts.push(`org ${organizationID}`)
+  const identityTag = identityParts.join(' / ')
   let base = ''
   if (result.email && hideAccountEmails.value) {
-    base = 'OAuth 账号（邮箱已隐藏）'
+    base = identityTag ? `OAuth 账号 #${identityTag}` : 'OAuth 账号（邮箱已隐藏）'
   } else {
     base = result.email || result.filename || result.token_preview || ''
+    if (identityTag) {
+      base = base ? `${base} · ${identityTag}` : identityTag
+    }
   }
   if (formatTag && base) return `${base} · ${formatTag}`
   if (formatTag) return formatTag
   return base
+}
+
+function importResultKey(result, index) {
+  if (!result) return String(index)
+  return [
+    result.filename || '',
+    result.email || '',
+    result.account_id || '',
+    result.organization_id || '',
+    result.action || '',
+    result.error || '',
+    index,
+  ].join('|')
 }
 
 function getSelectedIds(type) {
@@ -3571,6 +4144,7 @@ function pruneSelectedAccountIds() {
   const apiIdSet = new Set(apiAccounts.value.map(a => accountId(a.id)))
   selectedOAuthIds.value = selectedOAuthIds.value.filter(id => oauthIdSet.has(id))
   selectedAPIIds.value = selectedAPIIds.value.filter(id => apiIdSet.has(id))
+  localAccessSelectedIds.value = localAccessSelectedIds.value.filter(id => oauthIdSet.has(id))
 }
 
 function pctColor(remainPct) {
@@ -3583,6 +4157,24 @@ function isRegionRestricted(account) {
   const error = String(account?._quota_error || '')
   return Number(account?._quota_http_status) === 403 &&
     (error.includes('unsupported_country_region_territory') || error.includes('Country, region, or territory not supported'))
+}
+
+function quotaErrorText(account) {
+  return [
+    account?._quota_error,
+    account?.quota_error,
+    account?.quotaError,
+    account?.subscription_query_last_error,
+  ].map(value => String(value || '')).join('\n').toLowerCase()
+}
+
+function isDeactivatedWorkspaceAccount(account) {
+  return quotaErrorText(account).includes('deactivated_workspace')
+}
+
+function quotaForbiddenLabel(account) {
+  if (isDeactivatedWorkspaceAccount(account)) return '工作区已停用'
+  return '账号被禁用'
 }
 
 function formatResetTime(seconds) {
@@ -3624,13 +4216,21 @@ const PLAN_LABELS = {
   prolite:    { text: 'Pro 5x',   cls: 'bg-yellow-700/60 text-yellow-300' },
   promax:     { text: 'Pro 20x',  cls: 'bg-amber-700/60 text-amber-300' },
   team:       { text: 'Team',     cls: 'bg-blue-700/60 text-blue-300' },
+  k12:        { text: 'K12',      cls: 'bg-lime-700/60 text-lime-300' },
   business:   { text: 'Business', cls: 'bg-cyan-700/60 text-cyan-300' },
   enterprise: { text: 'Enterprise', cls: 'bg-emerald-700/60 text-emerald-300' },
 }
 
+function normalizePlanType(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/_/g, '-').replace(/\s+/g, '-')
+  if (!normalized) return ''
+  if (normalized.includes('k12') || normalized.includes('k-12')) return 'k12'
+  return normalized
+}
+
 function accountPlanType(account) {
-  const persistedPlan = String(account?.plan || '').trim().toLowerCase()
-  return persistedPlan || jwtPlanType(account) || ''
+  const persistedPlan = normalizePlanType(account?.plan)
+  return persistedPlan || normalizePlanType(jwtPlanType(account)) || ''
 }
 
 function countOAuthAccountsByPlan(plan) {
@@ -3717,7 +4317,7 @@ watch([filteredOAuthAccounts, filteredAPIAccounts], () => {
   }
 })
 
-watch([searchQuery, quotaFilter], () => {
+watch([searchQuery, quotaFilter, workspaceFilter], () => {
   oauthPage.value = 1
   clearOAuthSelection()
 })
@@ -3795,6 +4395,34 @@ onBeforeUnmount(() => {
   color: var(--app-text);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
+.account-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+.account-grid--dense {
+  gap: 8px;
+}
+@media (min-width: 640px) {
+  .account-grid--standard,
+  .account-grid--dense {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 900px) {
+  .account-grid--standard,
+  .account-grid--dense {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1440px) {
+  .account-grid--standard {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .account-grid--dense {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
 .account-card-compact--dense {
   @apply px-2 py-2;
 }
@@ -3830,6 +4458,11 @@ onBeforeUnmount(() => {
   background: #b45309 !important;
   border-color: #92400e !important;
   color: #fffbeb !important;
+}
+.quota-status-badge--exhausted {
+  background: #991b1b !important;
+  border-color: #7f1d1d !important;
+  color: #fef2f2 !important;
 }
 .quota-status-badge--4xx,
 .quota-status-badge--other {
@@ -3870,16 +4503,17 @@ onBeforeUnmount(() => {
 }
 
 .card-actions {
-  @apply flex items-center gap-1.5 overflow-hidden;
+  @apply flex min-w-0 items-center gap-1.5 overflow-visible;
 }
 .card-btn {
-  @apply inline-flex h-8 shrink-0 items-center justify-center rounded text-[11px] font-medium transition-colors disabled:opacity-40 whitespace-nowrap;
+  @apply inline-flex h-8 items-center justify-center rounded-md text-[11px] font-medium transition-colors disabled:opacity-40 whitespace-nowrap;
+  box-sizing: border-box;
 }
 .card-btn--text {
-  @apply min-w-[52px] px-2.5;
+  @apply min-w-0 flex-1 px-2;
 }
 .card-btn--icon {
-  @apply h-8 w-8 min-w-8 px-0;
+  @apply h-8 w-8 min-w-8 shrink-0 px-0;
 }
 .account-card-compact--dense .card-btn {
   @apply h-7 text-[10px];
@@ -3914,11 +4548,13 @@ onBeforeUnmount(() => {
   color: var(--app-text);
 }
 .card-btn--danger {
-  background: transparent;
+  background: rgba(255, 59, 48, 0.08);
+  border: 1px solid rgba(255, 59, 48, 0.18);
   color: var(--app-danger);
 }
 .card-btn--danger:hover {
-  background: rgba(255, 59, 48, 0.1);
+  background: rgba(255, 59, 48, 0.16);
+  border-color: rgba(255, 59, 48, 0.3);
 }
 .card-btn--on {
   background: rgba(52, 199, 89, 0.16);
@@ -3945,28 +4581,42 @@ onBeforeUnmount(() => {
 }
 .account-toolbar--oauth {
   display: grid !important;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(72px, 1fr);
-  grid-template-columns: none;
+  grid-template-columns: minmax(520px, 1fr) auto auto auto;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   width: 100%;
-  overflow-x: auto;
-  overflow-y: visible;
+  min-width: 1080px;
+  overflow: visible;
   white-space: nowrap;
 }
 .account-toolbar--oauth .toolbar-section {
-  display: contents;
+  @apply flex min-w-0 items-center gap-1.5 flex-nowrap;
 }
 .account-toolbar--oauth .toolbar-btn {
-  @apply min-w-0 px-1.5;
+  @apply px-2;
 }
 .account-toolbar--oauth .toolbar-btn--layout,
 .account-toolbar--oauth .toolbar-btn--select {
-  @apply min-w-0;
+  @apply min-w-[62px];
 }
 .account-toolbar--oauth .toolbar-section--selection {
-  @apply justify-start;
+  @apply justify-end;
+}
+.account-toolbar--oauth .toolbar-section--view {
+  display: grid;
+  grid-template-columns: repeat(2, 68px);
+  gap: 6px;
+}
+.account-toolbar--oauth .toolbar-section--view .toolbar-btn {
+  width: 100%;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+}
+.account-toolbar--oauth .toolbar-section--search {
+  display: grid;
+  grid-template-columns: minmax(116px, 1fr) 88px 132px 104px 74px;
+  gap: 6px;
 }
 .account-toolbar--api {
   grid-template-columns: minmax(160px, 1fr) auto auto;
@@ -3991,10 +4641,65 @@ onBeforeUnmount(() => {
 }
 .toolbar-btn {
   @apply inline-flex h-8 min-w-[50px] shrink-0 items-center justify-center gap-1 rounded-md border px-2 text-[11px] font-medium leading-none transition-colors disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap;
+  appearance: none;
+  box-sizing: border-box;
+  outline: none;
+}
+.toolbar-btn:focus,
+.toolbar-btn:active {
+  outline: none;
+}
+.toolbar-btn:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--app-accent-soft);
 }
 .toolbar-btn--layout,
 .toolbar-btn--select {
   @apply min-w-[62px];
+}
+.toolbar-btn--privacy {
+  width: 68px;
+  min-width: 68px;
+  max-width: 68px;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 1px;
+  border-style: solid;
+  line-height: 1;
+  box-shadow: none;
+}
+.toolbar-btn--privacy svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+.toolbar-btn--privacy-on {
+  background: rgba(2, 132, 199, 0.2);
+  border-color: rgba(14, 165, 233, 0.4);
+  color: #bae6fd;
+}
+.toolbar-btn--privacy-on:hover {
+  background: rgba(2, 132, 199, 0.3);
+}
+.toolbar-btn--privacy-off {
+  background: #1f2937;
+  border-color: #374151;
+  color: #d1d5db;
+}
+.toolbar-btn--privacy-off:hover {
+  background: #374151;
+}
+.toolbar-btn--privacy:active,
+.toolbar-btn--privacy:focus {
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  outline: none;
+}
+.toolbar-btn--privacy:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--app-accent-soft);
 }
 .toolbar-btn-neutral {
   background: var(--app-control-bg);
@@ -4052,7 +4757,7 @@ onBeforeUnmount(() => {
   @apply w-full min-w-[116px];
 }
 .account-toolbar--oauth .toolbar-search {
-  @apply w-full min-w-0 max-w-none;
+  @apply w-full min-w-[116px] max-w-none;
 }
 .toolbar-select {
   @apply w-[86px] min-w-[86px] max-w-[86px] shrink-0 truncate;
@@ -4063,6 +4768,9 @@ onBeforeUnmount(() => {
 .toolbar-select--plan {
   @apply w-[78px] min-w-[78px] max-w-[84px];
 }
+.toolbar-select--workspace {
+  @apply w-[128px] min-w-[112px] max-w-[144px];
+}
 .toolbar-select--sort {
   @apply w-[96px] min-w-[96px] max-w-[104px];
 }
@@ -4070,13 +4778,14 @@ onBeforeUnmount(() => {
   @apply w-[68px] min-w-[68px] max-w-[68px];
 }
 .toolbar-status {
-  @apply inline-flex h-8 shrink-0 items-center px-1 text-[11px] whitespace-nowrap;
+  @apply inline-flex h-8 shrink-0 items-center justify-center rounded-md border px-2 text-[11px] font-medium whitespace-nowrap;
+  background: var(--app-control-bg);
+  border-color: var(--app-border);
   color: var(--app-text-muted);
 }
 @media (max-width: 1420px) {
-  .account-toolbar--oauth .toolbar-section--filter,
-  .account-toolbar--oauth .toolbar-section--selection {
-    @apply justify-start;
+  .account-toolbar--oauth {
+    grid-template-columns: minmax(520px, 1fr) auto auto auto;
   }
 }
 @media (max-width: 1080px) {
@@ -4084,11 +4793,27 @@ onBeforeUnmount(() => {
   .account-toolbar--api {
     grid-template-columns: minmax(0, 1fr);
   }
+  .account-toolbar--oauth {
+    grid-template-columns: minmax(520px, 1fr) auto auto auto;
+  }
   .toolbar-section {
     @apply flex-wrap justify-start;
   }
   .account-toolbar--oauth .toolbar-section {
-    display: contents;
+    @apply flex-nowrap;
+  }
+  .account-toolbar--oauth .toolbar-section--search {
+    display: grid;
+    grid-template-columns: minmax(116px, 1fr) 88px 132px 104px 74px;
+  }
+  .account-toolbar--oauth .toolbar-section--view,
+  .account-toolbar--oauth .toolbar-section--actions,
+  .account-toolbar--oauth .toolbar-section--selection {
+    @apply justify-end;
+  }
+  .account-toolbar--oauth .toolbar-section--view {
+    display: grid;
+    grid-template-columns: repeat(2, 68px);
   }
   .toolbar-section--search .toolbar-search {
     @apply max-w-none;
@@ -4097,10 +4822,21 @@ onBeforeUnmount(() => {
     @apply w-full max-w-none;
   }
 }
-.account-toolbar--oauth :is(.toolbar-btn, .toolbar-input, .toolbar-select, .toolbar-status) {
+.account-toolbar--oauth :is(.toolbar-input, .toolbar-select) {
   width: 100%;
   min-width: 0;
   max-width: none;
+}
+.account-toolbar--oauth :is(.toolbar-btn, .toolbar-input, .toolbar-select, .toolbar-status) {
+  box-sizing: border-box;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  line-height: 1;
+  vertical-align: middle;
+}
+.account-toolbar--oauth .toolbar-status {
+  min-width: 64px;
 }
 .account-toolbar--oauth .toolbar-search {
   min-width: 0;
@@ -4147,6 +4883,285 @@ onBeforeUnmount(() => {
   color: var(--app-text-secondary) !important;
 }
 
+.api-service-shell {
+  --app-border: rgba(148, 163, 184, 0.22);
+  --app-border-soft: rgba(148, 163, 184, 0.16);
+  --app-control-bg: rgba(15, 23, 42, 0.78);
+  --app-control-hover-bg: rgba(30, 41, 59, 0.92);
+  --app-surface: rgba(15, 23, 42, 0.78);
+  --app-surface-muted: rgba(30, 41, 59, 0.9);
+  --app-text: #f8fafc;
+  --app-text-secondary: #cbd5e1;
+  --app-text-muted: #94a3b8;
+  --app-text-faint: #64748b;
+  max-height: calc(100vh - 3rem);
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 1.5rem;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.98));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+}
+
+.api-service-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.api-service-icon {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border-radius: 1rem;
+  color: white;
+  background: linear-gradient(135deg, #2563eb, #0891b2);
+}
+
+.api-service-close,
+.api-service-icon-action,
+.api-service-power {
+  display: inline-flex;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--app-border);
+  border-radius: 9999px;
+  color: var(--app-text-secondary);
+  background: var(--app-control-bg);
+  transition: color .2s ease, border-color .2s ease, background .2s ease;
+}
+
+.api-service-close {
+  color: #0f172a;
+  background: rgba(226, 232, 240, 0.9);
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
+.api-service-close:hover,
+.api-service-icon-action:hover {
+  color: var(--app-text);
+  background: var(--app-control-hover-bg);
+}
+
+.api-service-icon-action--warn {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.api-service-action--active,
+.api-service-icon-action--active {
+  color: #dbeafe;
+  border-color: rgba(96, 165, 250, 0.55);
+  background: rgba(37, 99, 235, 0.2);
+}
+
+.api-service-power {
+  color: #f87171;
+}
+
+.api-service-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .875rem 1.5rem;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.api-service-pill,
+.api-service-action,
+.api-service-danger,
+.api-service-mini-btn {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  gap: .4rem;
+  border: 1px solid var(--app-border);
+  border-radius: 9999px;
+  padding: .35rem .75rem;
+  color: var(--app-text-secondary);
+  background: var(--app-control-bg);
+  font-size: .78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.api-service-pill:disabled,
+.api-service-action:disabled,
+.api-service-danger:disabled,
+.api-service-mini-btn:disabled {
+  opacity: 0.5;
+}
+
+.api-service-action:hover,
+.api-service-mini-btn:hover {
+  color: var(--app-text);
+  background: var(--app-control-hover-bg);
+}
+
+.api-service-pill--success {
+  border-color: rgba(52, 199, 89, .3);
+  color: #86efac;
+  background: rgba(34, 197, 94, .14);
+}
+
+.api-service-pill--muted {
+  color: var(--app-text-faint);
+}
+
+.api-service-danger {
+  border-color: rgba(239, 68, 68, .28);
+  color: #fca5a5;
+  background: rgba(239, 68, 68, .14);
+}
+
+.api-service-strategy {
+  height: 2.35rem;
+  min-width: 12rem;
+  border: 1px solid var(--app-border);
+  border-radius: 9999px;
+  padding: 0 .85rem;
+  color: var(--app-text);
+  background: var(--app-control-bg);
+  font-size: .82rem;
+  font-weight: 600;
+}
+
+.api-service-body {
+  max-height: calc(100vh - 12.5rem);
+  overflow-y: auto;
+  padding: 1.5rem;
+  background: radial-gradient(circle at 20% 0%, rgba(37, 99, 235, .11), transparent 36%),
+    radial-gradient(circle at 88% 12%, rgba(14, 165, 233, .08), transparent 28%);
+}
+
+.api-service-section {
+  border: 1px solid var(--app-border);
+  border-radius: 1.25rem;
+  background: rgba(15, 23, 42, .72);
+  padding: 1.25rem;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .18);
+}
+
+.api-service-section + .api-service-section,
+.api-service-section + .bg-gray-800,
+.bg-gray-800 + .bg-gray-800 {
+  margin-top: 1rem;
+}
+
+.api-service-segment {
+  display: inline-flex;
+  gap: .15rem;
+  border: 1px solid var(--app-border);
+  border-radius: 9999px;
+  background: var(--app-control-bg);
+  padding: .25rem;
+}
+
+.api-service-segment--wrap {
+  display: flex;
+  flex-wrap: wrap;
+  border-radius: .75rem;
+}
+
+.api-service-segment button {
+  min-width: 2.35rem;
+  border-radius: 9999px;
+  padding: .35rem .55rem;
+  color: var(--app-text-secondary);
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.api-service-segment button.is-active {
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, .28);
+}
+
+.api-service-stats-grid,
+.api-service-config-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1.1rem;
+}
+
+.api-service-stat-card,
+.api-service-config-card {
+  min-width: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 1.1rem;
+  background: rgba(2, 6, 23, .5);
+  padding: 1.25rem;
+}
+
+.api-service-value-field {
+  display: flex;
+  min-height: 4rem;
+  min-width: 0;
+  align-items: center;
+  border: 1px solid rgba(71, 85, 105, .78);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, .86);
+  padding: .85rem 1rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+}
+
+.api-service-value {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: .95rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-service-value--blue {
+  color: #60a5fa;
+}
+
+.api-service-value--green {
+  color: #86efac;
+}
+
+.api-service-stat-card--blue { border-color: rgba(96, 165, 250, .35); color: #93c5fd; }
+.api-service-stat-card--green { border-color: rgba(45, 212, 191, .32); color: #5eead4; }
+.api-service-stat-card--violet { border-color: rgba(167, 139, 250, .34); color: #c4b5fd; }
+.api-service-stat-card--orange { border-color: rgba(251, 146, 60, .34); color: #fdba74; }
+
+@media (max-width: 1100px) {
+  .api-service-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .api-service-stats-grid,
+  .api-service-config-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .api-service-stats-grid,
+  .api-service-config-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .api-service-body {
+    padding: 1rem;
+  }
+}
+
 .btn {
   @apply inline-flex items-center justify-center px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap;
 }
@@ -4184,7 +5199,7 @@ onBeforeUnmount(() => {
   @apply px-2.5 py-1.5 text-xs;
 }
 .pagination-bar {
-  @apply mt-4 flex flex-col items-center justify-between gap-2 text-sm sm:flex-row;
+  @apply mt-6 flex flex-wrap items-center justify-center gap-2 text-sm;
 }
 .pagination-page-size {
   @apply inline-flex h-8 items-center gap-2 rounded-lg border px-2 text-xs;
@@ -4246,6 +5261,18 @@ onBeforeUnmount(() => {
 
 [data-theme-mode='light'] .toolbar-btn[class~='bg-blue-600/20'],
 [data-theme-mode='light'] .toolbar-btn[class~='bg-sky-600/20'] {
+  background: var(--app-accent-tint) !important;
+  border-color: var(--app-accent-soft) !important;
+  color: var(--app-accent) !important;
+}
+
+[data-theme-mode='light'] .toolbar-btn--privacy-off {
+  background: var(--app-control-bg) !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text-secondary) !important;
+}
+
+[data-theme-mode='light'] .toolbar-btn--privacy-on {
   background: var(--app-accent-tint) !important;
   border-color: var(--app-accent-soft) !important;
   color: var(--app-accent) !important;

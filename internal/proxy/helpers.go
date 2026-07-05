@@ -91,6 +91,36 @@ func isTokenInvalidated(body []byte) bool {
 	return bytes.Contains(body, []byte(`"code":"token_invalidated"`)) || bytes.Contains(body, []byte(`"code": "token_invalidated"`))
 }
 
+// isUsageLimitReached reports Codex/ChatGPT usage cap responses that should trigger pool rotation.
+func isUsageLimitReached(statusCode int, body []byte) bool {
+	if statusCode != http.StatusTooManyRequests {
+		return false
+	}
+	if len(body) == 0 {
+		return true
+	}
+	if bytes.Contains(body, []byte(`usage_limit_reached`)) ||
+		bytes.Contains(body, []byte(`"type":"usage_limit_reached"`)) ||
+		bytes.Contains(body, []byte(`"type": "usage_limit_reached"`)) {
+		return true
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(body, &obj); err == nil {
+		if e, ok := obj["error"].(map[string]interface{}); ok {
+			if t, _ := e["type"].(string); strings.EqualFold(t, "usage_limit_reached") {
+				return true
+			}
+		}
+	}
+	return bytes.Contains(body, []byte(`usage limit`)) ||
+		bytes.Contains(body, []byte(`Usage limit`))
+}
+
+// isRetryablePoolFailure checks if the proxy should try another OAuth account.
+func isRetryablePoolFailure(statusCode int, body []byte) bool {
+	return isRetryableAuthFailure(statusCode, body) || isUsageLimitReached(statusCode, body)
+}
+
 // isRetryableAuthFailure checks if the upstream error is a retryable auth failure.
 func isRetryableAuthFailure(statusCode int, body []byte) bool {
 	if statusCode == http.StatusUnauthorized {

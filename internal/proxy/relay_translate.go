@@ -121,7 +121,7 @@ func ToChatRequest(req *ResponsesRequest, history []ChatMessage, sessions *Relay
 
 				msg := ChatMessage{
 					Role:      "assistant",
-					Content:    nil,
+					Content:   nil,
 					ToolCalls: grouped,
 				}
 				if reasoningContent != nil {
@@ -190,11 +190,11 @@ func ToChatRequest(req *ResponsesRequest, history []ChatMessage, sessions *Relay
 
 	chatReq := &ChatRequest{
 		Model:             model,
-		Messages:            messages,
-		Tools:               tools,
-		ToolChoice:          req.ToolChoice,
-		ParallelToolCalls:   req.ParallelToolCalls,
-		Stream:              req.Stream,
+		Messages:          messages,
+		Tools:             tools,
+		ToolChoice:        req.ToolChoice,
+		ParallelToolCalls: req.ParallelToolCalls,
+		Stream:            req.Stream,
 	}
 	if req.Temperature != nil {
 		chatReq.Temperature = req.Temperature
@@ -224,9 +224,9 @@ func FromChatResponse(id string, model string, chat ChatResponse, nsMap Namespac
 		text := choice.Message.TextContent()
 		if text != "" || choice.Message.ToolCalls == nil {
 			output = append(output, map[string]interface{}{
-				"type":       "message",
-				"role":       "assistant",
-				"status":     "completed",
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
 				"content": []interface{}{
 					map[string]interface{}{
 						"type": "output_text",
@@ -258,12 +258,12 @@ func FromChatResponse(id string, model string, chat ChatResponse, nsMap Namespac
 
 				ns, name := responseFunctionNameForResponses(rawName, nsMap)
 				item := map[string]interface{}{
-					"type":       "function_call",
-					"id":         fmt.Sprintf("fc_%s", uuid.New().String()[:8]),
-					"call_id":    callID,
-					"name":       name,
-					"arguments":  arguments,
-					"status":     "completed",
+					"type":      "function_call",
+					"id":        fmt.Sprintf("fc_%s", uuid.New().String()[:8]),
+					"call_id":   callID,
+					"name":      name,
+					"arguments": arguments,
+					"status":    "completed",
 				}
 				if ns != "" {
 					item["namespace"] = ns
@@ -488,9 +488,9 @@ func isCodexPlaceholderModel(name string) bool {
 }
 
 // PreferredCodexModel picks the Codex-facing model name for ~/.codex/config.toml injection.
-// It prefers mapped gpt-* keys (e.g. gpt-5.5) over upstream default_model values (e.g. mimo-v2.5-pro).
+// It prefers mapped gpt-* keys (e.g. gpt-5.5) over upstream default_model values (e.g. deepseek-reasoner).
 func PreferredCodexModel(modelMap map[string]string, defaultModel string) string {
-	for _, preferred := range []string{"gpt-5.5", "gpt-5.4", "gpt-5-codex", "gpt-5", "gpt-5.1-codex-max"} {
+	for _, preferred := range []string{"gpt-5.5", "gpt-5.4"} {
 		if _, ok := modelMap[preferred]; ok {
 			return preferred
 		}
@@ -510,7 +510,7 @@ func PreferredCodexModel(modelMap map[string]string, defaultModel string) string
 	if isCodexPlaceholderModel(defaultModel) {
 		return defaultModel
 	}
-	return "gpt-5-codex"
+	return "gpt-5.5"
 }
 
 // ── Content conversion ─────────────────────────────────────────────────────────
@@ -583,7 +583,7 @@ func mapContentPart(part interface{}) interface{} {
 		// If already an object, keep it; if string, wrap
 		if _, ok := inner.(map[string]interface{}); ok {
 			return map[string]interface{}{
-				"type":     "image_url",
+				"type":      "image_url",
 				"image_url": inner,
 			}
 		}
@@ -619,4 +619,3 @@ func getStr(m map[string]interface{}, key string) string {
 	}
 	return ""
 }
-

@@ -25,15 +25,15 @@ import (
 
 // App holds all application dependencies
 type App struct {
-	cfg           *config.Config
-	auth          *handlers.AuthHandler
-	openai        *handlers.OpenAIHandler
-	settings      *handlers.SettingsHandler
-	codexProxy    *proxy.CodexProxy
-	openaiStore   *storage.OpenAIStorage
-	relayHandler  *proxy.RelayHandler
-	router        *gin.Engine
-	client        *http.Client
+	cfg          *config.Config
+	auth         *handlers.AuthHandler
+	openai       *handlers.OpenAIHandler
+	settings     *handlers.SettingsHandler
+	codexProxy   *proxy.CodexProxy
+	openaiStore  *storage.OpenAIStorage
+	relayHandler *proxy.RelayHandler
+	router       *gin.Engine
+	client       *http.Client
 }
 
 // New creates a new App with all dependencies initialized
@@ -66,13 +66,13 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Build handlers
 	app := &App{
-		cfg:           cfg,
-		auth:          handlers.NewAuthHandler(),
-		openai:        handlers.NewOpenAIHandler(openaiStore, codexStore),
-		settings:      handlers.NewSettingsHandler(),
-		codexProxy:    codexProxy,
-		openaiStore:   openaiStore,
-		relayHandler:  proxy.NewRelayHandler(nil),
+		cfg:          cfg,
+		auth:         handlers.NewAuthHandler(),
+		openai:       handlers.NewOpenAIHandler(openaiStore, codexStore),
+		settings:     handlers.NewSettingsHandler(),
+		codexProxy:   codexProxy,
+		openaiStore:  openaiStore,
+		relayHandler: proxy.NewRelayHandler(nil),
 		client: &http.Client{
 			Transport: &http.Transport{
 				DialContext: (&net.Dialer{
@@ -106,6 +106,8 @@ func (a *App) setupRouter() {
 	r.Use(gin.Recovery())
 	r.Use(GzipMiddleware())
 	r.Use(ipBlacklistMiddleware(a.cfg))
+	r.Use(noStoreAPIMiddleware())
+	r.Use(webUICacheMiddleware())
 
 	// CORS - allow all origins since this is a local tool
 	r.Use(cors.New(cors.Config{
@@ -179,6 +181,7 @@ func (a *App) setupRouter() {
 		relayConfig.POST("/sessions/clear", a.relayHandler.HandleClearRelaySessions)
 		relayConfig.GET("/sessions/stats", a.relayHandler.HandleGetRelaySessionStats)
 		relayConfig.GET("/usage", a.relayHandler.HandleGetRelayUsage)
+		relayConfig.DELETE("/usage/history", a.relayHandler.HandleClearRelayHistory)
 		relayConfig.GET("/logs", a.relayHandler.HandleGetRelayLogs)
 		relayConfig.GET("/logs/stream", a.relayHandler.HandleStreamRelayLogs)
 		relayConfig.DELETE("/logs", a.relayHandler.HandleClearRelayLogs)
@@ -232,8 +235,25 @@ func (a *App) proxyCodexRequest(c *gin.Context) {
 func (a *App) proxyV1Request(c *gin.Context) {
 	path := c.Param("path")
 
-	// Relay: /v1/responses (Responses API → Chat Completions translation)
+	// Relay: /v1/responses (Responses API → Chat Completions translation).
+	// When Codex Local Access is active, requests carrying proxy_api_key must hit the
+	// OAuth proxy pool instead of Relay (which may point at a different upstream).
 	if path == "/responses" && c.Request.Method == http.MethodPost {
+		if a.shouldRouteV1ResponsesToCodexProxy(c) {
+			if !allowLocalProxyFallback(c) {
+				return
+			}
+			if requiredKey, ok := storage.GetSetting("proxy_api_key"); ok && requiredKey != "" {
+				token := extractBearerToken(c.GetHeader("Authorization"))
+				isPassthrough := a.codexProxy.IsKnownToken(token)
+				if token != requiredKey && !isPassthrough {
+					rejectUnauthorized(c)
+					return
+				}
+			}
+			a.codexProxy.ProxyRequest(c.Writer, c.Request)
+			return
+		}
 		a.relayHandler.HandleRelayResponses(c)
 		return
 	}
@@ -538,6 +558,32 @@ func conditionalLogger(_ *config.Config) gin.HandlerFunc {
 	}
 }
 
+func noStoreAPIMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/pool/status") {
+			c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
+		}
+		c.Next()
+	}
+}
+
+func webUICacheMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
+			if path == "/" || strings.HasSuffix(path, ".html") || !strings.Contains(path[strings.LastIndex(path, "/")+1:], ".") {
+				c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+				c.Header("Pragma", "no-cache")
+				c.Header("Expires", "0")
+			}
+		}
+		c.Next()
+	}
+}
+
 func ipBlacklistMiddleware(cfg *config.Config) gin.HandlerFunc {
 	// Pre-build the blocklist set once, not per-request.
 	type blacklist struct {
@@ -568,6 +614,27 @@ func ipBlacklistMiddleware(cfg *config.Config) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func (a *App) shouldRouteV1ResponsesToCodexProxy(c *gin.Context) bool {
+	if a.codexProxy == nil || !a.codexProxy.IsEnabled() {
+		return false
+	}
+	enabled, ok := storage.GetSetting("codex_local_access_enabled")
+	if !ok || enabled != "true" {
+		return false
+	}
+	mode, ok := storage.GetSetting("v1_proxy_mode")
+	if !ok || mode != "codex" {
+		return false
+	}
+	requiredKey, hasKey := storage.GetSetting("proxy_api_key")
+	requiredKey = strings.TrimSpace(requiredKey)
+	if hasKey && requiredKey != "" {
+		token := extractBearerToken(c.GetHeader("Authorization"))
+		return token == requiredKey || a.codexProxy.IsKnownToken(token)
+	}
+	return isLoopbackRemoteAddr(c.Request.RemoteAddr)
 }
 
 // extractBearerToken extracts the token from an Authorization: Bearer <token> header.

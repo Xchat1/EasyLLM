@@ -1,7 +1,9 @@
 package openai
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -80,6 +82,56 @@ func TestMergeQuotaInfoFillsMissing5hFromCodexHeaders(t *testing.T) {
 	}
 	if merged.PlanType == nil || *merged.PlanType != "plus" {
 		t.Fatalf("expected plan to stay from usage payload, got %#v", merged.PlanType)
+	}
+}
+
+func TestNormalizePlanTypeK12(t *testing.T) {
+	for _, input := range []string{"k12", "K12", "K-12", "chatgpt_k12"} {
+		if got := NormalizePlanType(input); got != "k12" {
+			t.Fatalf("NormalizePlanType(%q) = %q, want k12", input, got)
+		}
+	}
+}
+
+func TestCombineQuotaFetchResultsUsesCodexHeadersWhenUsageIsForbidden(t *testing.T) {
+	usageInfo := &QuotaInfo{IsForbidden: true}
+	headerInfo := &QuotaInfo{
+		Codex5hUsedPercent:   floatPtr(42),
+		Codex5hResetSeconds:  int64Ptr(1200),
+		Codex5hWindowMinutes: int64Ptr(300),
+	}
+
+	got, err := combineQuotaFetchResults(usageInfo, nil, headerInfo, nil)
+	if err != nil {
+		t.Fatalf("combineQuotaFetchResults returned error: %v", err)
+	}
+	if got == nil || got.IsForbidden {
+		t.Fatalf("expected Codex header quota to override forbidden usage response, got %#v", got)
+	}
+	if got.Codex5hUsedPercent == nil || *got.Codex5hUsedPercent != 42 {
+		t.Fatalf("expected 5h quota from headers, got %#v", got.Codex5hUsedPercent)
+	}
+}
+
+func TestCombineQuotaFetchResultsKeepsForbiddenWhenHeadersUnavailable(t *testing.T) {
+	usageInfo := &QuotaInfo{
+		IsForbidden:     true,
+		HTTPStatus:      http.StatusForbidden,
+		ForbiddenReason: `HTTP 403: {"code":"deactivated_workspace"}`,
+	}
+
+	got, err := combineQuotaFetchResults(usageInfo, nil, nil, errors.New("headers unavailable"))
+	if err != nil {
+		t.Fatalf("combineQuotaFetchResults returned error: %v", err)
+	}
+	if got == nil || !got.IsForbidden {
+		t.Fatalf("expected forbidden usage result when headers are unavailable, got %#v", got)
+	}
+	if got.HTTPStatus != http.StatusForbidden {
+		t.Fatalf("expected HTTP status to be preserved, got %d", got.HTTPStatus)
+	}
+	if !strings.Contains(got.ForbiddenReason, "deactivated_workspace") {
+		t.Fatalf("expected forbidden reason to be preserved, got %q", got.ForbiddenReason)
 	}
 }
 

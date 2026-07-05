@@ -20,6 +20,11 @@ var startTime = time.Now()
 // SettingsHandler manages application settings
 type SettingsHandler struct{}
 
+type quotaFetchSettings struct {
+	TimeoutSeconds int `json:"timeout_seconds"`
+	Concurrency    int `json:"concurrency"`
+}
+
 func NewSettingsHandler() *SettingsHandler {
 	return &SettingsHandler{}
 }
@@ -45,6 +50,10 @@ func (h *SettingsHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	// Database config
 	s.GET("/database", h.GetDatabase)
 	s.PUT("/database", h.UpdateDatabase)
+
+	// Quota check performance
+	s.GET("/quota-check", h.GetQuotaCheck)
+	s.PUT("/quota-check", h.UpdateQuotaCheck)
 
 	// System info
 	rg.GET("/health", h.Health)
@@ -335,6 +344,64 @@ func (h *SettingsHandler) UpdateDatabase(c *gin.Context) {
 		"success": true,
 		"message": "Database path saved. Restart required to take effect.",
 	})
+}
+
+func (h *SettingsHandler) GetQuotaCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, readQuotaFetchSettings())
+}
+
+func (h *SettingsHandler) UpdateQuotaCheck(c *gin.Context) {
+	var req quotaFetchSettings
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+
+	settings := normalizeQuotaFetchSettings(req)
+	storage.SaveSetting(quotaFetchTimeoutSettingKey, strconv.Itoa(settings.TimeoutSeconds))
+	storage.SaveSetting(quotaFetchConcurrencySettingKey, strconv.Itoa(settings.Concurrency))
+	c.JSON(http.StatusOK, settings)
+}
+
+func readQuotaFetchSettings() quotaFetchSettings {
+	timeoutSeconds := defaultQuotaFetchTimeoutSeconds
+	concurrency := defaultQuotaFetchConcurrency
+	if v, ok := storage.GetSetting(quotaFetchTimeoutSettingKey); ok && strings.TrimSpace(v) != "" {
+		if n, parseErr := strconv.Atoi(strings.TrimSpace(v)); parseErr == nil {
+			timeoutSeconds = n
+		}
+	}
+	if v, ok := storage.GetSetting(quotaFetchConcurrencySettingKey); ok && strings.TrimSpace(v) != "" {
+		if n, parseErr := strconv.Atoi(strings.TrimSpace(v)); parseErr == nil {
+			concurrency = n
+		}
+	}
+	return normalizeQuotaFetchSettings(quotaFetchSettings{
+		TimeoutSeconds: timeoutSeconds,
+		Concurrency:    concurrency,
+	})
+}
+
+func normalizeQuotaFetchSettings(settings quotaFetchSettings) quotaFetchSettings {
+	if settings.TimeoutSeconds <= 0 {
+		settings.TimeoutSeconds = defaultQuotaFetchTimeoutSeconds
+	}
+	if settings.Concurrency <= 0 {
+		settings.Concurrency = defaultQuotaFetchConcurrency
+	}
+	settings.TimeoutSeconds = clampInt(settings.TimeoutSeconds, minQuotaFetchTimeoutSeconds, maxQuotaFetchTimeoutSeconds)
+	settings.Concurrency = clampInt(settings.Concurrency, minQuotaFetchConcurrency, maxQuotaFetchConcurrency)
+	return settings
+}
+
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 // Helper functions

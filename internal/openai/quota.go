@@ -2,13 +2,13 @@ package openai
 
 import (
 	"bytes"
-	"easyllm/config"
+	"context"
+	"easyllm/internal/httputil"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -34,8 +34,10 @@ type QuotaInfo struct {
 	Codex7dResetSeconds  *int64   // 7d reset countdown (seconds)
 	Codex7dWindowMinutes *int64   // 7d window duration (minutes)
 
-	PlanType    *string
-	IsForbidden bool // 402/403 response
+	PlanType        *string
+	IsForbidden     bool // 402/403 response
+	HTTPStatus      int
+	ForbiddenReason string
 }
 
 // JSON response structs matching the usage payload
@@ -61,58 +63,81 @@ type usageResponse struct {
 
 // FetchQuota combines ChatGPT usage data with Codex response headers so the UI
 // can show both 5h and 7d windows even when wham/usage only exposes one side.
+// If wham/usage fails with a transient network error, Codex headers are still tried.
 func FetchQuota(accessToken, chatgptAccountID string) (*QuotaInfo, error) {
+	return FetchQuotaContext(context.Background(), accessToken, chatgptAccountID)
+}
+
+// FetchQuotaContext is FetchQuota with caller-controlled cancellation.
+func FetchQuotaContext(ctx context.Context, accessToken, chatgptAccountID string) (*QuotaInfo, error) {
 	client := newQuotaHTTPClient()
-	info, err := fetchUsageQuota(client, accessToken, chatgptAccountID)
-	if err != nil {
-		return nil, err
-	}
-	if info != nil && info.IsForbidden {
+
+	info, usageErr := fetchUsageQuota(ctx, client, accessToken, chatgptAccountID)
+	headerInfo, headerErr := fetchCodexHeadersQuota(ctx, client, accessToken, chatgptAccountID)
+	return combineQuotaFetchResults(info, usageErr, headerInfo, headerErr)
+}
+
+func combineQuotaFetchResults(info *QuotaInfo, usageErr error, headerInfo *QuotaInfo, headerErr error) (*QuotaInfo, error) {
+	if info != nil {
+		if headerInfo != nil && headerErr == nil {
+			info = mergeQuotaInfo(info, headerInfo)
+		}
+		if info.IsForbidden && headerInfo != nil && headerErr == nil && !headerInfo.IsForbidden {
+			return headerInfo, nil
+		}
 		return info, nil
 	}
 
-	headerInfo, headerErr := fetchCodexHeadersQuota(client, accessToken, chatgptAccountID)
-	if headerErr == nil {
-		info = mergeQuotaInfo(info, headerInfo)
+	if headerInfo != nil && headerErr == nil {
+		return headerInfo, nil
 	}
 
-	return info, nil
+	if usageErr != nil {
+		return nil, usageErr
+	}
+	if headerErr != nil {
+		return nil, headerErr
+	}
+	return nil, fmt.Errorf("quota data unavailable")
 }
 
 func newQuotaHTTPClient() *http.Client {
-	cfg := config.Get()
-	transport := &http.Transport{}
-	if cfg.Proxy.Enabled && cfg.Proxy.Host != "" {
-		proxyURLStr := fmt.Sprintf("http://%s:%d", cfg.Proxy.Host, cfg.Proxy.Port)
-		if cfg.Proxy.Username != "" {
-			proxyURLStr = fmt.Sprintf("http://%s:%s@%s:%d",
-				url.QueryEscape(cfg.Proxy.Username),
-				url.QueryEscape(cfg.Proxy.Password),
-				cfg.Proxy.Host, cfg.Proxy.Port)
-		}
-		if u, err := url.Parse(proxyURLStr); err == nil {
-			transport.Proxy = http.ProxyURL(u)
-		}
-	}
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   15 * time.Second,
-	}
-	return client
+	return NewQuotaHTTPClient()
 }
 
-func fetchUsageQuota(client *http.Client, accessToken, chatgptAccountID string) (*QuotaInfo, error) {
-	req, err := http.NewRequest("GET", usageURL, nil)
+// NewQuotaHTTPClient returns an HTTP client configured with optional proxy settings.
+func NewQuotaHTTPClient() *http.Client {
+	return httputil.NewChatGPTClient(30 * time.Second)
+}
+
+func setChatGPTAPIHeaders(req *http.Request) {
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+	}
+	if req.Header.Get("Accept-Language") == "" {
+		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	}
+	if req.Header.Get("Origin") == "" {
+		req.Header.Set("Origin", "https://chatgpt.com")
+	}
+	if req.Header.Get("Referer") == "" {
+		req.Header.Set("Referer", "https://chatgpt.com/")
+	}
+}
+
+func fetchUsageQuota(ctx context.Context, client *http.Client, accessToken, chatgptAccountID string) (*QuotaInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", usageURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
+	setChatGPTAPIHeaders(req)
 	if chatgptAccountID != "" {
 		req.Header.Set("ChatGPT-Account-Id", chatgptAccountID)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := httputil.DoWithRetries(client, req, 3)
 	if err != nil {
 		return nil, fmt.Errorf("quota request failed: %w", err)
 	}
@@ -122,7 +147,7 @@ func fetchUsageQuota(client *http.Client, accessToken, chatgptAccountID string) 
 		return nil, fmt.Errorf("HTTP 401: Token expired or invalid")
 	}
 	if resp.StatusCode == 402 || resp.StatusCode == 403 {
-		return &QuotaInfo{IsForbidden: true}, nil
+		return forbiddenQuotaInfo(resp), nil
 	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -143,9 +168,9 @@ func fetchUsageQuota(client *http.Client, accessToken, chatgptAccountID string) 
 	return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 }
 
-func fetchCodexHeadersQuota(client *http.Client, accessToken, chatgptAccountID string) (*QuotaInfo, error) {
+func fetchCodexHeadersQuota(ctx context.Context, client *http.Client, accessToken, chatgptAccountID string) (*QuotaInfo, error) {
 	reqBody := map[string]interface{}{
-		"model": "gpt-5.1-codex",
+		"model": "gpt-5.5",
 		"input": []interface{}{
 			map[string]interface{}{
 				"role": "user",
@@ -163,7 +188,7 @@ func fetchCodexHeadersQuota(client *http.Client, accessToken, chatgptAccountID s
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, codexResponsesQuotaURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, codexResponsesQuotaURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -173,11 +198,12 @@ func fetchCodexHeadersQuota(client *http.Client, accessToken, chatgptAccountID s
 	req.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 	req.Header.Set("originator", "codex_cli_rs")
+	setChatGPTAPIHeaders(req)
 	if chatgptAccountID != "" {
 		req.Header.Set("ChatGPT-Account-Id", chatgptAccountID)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := httputil.DoWithRetries(client, req, 3)
 	if err != nil {
 		return nil, fmt.Errorf("codex quota request failed: %w", err)
 	}
@@ -185,6 +211,9 @@ func fetchCodexHeadersQuota(client *http.Client, accessToken, chatgptAccountID s
 
 	if resp.StatusCode == 401 {
 		return nil, fmt.Errorf("HTTP 401: Token expired or invalid")
+	}
+	if resp.StatusCode == 402 || resp.StatusCode == 403 {
+		return forbiddenQuotaInfo(resp), nil
 	}
 
 	info := ParseCodexHeaders(resp.Header)
@@ -280,9 +309,33 @@ func mergeQuotaInfo(base, extra *QuotaInfo) *QuotaInfo {
 	if base.PlanType == nil {
 		base.PlanType = extra.PlanType
 	}
+	if base.HTTPStatus == 0 {
+		base.HTTPStatus = extra.HTTPStatus
+	}
+	if base.ForbiddenReason == "" {
+		base.ForbiddenReason = extra.ForbiddenReason
+	}
 	base.IsForbidden = base.IsForbidden || extra.IsForbidden
 
 	return base
+}
+
+func forbiddenQuotaInfo(resp *http.Response) *QuotaInfo {
+	if resp == nil {
+		return &QuotaInfo{IsForbidden: true}
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	reason := strings.TrimSpace(string(body))
+	if reason == "" {
+		reason = fmt.Sprintf("HTTP %d: quota forbidden", resp.StatusCode)
+	} else {
+		reason = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, reason)
+	}
+	return &QuotaInfo{
+		IsForbidden:     true,
+		HTTPStatus:      resp.StatusCode,
+		ForbiddenReason: reason,
+	}
 }
 
 func NormalizePlanType(value string) string {
@@ -293,6 +346,8 @@ func NormalizePlanType(value string) string {
 	normalized = strings.ReplaceAll(normalized, "_", "-")
 	normalized = strings.Join(strings.Fields(normalized), "-")
 	switch {
+	case strings.Contains(normalized, "k12"), strings.Contains(normalized, "k-12"):
+		return "k12"
 	case strings.Contains(normalized, "team"):
 		return "team"
 	case strings.Contains(normalized, "enterprise"):

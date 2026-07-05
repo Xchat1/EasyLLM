@@ -123,10 +123,13 @@ func ginResultsToTokenImportResults(filename, format string, payload gin.H) []to
 		return []tokenImportResult{{Filename: filename, Format: format, Success: false, Error: "无法解析导入结果"}}
 	}
 	var generic []struct {
-		Email   string `json:"email"`
-		Success bool   `json:"success"`
-		Skipped bool   `json:"skipped"`
-		Error   string `json:"error"`
+		Email          string `json:"email"`
+		AccountID      string `json:"account_id"`
+		OrganizationID string `json:"organization_id"`
+		Action         string `json:"action"`
+		Success        bool   `json:"success"`
+		Skipped        bool   `json:"skipped"`
+		Error          string `json:"error"`
 	}
 	if err := json.Unmarshal(b, &generic); err != nil {
 		return []tokenImportResult{{Filename: filename, Format: format, Success: false, Error: err.Error()}}
@@ -134,12 +137,15 @@ func ginResultsToTokenImportResults(filename, format string, payload gin.H) []to
 	out := make([]tokenImportResult, 0, len(generic))
 	for _, r := range generic {
 		out = append(out, tokenImportResult{
-			Filename: filename,
-			Format:   format,
-			Success:  r.Success,
-			Email:    r.Email,
-			Skipped:  r.Skipped,
-			Error:    r.Error,
+			Filename:       filename,
+			Format:         format,
+			Success:        r.Success,
+			Email:          r.Email,
+			AccountID:      r.AccountID,
+			OrganizationID: r.OrganizationID,
+			Action:         r.Action,
+			Skipped:        r.Skipped,
+			Error:          r.Error,
 		})
 	}
 	return out
@@ -172,7 +178,7 @@ func (h *OpenAIHandler) importAutoJSONFile(filename string, raw []byte, existing
 		results := make([]tokenImportResult, 0, len(entries))
 		for _, data := range entries {
 			entry := data
-			account, skipped, err := h.importSingleTokenFile(&entry, existingAccounts)
+			account, action, skipped, err := h.importSingleTokenFileWithAction(&entry, existingAccounts)
 			if err != nil {
 				email := entry.Email
 				if email == "" {
@@ -183,9 +189,7 @@ func (h *OpenAIHandler) importAutoJSONFile(filename string, raw []byte, existing
 				})
 				continue
 			}
-			results = append(results, tokenImportResult{
-				Filename: filename, Format: format, Success: true, Email: account.Email,
-			})
+			results = append(results, tokenImportSuccessResult(filename, format, account, action))
 		}
 		return results
 
@@ -197,7 +201,7 @@ func (h *OpenAIHandler) importAutoJSONFile(filename string, raw []byte, existing
 		results := make([]tokenImportResult, 0, len(entries))
 		for _, data := range entries {
 			entry := data
-			account, skipped, err := h.importSingleTokenFile(&entry, existingAccounts)
+			account, action, skipped, err := h.importSingleTokenFileWithAction(&entry, existingAccounts)
 			if err != nil {
 				results = append(results, tokenImportResult{
 					Filename: filename,
@@ -209,12 +213,7 @@ func (h *OpenAIHandler) importAutoJSONFile(filename string, raw []byte, existing
 				})
 				continue
 			}
-			results = append(results, tokenImportResult{
-				Filename: filename,
-				Format:   format,
-				Success:  true,
-				Email:    account.Email,
-			})
+			results = append(results, tokenImportSuccessResult(filename, format, account, action))
 		}
 		return results
 	default:
@@ -231,10 +230,13 @@ type easyLLMExportPayload struct {
 // applyEasyLLMExportPayload 导入 EasyLLM 备份中的账号与本地服务配置。
 func (h *OpenAIHandler) applyEasyLLMExportPayload(payload *easyLLMExportPayload, existingAccounts *[]models.OpenAIAccount) (gin.H, error) {
 	type result struct {
-		Email   string `json:"email"`
-		Success bool   `json:"success"`
-		Skipped bool   `json:"skipped,omitempty"`
-		Error   string `json:"error,omitempty"`
+		Email          string `json:"email"`
+		AccountID      string `json:"account_id,omitempty"`
+		OrganizationID string `json:"organization_id,omitempty"`
+		Action         string `json:"action,omitempty"`
+		Success        bool   `json:"success"`
+		Skipped        bool   `json:"skipped,omitempty"`
+		Error          string `json:"error,omitempty"`
 	}
 	var results []result
 	oauthIDMap := make(map[string]string)
@@ -290,8 +292,15 @@ func (h *OpenAIHandler) applyEasyLLMExportPayload(payload *easyLLMExportPayload,
 		if cid := exportedOAuthChatGPTAccountID(a); cid != "" && account.ChatGPTAccountID == nil {
 			account.ChatGPTAccountID = sPtr(cid)
 		}
+		if orgID := strings.TrimSpace(a.OrganizationID); orgID != "" && account.OrganizationID == nil {
+			account.OrganizationID = sPtr(orgID)
+		}
 		if plan := exportedOAuthPlan(a); plan != nil {
 			account.Plan = plan
+		}
+		action := "created"
+		if existingAccounts != nil && findMatchingOAuthAccountIndex(*existingAccounts, account) >= 0 {
+			action = "updated"
 		}
 		saved, _, err := h.upsertImportedOAuthAccount(account, existingAccounts)
 		if err != nil {
@@ -306,7 +315,13 @@ func (h *OpenAIHandler) applyEasyLLMExportPayload(payload *easyLLMExportPayload,
 				oauthIDMap[cid] = saved.ID
 			}
 		}
-		results = append(results, result{Email: a.Email, Success: true})
+		results = append(results, result{
+			Email:          saved.Email,
+			AccountID:      strings.TrimSpace(derefStr(saved.ChatGPTAccountID)),
+			OrganizationID: strings.TrimSpace(derefStr(saved.OrganizationID)),
+			Action:         action,
+			Success:        true,
+		})
 	}
 
 	for _, a := range payload.APIAccounts {
@@ -377,10 +392,16 @@ func (h *OpenAIHandler) applyEasyLLMExportPayload(payload *easyLLMExportPayload,
 		}
 	}
 
-	success, skipped, failed := 0, 0, 0
+	success, skipped, failed, created, updated := 0, 0, 0, 0, 0
 	for _, r := range results {
 		if r.Success {
 			success++
+			switch r.Action {
+			case "created":
+				created++
+			case "updated":
+				updated++
+			}
 		} else if r.Skipped {
 			skipped++
 		} else {
@@ -395,6 +416,8 @@ func (h *OpenAIHandler) applyEasyLLMExportPayload(payload *easyLLMExportPayload,
 		"success": success,
 		"skipped": skipped,
 		"failed":  failed,
+		"created": created,
+		"updated": updated,
 		"results": results,
 	}, nil
 }
@@ -486,14 +509,7 @@ func (h *OpenAIHandler) ImportByAutoFiles(c *gin.Context) {
 	}
 	wg.Wait()
 
-	successCount, skippedCount := 0, 0
-	for _, r := range results {
-		if r.Success {
-			successCount++
-		} else if r.Skipped {
-			skippedCount++
-		}
-	}
+	successCount, skippedCount, failedCount, createdCount, updatedCount := summarizeTokenImportResults(results)
 	if successCount > 0 {
 		refreshCodexProxyPool()
 	}
@@ -501,7 +517,9 @@ func (h *OpenAIHandler) ImportByAutoFiles(c *gin.Context) {
 		"total":   len(results),
 		"success": successCount,
 		"skipped": skippedCount,
-		"failed":  len(results) - successCount - skippedCount,
+		"failed":  failedCount,
+		"created": createdCount,
+		"updated": updatedCount,
 		"results": results,
 	})
 }

@@ -156,6 +156,37 @@
           <button class="btn btn-primary" @click="saveDatabase">保存 SQLite 路径</button>
         </div>
       </article>
+
+      <article class="card p-5 space-y-5">
+        <div>
+          <h2 class="text-lg font-semibold text-white">配额全局检测</h2>
+          <p class="mt-1 text-sm text-gray-500">批量查询 OAuth 账号剩余额度的超时和并发控制。</p>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <div>
+            <label class="label">全局检测超时（秒）</label>
+            <input v-model.number="quotaCheck.timeout_seconds" type="number" min="10" max="600" class="input" />
+          </div>
+          <div>
+            <label class="label">并发账号数</label>
+            <input v-model.number="quotaCheck.concurrency" type="number" min="1" max="50" class="input" />
+          </div>
+        </div>
+
+        <div v-if="quotaCheckResult" class="rounded-2xl border border-gray-800 bg-gray-950/60 px-4 py-3 text-sm text-gray-300">
+          {{ quotaCheckResult }}
+        </div>
+
+        <div class="flex justify-end gap-2">
+          <button class="btn btn-secondary" :disabled="quotaCheckSaving || quotaCheckRunning" @click="saveQuotaCheck">
+            {{ quotaCheckSaving ? '保存中...' : '保存检测设置' }}
+          </button>
+          <button class="btn btn-primary" :disabled="quotaCheckRunning" @click="runQuotaCheck">
+            {{ quotaCheckRunning ? '检测中...' : `${quotaCheck.timeout_seconds || 60}s 全局检测` }}
+          </button>
+        </div>
+      </article>
     </section>
 
     <section v-else class="card p-5 space-y-5">
@@ -212,8 +243,12 @@ const activeTab = ref('appearance')
 const switches = ref({ ip_blacklist_enabled: false, proxy_enabled: false })
 const proxy = ref({ enabled: false, host: '', port: 0, username: '', password: '' })
 const database = ref({ type: 'sqlite', sqlite_path: '' })
+const quotaCheck = ref({ timeout_seconds: 60, concurrency: 10 })
 const sysInfo = ref({})
 const passwordSet = ref(false)
+const quotaCheckSaving = ref(false)
+const quotaCheckRunning = ref(false)
+const quotaCheckResult = ref('')
 
 const pwForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
 const pwError = ref('')
@@ -228,16 +263,18 @@ onMounted(loadSettings)
 
 async function loadSettings() {
   try {
-    const [switchData, proxyData, databaseData, sysData, authData] = await Promise.all([
+    const [switchData, proxyData, databaseData, quotaCheckData, sysData, authData] = await Promise.all([
       settingsAPI.getSwitches(),
       settingsAPI.getProxy(),
       settingsAPI.getDatabase(),
+      settingsAPI.getQuotaCheck(),
       settingsAPI.systemInfo(),
       authAPI.check(),
     ])
     switches.value = switchData
     proxy.value = { ...proxy.value, ...proxyData }
     database.value = { ...database.value, ...databaseData }
+    quotaCheck.value = { ...quotaCheck.value, ...quotaCheckData }
     sysInfo.value = sysData
     passwordSet.value = !!authData.password_set
   } catch (error) {
@@ -282,6 +319,45 @@ async function saveDatabase() {
     notify?.('SQLite 路径已保存，重启后生效', 'success')
   } catch (error) {
     notify?.(error.message || '保存失败', 'error')
+  }
+}
+
+async function saveQuotaCheck(notifySuccess = true) {
+  quotaCheckSaving.value = true
+  try {
+    const data = await settingsAPI.updateQuotaCheck({
+      timeout_seconds: Number(quotaCheck.value.timeout_seconds) || 60,
+      concurrency: Number(quotaCheck.value.concurrency) || 10,
+    })
+    quotaCheck.value = { ...quotaCheck.value, ...data }
+    if (notifySuccess) notify?.('配额检测设置已保存', 'success')
+  } catch (error) {
+    notify?.(error.message || '保存失败', 'error')
+    throw error
+  } finally {
+    quotaCheckSaving.value = false
+  }
+}
+
+async function runQuotaCheck() {
+  quotaCheckRunning.value = true
+  quotaCheckResult.value = ''
+  try {
+    await saveQuotaCheck(false)
+    const startedAt = Date.now()
+    const data = await settingsAPI.runQuotaCheck()
+    const results = Array.isArray(data?.results) ? data.results : []
+    const ok = results.filter(r => r.success && !r.is_forbidden).length
+    const forbidden = results.filter(r => r.success && r.is_forbidden).length
+    const failed = results.filter(r => !r.success).length
+    const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1000))
+    quotaCheckResult.value = `完成 ${results.length} 个账号，用时 ${elapsed}s：${ok} 个可用，${forbidden} 个禁用/停用，${failed} 个失败`
+    notify?.('全局配额检测完成', failed > 0 && ok === 0 ? 'error' : 'success')
+  } catch (error) {
+    quotaCheckResult.value = error.message || '检测失败'
+    notify?.(quotaCheckResult.value, 'error')
+  } finally {
+    quotaCheckRunning.value = false
   }
 }
 

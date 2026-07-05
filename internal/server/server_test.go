@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"easyllm/internal/models"
+	"easyllm/internal/proxy"
 	"easyllm/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -115,6 +116,68 @@ func TestBuildAPIAccountUpstreamURL(t *testing.T) {
 				t.Fatalf("buildAPIAccountUpstreamURL() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestShouldRouteV1ResponsesToCodexProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupProxyAccessTestDB(t)
+
+	if err := storage.SaveSetting("codex_local_access_enabled", "true"); err != nil {
+		t.Fatalf("save codex_local_access_enabled: %v", err)
+	}
+	if err := storage.SaveSetting("v1_proxy_mode", "codex"); err != nil {
+		t.Fatalf("save v1_proxy_mode: %v", err)
+	}
+	if err := storage.SaveSetting("proxy_api_key", "easyllm_codex_test"); err != nil {
+		t.Fatalf("save proxy_api_key: %v", err)
+	}
+
+	app := &App{codexProxy: &proxy.CodexProxy{}}
+	app.codexProxy.SetEnabled(true)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.Header.Set("Authorization", "Bearer easyllm_codex_test")
+	req.RemoteAddr = "127.0.0.1:12345"
+	ctx.Request = req
+	if !app.shouldRouteV1ResponsesToCodexProxy(ctx) {
+		t.Fatalf("expected matching proxy_api_key to route to codex proxy")
+	}
+
+	recorder = httptest.NewRecorder()
+	ctx, _ = gin.CreateTestContext(recorder)
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	ctx.Request = req
+	if app.shouldRouteV1ResponsesToCodexProxy(ctx) {
+		t.Fatalf("expected unauthenticated loopback request not to route to codex proxy when proxy_api_key is set")
+	}
+
+	if err := storage.SaveSetting("proxy_api_key", ""); err != nil {
+		t.Fatalf("clear proxy_api_key: %v", err)
+	}
+	recorder = httptest.NewRecorder()
+	ctx, _ = gin.CreateTestContext(recorder)
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	ctx.Request = req
+	if !app.shouldRouteV1ResponsesToCodexProxy(ctx) {
+		t.Fatalf("expected loopback request to route to codex proxy when proxy_api_key is unset")
+	}
+
+	if err := storage.SaveSetting("v1_proxy_mode", ""); err != nil {
+		t.Fatalf("clear v1_proxy_mode: %v", err)
+	}
+	recorder = httptest.NewRecorder()
+	ctx, _ = gin.CreateTestContext(recorder)
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.Header.Set("Authorization", "Bearer easyllm_codex_test")
+	req.RemoteAddr = "127.0.0.1:12345"
+	ctx.Request = req
+	if app.shouldRouteV1ResponsesToCodexProxy(ctx) {
+		t.Fatalf("expected relay mode when v1_proxy_mode is not codex")
 	}
 }
 

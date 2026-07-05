@@ -1,8 +1,8 @@
 package proxy
 
 import (
-	"encoding/json"
 	"easyllm/internal/storage"
+	"encoding/json"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -124,6 +124,17 @@ func (s *RelayUsageStore) RecordCall(record RelayCallRecord) {
 	}
 	s.mu.Unlock()
 
+	s.persistCallHistoryAsync()
+}
+
+// ClearHistory resets only the recent calls history.
+func (s *RelayUsageStore) ClearHistory() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.recentCalls = nil
+	s.mu.Unlock()
 	s.persistCallHistoryAsync()
 }
 
@@ -308,6 +319,8 @@ func resolveRelayProvider(upstreamURL string) string {
 		return "OpenAI"
 	case strings.Contains(u, "openrouter.ai"):
 		return "OpenRouter"
+	case strings.Contains(u, "mistral.ai"):
+		return "Mistral"
 	default:
 		return "自定义上游"
 	}

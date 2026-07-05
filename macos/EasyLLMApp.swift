@@ -13,7 +13,7 @@ final class WindowDragRegionView: NSView {
     }
 }
 
-final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     private var window: NSWindow?
     private var webView: WKWebView?
     private var serverProcess: Process?
@@ -84,6 +84,18 @@ final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDel
         }
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "easyllmSaveFile",
+              let payload = message.body as? [String: Any],
+              let requestID = payload["request_id"] as? String,
+              let filename = payload["filename"] as? String,
+              let content = payload["content"] as? String
+        else {
+            return
+        }
+        saveFileFromWeb(requestID: requestID, filename: filename, content: content)
+    }
+
     private func clearWebViewCache() {
         let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
         WKWebsiteDataStore.default().removeData(
@@ -105,12 +117,26 @@ final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDel
         )
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
+
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        editMenu.addItem(NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z"))
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(NSMenuItem(title: "Cut", action: Selector(("cut:")), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: Selector(("copy:")), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: Selector(("paste:")), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: Selector(("selectAll:")), keyEquivalent: "a"))
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
         NSApp.mainMenu = mainMenu
     }
 
     private func createWindow() {
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        configuration.userContentController.add(self, name: "easyllmSaveFile")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
@@ -159,6 +185,57 @@ final class EasyLLMAppDelegate: NSObject, NSApplicationDelegate, WKNavigationDel
         window.contentView = contentView
         window.makeKeyAndOrderFront(nil)
         self.window = window
+    }
+
+    private func saveFileFromWeb(requestID: String, filename: String, content: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = filename
+        panel.canCreateDirectories = true
+        panel.title = "导出 EasyLLM 账号"
+        panel.prompt = "保存"
+
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self else {
+                return
+            }
+            guard response == .OK, let url = panel.url else {
+                self.emitSaveFileResult(requestID: requestID, success: false, error: "cancelled")
+                return
+            }
+            do {
+                try content.write(to: url, atomically: true, encoding: .utf8)
+                self.emitSaveFileResult(requestID: requestID, success: true, path: url.path)
+            } catch {
+                self.emitSaveFileResult(requestID: requestID, success: false, error: error.localizedDescription)
+            }
+        }
+
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            panel.begin(completionHandler: finish)
+        }
+    }
+
+    private func emitSaveFileResult(requestID: String, success: Bool, path: String? = nil, error: String? = nil) {
+        var payload: [String: Any] = [
+            "request_id": requestID,
+            "success": success,
+        ]
+        if let path {
+            payload["path"] = path
+        }
+        if let error {
+            payload["error"] = error
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return
+        }
+        webView?.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('easyllm-save-file-result', { detail: \(json) }))"
+        )
     }
 
     private func startServer() {

@@ -13,11 +13,13 @@ EasyLLM 是一个轻量级 OpenAI / Codex 账号管理与本地编码对接工�
 - 一键切换 Codex 当前账号，自动写入 `~/.codex/auth.json` 与本机代理配置。
 - 批量导入 Token、CPA、refresh token 列表和 EasyLLM 备份文件，适合多账号迁移与恢复。
 - 内置 OpenAI 兼容本地代理，提供 `/v1/responses`、`/v1/chat/completions`、`/v1/models` 等接口。
-- 内置 **Relay 模式**：Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容上游（MiMo、DeepSeek、Kimi、Qwen 等），支持多渠道 round-robin 轮询、模型映射和协议转换。
-- 支持 `round_robin`、`random`、`least_used` 调度策略，并可按账号状态自动跳过不可用账号。
-- 支持配额刷新、Token 刷新、账号可用性检查和 Codex 本地 API 服务注入。
+- 内置 **Relay 模式**：Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容上游（DeepSeek、Mistral、OpenRouter、Kimi、Qwen、MiMo 等），支持多渠道 round-robin 轮询、模型映射和协议转换。
+- OAuth / Codex 本地 API 代理池支持 `auto`、`round_robin`、`random`、`least_used`、`quota_high_first` 等调度策略，并可按账号状态和剩余额度自动跳过或优先选择账号。
+- 支持配额刷新、全局配额检测、Token 刷新、账号可用性检查和 Codex 本地 API 服务注入。
+- 支持 Codex 上下文窗口预设（默认、516K、1M、自定义），注入时自动写入或清理 `config.toml` 中的上下文字段。
+- Dashboard 展示 Codex 本地代理和 Relay 的最近调用、状态码、模型、耗时和 Token 用量；Relay 页面提供实时日志、会话历史统计和一键清理。
 - 支持本机 API Key 鉴权、IP 黑名单、HTTP 代理转发和本地 SQLite 持久化。
-- 默认不保留代理请求日志，减少提示词、响应内容和账号敏感信息落盘。
+- 默认不保留代理请求内容；Relay 日志和调用统计只记录状态、模型、Token 用量等运行元数据，减少提示词、响应内容和账号敏感信息落盘。
 - 支持脚本启动、手动构建、Windows zip 和 macOS App 打包分发。
 
 ## 项目优势
@@ -32,11 +34,19 @@ EasyLLM 是一个轻量级 OpenAI / Codex 账号管理与本地编码对接工�
 
 ## 文档入口
 
-- [使用指南](./docs/USAGE.md)：账号导入、Codex CLI 接入（四种模式）、代理池、Relay、API 示例。
+- [使用指南](./docs/USAGE.md)：账号导入、Codex CLI 接入、代理池、Relay、API 示例。
 - [Relay 集成说明](./docs/CODEX_RELAY_INTEGRATION.md)：多上游配置、协议转换、模型映射、调用示例。
 - [开发说明](./docs/DEVELOPMENT.md)：本地环境、常用命令、测试与构建。
 - [项目结构](./docs/PROJECT_STRUCTURE.md)：源码目录、路由结构、运行产物和维护约定。
 - [macOS App](./macos/README.md)：原生 App 打包与运行数据位置。
+
+## 主要使用入口
+
+- 「Codex 管理」：导入 OAuth / API Key / CPA / 备份文件，刷新 Token 与配额，切换或注入 Codex 配置。
+- 「服务配置」：启动 Codex 本地 API 服务，选择代理池账号、路由策略、端口和本机 API Key。
+- 「Relay 配置」：维护第三方上游渠道、模型映射、工具拒绝列表、会话历史限制和 Codex 上下文参数。
+- 「Dashboard」：查看本地代理池、Relay 请求统计、最近调用记录和运行状态。
+- 「配置」：维护登录、IP 黑名单、出站代理、数据库位置和全局配额检测参数。
 
 ## 快速开始
 
@@ -98,6 +108,7 @@ open build/macos/EasyLLM.app
 
 ```bash
 ./scripts/build-macos-app.sh --package --version 2.0.0
+./scripts/check-release-archives.sh build/release/EasyLLM-2.0.0-macos-*.zip
 ```
 
 Windows Release zip 由 Windows / PowerShell 环境执行：
@@ -105,6 +116,8 @@ Windows Release zip 由 Windows / PowerShell 环境执行：
 ```powershell
 .\scripts\package-windows.ps1 -Version 2.0.0 -Arch amd64
 ```
+
+发布包生成后建议执行仓库内置隐私扫描脚本，确认 zip 中没有 `.env`、数据库、Token JSON、日志或本地助手配置等私有文件。
 
 ## 基础配置
 
@@ -120,15 +133,23 @@ Windows Release zip 由 Windows / PowerShell 环境执行：
 | `DEFAULT_PASSWORD` | 空 | 可选；留空时首次访问 Web UI 创建登录密码；如设置需至少 8 位 |
 | `PROXY_ENABLED` | `false` | 出站 HTTP 代理开关 |
 | `PROXY_HOST` | 空 | 出站代理主机 |
-| `PROXY_PORT` | 空 | 出站代理端口 |
+| `PROXY_PORT` | `7890` | 出站代理端口 |
+| `PROXY_USERNAME` | 空 | 出站代理用户名 |
+| `PROXY_PASSWORD` | 空 | 出站代理密码 |
 
 ## 隐私与安全
 
-- 不要提交 `.env`、`auth/`、Token/CPA JSON、EasyLLM 导出备份、私钥、API Key 或数据库文件。
+- 不要提交 `.env`、`data/`、`auth/`、`exports/`、`backups/`、Token/CPA JSON、EasyLLM 导出备份、私钥、API Key、数据库文件、日志、`build/`、`web/dist/` 或本地助手目录。
 - 建议启用仓库内置 pre-push 钩子：
 
 ```bash
 git config core.hooksPath .githooks
+```
+
+- 发布包上传前执行：
+
+```bash
+./scripts/check-release-archives.sh build/release/*.zip
 ```
 
 - EasyLLM 面向本机使用，脚本模式默认监听 `127.0.0.1:8022`；不要把包含账号 Token 的本地服务对公网开放。

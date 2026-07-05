@@ -23,7 +23,7 @@ func TestRelayLogStoreSubscribe(t *testing.T) {
 	store := NewRelayLogStore()
 	ch := store.Subscribe()
 
-	store.Log("info", "stream start", "mimo", "resp_2")
+	store.Log("info", "stream start", "deepseek", "resp_2")
 
 	select {
 	case entry := <-ch:

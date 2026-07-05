@@ -79,10 +79,10 @@
                 <option value="deepseek">DeepSeek</option>
                 <option value="kimi">Kimi (Moonshot)</option>
                 <option value="qwen">Qwen (DashScope)</option>
+                <option value="openrouter">OpenRouter</option>
                 <option value="mistral">Mistral</option>
                 <option value="groq">Groq</option>
                 <option value="xai">xAI (Grok)</option>
-                <option value="openrouter">OpenRouter</option>
                 <option value="codestral">Codestral</option>
                 <option value="xiaomi">Xiaomi (MiMo)</option>
               </select>
@@ -172,6 +172,56 @@
           />
           <p class="mt-1 text-xs text-gray-500">逗号分隔的工具名称列表</p>
         </div>
+      </section>
+
+      <!-- ── Codex 上下文 ─────────────────────────────────────── -->
+      <section class="card p-5 space-y-5">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-lg font-semibold text-white">上下文与压缩阈值</h2>
+            <p class="mt-1 text-sm text-gray-500">写入本机 Codex config.toml 的上下文参数。</p>
+          </div>
+          <button class="btn btn-sm btn-secondary" @click="loadConfig" :disabled="loading || saving">刷新</button>
+        </div>
+
+        <div class="relay-segment">
+          <button
+            v-for="preset in codexContextPresets"
+            :key="preset.id"
+            :class="{ 'is-active': globalConfig.codex_context_mode === preset.id }"
+            @click="selectCodexContextMode(preset.id)"
+          >
+            {{ preset.label }}
+          </button>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <div>
+            <label class="label" for="relay-context-window">上下文窗口</label>
+            <input
+              id="relay-context-window"
+              v-model.number="globalConfig.model_context_window"
+              :disabled="globalConfig.codex_context_mode !== 'custom'"
+              type="number"
+              min="1"
+              class="input"
+              placeholder="model_context_window"
+            />
+          </div>
+          <div>
+            <label class="label" for="relay-auto-compact-limit">自动压缩阈值</label>
+            <input
+              id="relay-auto-compact-limit"
+              v-model.number="globalConfig.model_auto_compact_token_limit"
+              :disabled="globalConfig.codex_context_mode !== 'custom'"
+              type="number"
+              min="1"
+              class="input"
+              placeholder="model_auto_compact_token_limit"
+            />
+          </div>
+        </div>
+        <p class="text-xs" :class="codexContextFormValid ? 'text-gray-500' : 'text-red-400'">{{ codexContextStatusText }}</p>
       </section>
 
       <!-- ── 会话管理 ─────────────────────────────────────────── -->
@@ -323,11 +373,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, inject } from 'vue'
 import { relayAPI } from '@/api'
 import { localRelayServiceURL } from '@/lib/runtime'
 
 // ── State ──────────────────────────────────────────────────────
+const confirmOperation = inject('confirmOperation')
 const loading = ref(false)
 const saving = ref(false)
 const saveMessage = ref('')
@@ -357,7 +408,17 @@ const globalConfig = ref({
   max_sessions: 256,
   max_session_bytes: 536870912,
   session_ttl_hours: 168,
+  codex_context_mode: 'default',
+  model_context_window: null,
+  model_auto_compact_token_limit: null,
 })
+
+const codexContextPresets = [
+  { id: 'default', label: '默认', context: 0, compact: 0 },
+  { id: 'preset_516k', label: '预设516K', context: 516000, compact: 460000 },
+  { id: 'preset_1m', label: '预设1M', context: 1000000, compact: 900000 },
+  { id: 'custom', label: '自定义', context: 0, compact: 0 },
+]
 
 // ── Upstream edit form ──────────────────────────────────────────
 const editForm = reactive({
@@ -426,7 +487,16 @@ function saveEditForm() {
   closeEditForm()
 }
 
-function removeUpstream(idx) {
+async function removeUpstream(idx) {
+  const upstream = upstreams.value[idx]
+  const confirmed = await requestOperationConfirm({
+    title: '删除上游渠道',
+    message: `确认删除「${upstream?.name || '未命名渠道'}」吗？`,
+    details: '删除后需要保存配置才会写入服务端。',
+    confirmText: '删除渠道',
+    tone: 'danger',
+  })
+  if (!confirmed) return
   upstreams.value.splice(idx, 1)
 }
 
@@ -436,10 +506,10 @@ const providerConfigs = {
   deepseek:   { base_url: 'https://api.deepseek.com/v1',                        auth_header: '', auth_value_prefix: '' },
   kimi:       { base_url: 'https://api.moonshot.cn/v1',                         auth_header: '', auth_value_prefix: '' },
   qwen:       { base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',  auth_header: '', auth_value_prefix: '' },
+  openrouter: { base_url: 'https://openrouter.ai/api/v1',                       auth_header: '', auth_value_prefix: '' },
   mistral:    { base_url: 'https://api.mistral.ai/v1',                          auth_header: '', auth_value_prefix: '' },
   groq:       { base_url: 'https://api.groq.com/openai/v1',                     auth_header: '', auth_value_prefix: '' },
   xai:        { base_url: 'https://api.x.ai/v1',                                auth_header: '', auth_value_prefix: '' },
-  openrouter: { base_url: 'https://openrouter.ai/api/v1',                       auth_header: '', auth_value_prefix: '' },
   codestral:  { base_url: 'https://api.mistral.ai/v1',                          auth_header: '', auth_value_prefix: '' },
   xiaomi:     { base_url: 'https://token-plan-cn.xiaomimimo.com/v1',            auth_header: 'api-key', auth_value_prefix: '' },
 }
@@ -451,6 +521,38 @@ function applyProvider() {
   editForm.data.upstream_url = cfg.base_url
   editForm.data.auth_header = cfg.auth_header || ''
   editForm.data.auth_value_prefix = cfg.auth_value_prefix || ''
+}
+
+const codexContextFormValid = computed(() => {
+  if (globalConfig.value.codex_context_mode !== 'custom') return true
+  const context = Number(globalConfig.value.model_context_window || 0)
+  const compact = Number(globalConfig.value.model_auto_compact_token_limit || 0)
+  return Number.isFinite(context) && Number.isFinite(compact) && context > 0 && compact > 0 && compact <= context
+})
+
+const codexContextStatusText = computed(() => {
+  if (!codexContextFormValid.value) return '自定义阈值需大于 0，且不能超过上下文窗口'
+  if (globalConfig.value.codex_context_mode === 'default') return '默认模式会移除两个字段'
+  return `写入 ${Number(globalConfig.value.model_context_window || 0)} / ${Number(globalConfig.value.model_auto_compact_token_limit || 0)}`
+})
+
+function selectCodexContextMode(mode) {
+  const preset = codexContextPresets.find(item => item.id === mode) || codexContextPresets[0]
+  globalConfig.value.codex_context_mode = preset.id
+  if (preset.id !== 'custom') {
+    globalConfig.value.model_context_window = preset.context || null
+    globalConfig.value.model_auto_compact_token_limit = preset.compact || null
+  }
+}
+
+function normalizeCodexContextFromResponse(data = {}) {
+  const mode = data.codex_context_mode || 'default'
+  const preset = codexContextPresets.find(item => item.id === mode) || codexContextPresets[0]
+  return {
+    codex_context_mode: preset.id,
+    model_context_window: Number(data.model_context_window || preset.context || 0) || null,
+    model_auto_compact_token_limit: Number(data.model_auto_compact_token_limit || preset.compact || 0) || null,
+  }
 }
 
 // ── Load / Save ─────────────────────────────────────────────────
@@ -486,6 +588,7 @@ async function loadConfig() {
       max_sessions: data.max_sessions || 256,
       max_session_bytes: data.max_session_bytes || 536870912,
       session_ttl_hours: data.session_ttl_hours || 168,
+      ...normalizeCodexContextFromResponse(data),
     }
 
     relayServiceURL.value = data.relay_url || localRelayServiceURL()
@@ -501,6 +604,11 @@ async function loadConfig() {
 }
 
 async function saveConfig() {
+  if (!codexContextFormValid.value) {
+    saveMessage.value = '上下文与压缩阈值不合法'
+    saveMessageType.value = 'error'
+    return false
+  }
   saving.value = true
   saveMessage.value = ''
   try {
@@ -509,12 +617,14 @@ async function saveConfig() {
       upstream_strategy: upstreamStrategy.value,
       ...globalConfig.value,
     })
+    await loadConfig()
     saveMessage.value = '配置已保存'
     saveMessageType.value = 'success'
-    await loadStats()
+    return true
   } catch (err) {
     saveMessage.value = '保存失败: ' + (err.message || '未知错误')
     saveMessageType.value = 'error'
+    return false
   } finally {
     saving.value = false
   }
@@ -530,7 +640,14 @@ async function loadStats() {
 }
 
 async function clearSessions() {
-  if (!confirm('确定要清空所有会话历史吗？')) return
+  const confirmed = await requestOperationConfirm({
+    title: '清空会话历史',
+    message: '确认清空所有 Relay 会话历史吗？',
+    details: '此操作会移除已记录的会话、reasoning 和 turn 统计。',
+    confirmText: '清空会话',
+    tone: 'danger',
+  })
+  if (!confirmed) return
   try {
     await relayAPI.clearSessions()
     saveMessage.value = '会话历史已清空'
@@ -551,7 +668,10 @@ async function injectCodexConfig() {
     return
   }
   // Save first
-  await saveConfig()
+  const saved = await saveConfig()
+  if (!saved) {
+    return
+  }
 
   injecting.value = true
   try {
@@ -673,7 +793,14 @@ async function loadLogs() {
 }
 
 async function clearLogs() {
-  if (!confirm('确定要清空 Relay 日志吗？')) return
+  const confirmed = await requestOperationConfirm({
+    title: '清空 Relay 日志',
+    message: '确认清空当前 Relay 日志吗？',
+    details: '清空后日志面板会从空状态继续接收新的实时日志。',
+    confirmText: '清空日志',
+    tone: 'danger',
+  })
+  if (!confirmed) return
   try {
     await relayAPI.clearLogs()
     logs.value = []
@@ -681,6 +808,11 @@ async function clearLogs() {
     saveMessage.value = '清空日志失败: ' + (err.message || '未知错误')
     saveMessageType.value = 'error'
   }
+}
+
+async function requestOperationConfirm(options) {
+  if (typeof confirmOperation !== 'function') return false
+  return await confirmOperation(options)
 }
 
 onMounted(() => {
@@ -736,6 +868,29 @@ onUnmounted(() => {
 }
 .peer:checked ~ .upstream-toggle::after {
   transform: translateX(0.875rem);
+}
+
+.relay-segment {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: .2rem;
+  border: 1px solid var(--app-border);
+  border-radius: .75rem;
+  background: var(--app-control-bg);
+  padding: .25rem;
+}
+
+.relay-segment button {
+  border-radius: .6rem;
+  padding: .4rem .65rem;
+  color: var(--app-text-secondary);
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.relay-segment button.is-active {
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, .28);
 }
 
 /* ── Add/edit form ───────────────────────────────────── */

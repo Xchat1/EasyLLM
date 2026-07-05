@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"easyllm/internal/httputil"
 	"easyllm/internal/models"
 	openaiplatform "easyllm/internal/openai"
 	"easyllm/internal/storage"
@@ -21,6 +22,7 @@ type poolEntry struct {
 	chatgptAccountID string // chatgpt-account-id header value (OAuth accounts)
 	source           string // "codex" | "openai"
 	requests         *int64
+	inFlight         *int64
 	planRank         int
 	remainingQuota   *int
 	expiresAt        *time.Time
@@ -37,6 +39,7 @@ type CodexProxy struct {
 	openaiDB     *storage.OpenAIStorage
 	enabled      bool
 	httpClient   *http.Client
+	history      *CodexCallHistoryStore
 }
 
 var globalProxy *CodexProxy
@@ -57,28 +60,24 @@ func InitProxy(codexDB *storage.CodexStorage, openaiDB *storage.OpenAIStorage, s
 		strategy:   strategy,
 		enabled:    true,
 		tokenIndex: make(map[string]*poolEntry),
-		httpClient: &http.Client{
-			Timeout: 180 * time.Second,
-			Transport: &http.Transport{
-				DisableCompression:  true,
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 20,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		},
+		httpClient: httputil.NewChatGPTStreamingClient(180 * time.Second),
+		history:    NewCodexCallHistoryStore(),
 	}
 	globalProxy.Refresh()
 	return globalProxy
 }
 
 // Refresh reloads the pool from both CodexAccount table and proxy-enabled OpenAI OAuth accounts.
-// Existing in-memory request counters are preserved for entries that remain in the pool.
+// Existing in-memory counters are preserved for entries that remain in the pool.
 func (p *CodexProxy) Refresh() {
 	// Snapshot existing counters before taking the write lock
 	p.mu.RLock()
-	oldCounters := make(map[string]*int64, len(p.pool))
+	oldCounters := make(map[string]poolEntryCounters, len(p.pool))
 	for i := range p.pool {
-		oldCounters[p.pool[i].id] = p.pool[i].requests
+		oldCounters[p.pool[i].id] = poolEntryCounters{
+			requests: p.pool[i].requests,
+			inFlight: p.pool[i].inFlight,
+		}
 	}
 	p.mu.RUnlock()
 
@@ -94,15 +93,23 @@ func (p *CodexProxy) Refresh() {
 					continue
 				}
 				cnt := a.RequestCount
-				if old, ok := oldCounters[a.ID]; ok && old != nil {
-					cnt = atomic.LoadInt64(old)
+				requests := newInt64Counter(cnt)
+				inFlight := newInt64Counter(0)
+				if old, ok := oldCounters[a.ID]; ok {
+					if old.requests != nil {
+						requests = old.requests
+					}
+					if old.inFlight != nil {
+						inFlight = old.inFlight
+					}
 				}
 				entries = append(entries, poolEntry{
 					id:          a.ID,
 					email:       a.Email,
 					accessToken: a.AccessToken,
 					source:      "codex",
-					requests:    &cnt,
+					requests:    requests,
+					inFlight:    inFlight,
 				})
 			}
 		}
@@ -120,8 +127,15 @@ func (p *CodexProxy) Refresh() {
 					continue
 				}
 				cnt := int64(0)
-				if old, ok := oldCounters[a.ID]; ok && old != nil {
-					cnt = atomic.LoadInt64(old)
+				requests := newInt64Counter(cnt)
+				inFlight := newInt64Counter(0)
+				if old, ok := oldCounters[a.ID]; ok {
+					if old.requests != nil {
+						requests = old.requests
+					}
+					if old.inFlight != nil {
+						inFlight = old.inFlight
+					}
 				}
 				accountID := ""
 				if a.ChatGPTAccountID != nil {
@@ -133,7 +147,8 @@ func (p *CodexProxy) Refresh() {
 					accessToken:      *a.AccessToken,
 					chatgptAccountID: accountID,
 					source:           "openai",
-					requests:         &cnt,
+					requests:         requests,
+					inFlight:         inFlight,
 					planRank:         planRank(a.Plan),
 					remainingQuota:   remainingQuota(&a),
 					expiresAt:        a.ExpiresAt,
@@ -222,6 +237,7 @@ func (p *CodexProxy) matchIncomingToken(r *http.Request) *poolEntry {
 				chatgptAccountID: accountID,
 				source:           "openai",
 				requests:         &cnt,
+				inFlight:         newInt64Counter(0),
 			}
 		}
 	}
@@ -229,46 +245,81 @@ func (p *CodexProxy) matchIncomingToken(r *http.Request) *poolEntry {
 	return nil
 }
 
+func poolEntryHasQuotaHeadroom(entry *poolEntry) bool {
+	if entry == nil {
+		return false
+	}
+	if entry.remainingQuota == nil {
+		return true
+	}
+	return *entry.remainingQuota > 0
+}
+
 func (p *CodexProxy) pickEntry() *poolEntry {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	return p.pickEntryLocked()
+}
 
+func (p *CodexProxy) pickEntryReserved() *poolEntry {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	entry := p.pickEntryLocked()
+	reservePoolEntry(entry)
+	return entry
+}
+
+func (p *CodexProxy) pickEntryLocked() *poolEntry {
 	if len(p.pool) == 0 {
 		return nil
 	}
+	candidates := preferQuotaHeadroomIndexes(p.pool)
 
 	switch p.strategy {
 	case "random":
-		idx := rand.Intn(len(p.pool))
+		idx := candidates[rand.Intn(len(candidates))]
 		return &p.pool[idx]
 	case "least_used":
-		least := &p.pool[0]
-		leastVal := int64(0)
-		if least.requests != nil {
-			leastVal = atomic.LoadInt64(least.requests)
-		}
-		for i := 1; i < len(p.pool); i++ {
-			if p.pool[i].requests != nil {
-				v := atomic.LoadInt64(p.pool[i].requests)
-				if v < leastVal {
-					least = &p.pool[i]
-					leastVal = v
-				}
+		leastIdx := candidates[0]
+		least := &p.pool[leastIdx]
+		for i := 1; i < len(candidates); i++ {
+			idx := candidates[i]
+			if comparePoolEntryLoad(&p.pool[idx], least) < 0 {
+				leastIdx = idx
+				least = &p.pool[leastIdx]
 			}
 		}
 		return least
 	case "auto", "quota_high_first", "quota_low_first", "plan_high_first", "plan_low_first", "expiry_soon_first":
-		bestIndex := 0
-		for i := 1; i < len(p.pool); i++ {
-			if comparePoolEntries(&p.pool[i], &p.pool[bestIndex], p.strategy) < 0 {
-				bestIndex = i
+		bestIndex := candidates[0]
+		for i := 1; i < len(candidates); i++ {
+			idx := candidates[i]
+			if comparePoolEntries(&p.pool[idx], &p.pool[bestIndex], p.strategy) < 0 {
+				bestIndex = idx
 			}
 		}
 		return &p.pool[bestIndex]
 	default: // round_robin
-		idx := int(atomicAddInt64(&p.currentIndex, 1)-1) % len(p.pool)
-		return &p.pool[idx]
+		idx := int(atomicAddInt64(&p.currentIndex, 1)-1) % len(candidates)
+		return &p.pool[candidates[idx]]
 	}
+}
+
+func preferQuotaHeadroomIndexes(pool []poolEntry) []int {
+	filtered := make([]int, 0, len(pool))
+	for i := range pool {
+		if poolEntryHasQuotaHeadroom(&pool[i]) {
+			filtered = append(filtered, i)
+		}
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	all := make([]int, len(pool))
+	for i := range pool {
+		all[i] = i
+	}
+	return all
 }
 
 // pickEntryExcluding returns a random pool entry not in the tried set.
@@ -276,6 +327,18 @@ func (p *CodexProxy) pickEntry() *poolEntry {
 func (p *CodexProxy) pickEntryExcluding(tried map[string]bool) *poolEntry {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	return p.pickEntryExcludingLocked(tried)
+}
+
+func (p *CodexProxy) pickEntryExcludingReserved(tried map[string]bool) *poolEntry {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	entry := p.pickEntryExcludingLocked(tried)
+	reservePoolEntry(entry)
+	return entry
+}
+
+func (p *CodexProxy) pickEntryExcludingLocked(tried map[string]bool) *poolEntry {
 	if len(p.pool) == 0 {
 		return nil
 	}
@@ -289,13 +352,89 @@ func (p *CodexProxy) pickEntryExcluding(tried map[string]bool) *poolEntry {
 		if tried != nil && tried[tok] {
 			continue
 		}
+		if !poolEntryHasQuotaHeadroom(&p.pool[i]) {
+			continue
+		}
 		cands = append(cands, i)
+	}
+	if len(cands) == 0 {
+		for i := range p.pool {
+			tok := p.pool[i].accessToken
+			if tok == "" {
+				continue
+			}
+			if tried != nil && tried[tok] {
+				continue
+			}
+			cands = append(cands, i)
+		}
 	}
 	if len(cands) == 0 {
 		return nil
 	}
-	idx := cands[rand.Intn(len(cands))]
-	return &p.pool[idx]
+	best := cands[0]
+	for _, idx := range cands[1:] {
+		if comparePoolEntryLoad(&p.pool[idx], &p.pool[best]) < 0 {
+			best = idx
+		}
+	}
+	return &p.pool[best]
+}
+
+// poolMaxRetryAttempts caps per-request account rotations based on pool size.
+func (p *CodexProxy) poolMaxRetryAttempts() int {
+	if p == nil {
+		return 1
+	}
+	p.mu.RLock()
+	n := len(p.pool)
+	p.mu.RUnlock()
+	if n <= 1 {
+		return 1
+	}
+	if n > 50 {
+		return 50
+	}
+	return n
+}
+
+// markPoolEntryUsageLimited records that an account hit its Codex usage cap so
+// routing strategies can deprioritize it on subsequent picks.
+func (p *CodexProxy) markPoolEntryUsageLimited(entry *poolEntry, body []byte) {
+	if p == nil || entry == nil || entry.source != "openai" || p.openaiDB == nil {
+		return
+	}
+	full := 100.0
+	zero := 0
+	p.mu.Lock()
+	entry.remainingQuota = &zero
+	for i := range p.pool {
+		if p.pool[i].id == entry.id {
+			p.pool[i].remainingQuota = &zero
+			break
+		}
+	}
+	p.mu.Unlock()
+
+	acc, err := p.openaiDB.Get(entry.id)
+	if err != nil || acc == nil {
+		return
+	}
+	acc.Quota5hUsedPercent = &full
+	acc.Quota7dUsedPercent = &full
+	now := time.Now()
+	acc.QuotaUpdatedAt = &now
+	status := http.StatusTooManyRequests
+	acc.QuotaHTTPStatus = &status
+	msg := "usage_limit_reached"
+	if len(body) > 0 {
+		if len(body) > 512 {
+			body = body[:512]
+		}
+		msg = string(body)
+	}
+	acc.QuotaError = &msg
+	_ = p.openaiDB.Save(acc)
 }
 
 // refreshPoolEntryToken 尝试用 refresh_token 刷新池中 OAuth 账号，成功则更新内存中的 access_token。
@@ -373,14 +512,24 @@ func (p *CodexProxy) IsKnownToken(token string) bool {
 	return false
 }
 
-func (p *CodexProxy) IsEnabled() bool { return p.enabled }
+func (p *CodexProxy) IsEnabled() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.enabled
+}
+
 func (p *CodexProxy) SetEnabled(v bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.enabled = v
 }
 
-func (p *CodexProxy) GetStrategy() string { return p.strategy }
+func (p *CodexProxy) GetStrategy() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.strategy
+}
+
 func (p *CodexProxy) SetStrategy(s string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -525,14 +674,64 @@ func comparePoolEntries(left, right *poolEntry, strategy string) int {
 			return diff
 		}
 	default: // auto
-		if diff := compareIntDesc(left.planRank, right.planRank); diff != 0 {
+		if diff := comparePoolEntryLoad(left, right); diff != 0 {
 			return diff
 		}
 		if diff := compareOptionalIntDesc(left.remainingQuota, right.remainingQuota); diff != 0 {
 			return diff
 		}
+		if diff := compareIntDesc(left.planRank, right.planRank); diff != 0 {
+			return diff
+		}
+	}
+	if diff := comparePoolEntryLoad(left, right); diff != 0 {
+		return diff
 	}
 	return strings.Compare(left.id, right.id)
+}
+
+type poolEntryCounters struct {
+	requests *int64
+	inFlight *int64
+}
+
+func newInt64Counter(value int64) *int64 {
+	ptr := new(int64)
+	atomic.StoreInt64(ptr, value)
+	return ptr
+}
+
+func reservePoolEntry(entry *poolEntry) {
+	if entry != nil && entry.inFlight != nil {
+		atomic.AddInt64(entry.inFlight, 1)
+	}
+}
+
+func releasePoolEntry(entry *poolEntry) {
+	if entry != nil && entry.inFlight != nil {
+		atomic.AddInt64(entry.inFlight, -1)
+	}
+}
+
+func poolEntryInFlight(entry *poolEntry) int64 {
+	if entry == nil || entry.inFlight == nil {
+		return 0
+	}
+	return atomic.LoadInt64(entry.inFlight)
+}
+
+func poolEntryRequests(entry *poolEntry) int64 {
+	if entry == nil || entry.requests == nil {
+		return 0
+	}
+	return atomic.LoadInt64(entry.requests)
+}
+
+func comparePoolEntryLoad(left, right *poolEntry) int {
+	if diff := compareInt64Asc(poolEntryInFlight(left), poolEntryInFlight(right)); diff != 0 {
+		return diff
+	}
+	return compareInt64Asc(poolEntryRequests(left), poolEntryRequests(right))
 }
 
 func compareIntDesc(left, right int) int {
@@ -546,6 +745,16 @@ func compareIntDesc(left, right int) int {
 }
 
 func compareIntAsc(left, right int) int {
+	if left == right {
+		return 0
+	}
+	if left < right {
+		return -1
+	}
+	return 1
+}
+
+func compareInt64Asc(left, right int64) int {
 	if left == right {
 		return 0
 	}

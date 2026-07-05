@@ -12,6 +12,7 @@ Release zip：
 
 ```bash
 ./scripts/build-macos-app.sh --package --version 2.0.0
+./scripts/check-release-archives.sh build/release/EasyLLM-2.0.0-macos-*.zip
 ```
 
 构建产物：
@@ -27,6 +28,13 @@ build/release/EasyLLM-2.0.0-macos-<arch>.zip
 open build/macos/EasyLLM.app
 ```
 
+更新到本机应用目录：
+
+```bash
+ditto build/macos/EasyLLM.app /Applications/EasyLLM.app
+codesign --verify --deep --strict --verbose=2 /Applications/EasyLLM.app
+```
+
 ## 打包流程
 
 脚本会执行：
@@ -38,6 +46,8 @@ open build/macos/EasyLLM.app
 5. 编译 `macos/EasyLLMApp.swift` 为 App 主程序。
 6. 如系统存在 `codesign`，执行 ad-hoc 签名。
 7. 传入 `--package` 时，用 `ditto` 生成保留 App Bundle 元数据的 zip。
+
+发布 zip 上传前应执行 `scripts/check-release-archives.sh`，确认包内没有 `.env`、Token/CPA JSON、数据库、日志、本地助手目录或疑似密钥。
 
 ## 运行数据
 
@@ -56,6 +66,8 @@ data/easyllm.db
 easyllm.log
 secret.key
 ```
+
+这些运行数据不在 App Bundle 内，也不会被 `build-macos-app.sh` 拷贝进 release zip。不要将上述文件、导出备份或 Token JSON 提交到 Git。
 
 ## 客户端行为
 

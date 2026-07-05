@@ -10,7 +10,7 @@ import (
 // ResponsesRequest is the request body from Codex CLI using OpenAI Responses API format.
 type ResponsesRequest struct {
 	Model              string          `json:"model"`
-	Input              json.RawMessage `json:"input"`  // can be string or []interface{}
+	Input              json.RawMessage `json:"input"` // can be string or []interface{}
 	PreviousResponseID *string         `json:"previous_response_id,omitempty"`
 	Tools              []interface{}   `json:"tools,omitempty"`
 	ToolChoice         interface{}     `json:"tool_choice,omitempty"`
@@ -42,19 +42,19 @@ func (r *ResponsesRequest) inputAsArray() ([]interface{}, bool) {
 
 // ResponsesResponse is the response body returned to Codex CLI.
 type ResponsesResponse struct {
-	ID     string        `json:"id"`
-	Object string        `json:"object"`
-	Model  string        `json:"model"`
-	Output []interface{} `json:"output"`
+	ID     string         `json:"id"`
+	Object string         `json:"object"`
+	Model  string         `json:"model"`
+	Output []interface{}  `json:"output"`
 	Usage  ResponsesUsage `json:"usage"`
 }
 
 // ResponsesUsage maps token usage for the Responses API format.
 type ResponsesUsage struct {
-	InputTokens        int                  `json:"input_tokens"`
-	OutputTokens       int                  `json:"output_tokens"`
-	TotalTokens        int                  `json:"total_tokens"`
-	InputTokensDetails *InputTokensDetails   `json:"input_tokens_details,omitempty"`
+	InputTokens        int                 `json:"input_tokens"`
+	OutputTokens       int                 `json:"output_tokens"`
+	TotalTokens        int                 `json:"total_tokens"`
+	InputTokensDetails *InputTokensDetails `json:"input_tokens_details,omitempty"`
 }
 
 // InputTokensDetails holds cache hit info.
@@ -66,8 +66,8 @@ type InputTokensDetails struct {
 
 // ChatRequest is the request sent to the upstream Chat Completions API.
 type ChatRequest struct {
-	Model         string        `json:"model"`
-	Messages      []ChatMessage `json:"messages"`
+	Model               string             `json:"model"`
+	Messages            []ChatMessage      `json:"messages"`
 	Tools               []interface{}      `json:"tools,omitempty"`
 	ToolChoice          interface{}        `json:"tool_choice,omitempty"`
 	ParallelToolCalls   *bool              `json:"parallel_tool_calls,omitempty"`
@@ -75,11 +75,11 @@ type ChatRequest struct {
 	MaxTokens           *int               `json:"max_tokens,omitempty"`
 	MaxCompletionTokens *int               `json:"max_completion_tokens,omitempty"`
 	StreamOptions       *ChatStreamOptions `json:"stream_options,omitempty"`
-	Stream        bool          `json:"stream"`
-	Thinking      *ChatThinking `json:"thinking,omitempty"`
+	Stream              bool               `json:"stream"`
+	Thinking            *ChatThinking      `json:"thinking,omitempty"`
 }
 
-// ChatThinking controls reasoning/thinking output for providers that support it (e.g. MiMo).
+// ChatThinking controls reasoning/thinking output for providers that support it (e.g. DeepSeek).
 type ChatThinking struct {
 	Type string `json:"type"`
 }
@@ -120,12 +120,12 @@ type ChatChoice struct {
 
 // ChatUsage is the token usage from Chat Completions API.
 type ChatUsage struct {
-	PromptTokens            int                  `json:"prompt_tokens"`
-	CompletionTokens        int                  `json:"completion_tokens"`
-	TotalTokens             int                  `json:"total_tokens"`
-	PromptCacheHitTokens    *int                 `json:"prompt_cache_hit_tokens,omitempty"`
-	PromptCacheMissTokens   *int                 `json:"prompt_cache_miss_tokens,omitempty"`
-	PromptTokensDetails     *PromptTokensDetails  `json:"prompt_tokens_details,omitempty"`
+	PromptTokens          int                  `json:"prompt_tokens"`
+	CompletionTokens      int                  `json:"completion_tokens"`
+	TotalTokens           int                  `json:"total_tokens"`
+	PromptCacheHitTokens  *int                 `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptCacheMissTokens *int                 `json:"prompt_cache_miss_tokens,omitempty"`
+	PromptTokensDetails   *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
 }
 
 // PromptTokensDetails holds cached tokens info.
@@ -163,10 +163,10 @@ type ChatStreamChoice struct {
 
 // ChatDelta holds the delta content for streaming.
 type ChatDelta struct {
-	Role             *string           `json:"role,omitempty"`
-	Content          *string           `json:"content,omitempty"`
-	ReasoningContent *string           `json:"reasoning_content,omitempty"`
-	ToolCalls        []DeltaToolCall   `json:"tool_calls,omitempty"`
+	Role             *string         `json:"role,omitempty"`
+	Content          *string         `json:"content,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []DeltaToolCall `json:"tool_calls,omitempty"`
 }
 
 // DeltaToolCall is a tool call delta in a streaming chunk.
@@ -239,12 +239,12 @@ type RelayConfig struct {
 
 	// Global options (shared across all upstreams).
 	DefaultModel    string // Default model when no mapping matches (empty = use original)
-	ModelMap         map[string]string
-	ToolDenylist     map[string]bool
-	MaxSessions      int
-	MaxSessionBytes  int
+	ModelMap        map[string]string
+	ToolDenylist    map[string]bool
+	MaxSessions     int
+	MaxSessionBytes int
 	SessionTTLHours int
-	DiskCacheDir     string // Directory for disk persistence (empty = disabled)
+	DiskCacheDir    string // Directory for disk persistence (empty = disabled)
 	// JSON string configurations (loaded from settings)
 	ModelMapJSON    string `json:"model_map_json"`
 	ToolDenylistStr string `json:"tool_denylist_str"`

@@ -33,19 +33,27 @@ var wsUpgrader = websocket.Upgrader{
 // ProxyWebSocket handles WebSocket upgrade requests from Codex CLI.
 // Codex CLI connects via wss:// for the /backend-api/codex/responses endpoint.
 func (p *CodexProxy) ProxyWebSocket(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	entry := p.matchIncomingToken(r)
 	passthrough := entry != nil
+	var reservedEntry *poolEntry
 
 	if !passthrough {
-		if !p.enabled {
+		if !p.IsEnabled() {
+			p.recordCall(entry, r, nil, http.StatusServiceUnavailable, passthrough, start, "Proxy is disabled")
 			writeError(w, http.StatusServiceUnavailable, "Proxy is disabled", "service_unavailable")
 			return
 		}
-		entry = p.pickEntry()
+		entry = p.pickEntryReserved()
 		if entry == nil {
+			p.recordCall(entry, r, nil, http.StatusServiceUnavailable, passthrough, start, "No available accounts in pool")
 			writeError(w, http.StatusServiceUnavailable, "No available accounts in pool", "no_available_account")
 			return
 		}
+		reservedEntry = entry
+		defer func() {
+			releasePoolEntry(reservedEntry)
+		}()
 	}
 
 	upstreamURL := buildUpstreamWSURL(r.URL.Path, r.URL.RawQuery)
@@ -90,6 +98,7 @@ func (p *CodexProxy) ProxyWebSocket(w http.ResponseWriter, r *http.Request) {
 			status = upResp.StatusCode
 		}
 		log.Printf("[ws-proxy] upstream dial failed: %v", err)
+		p.recordCall(entry, r, nil, status, passthrough, start, err.Error())
 		writeError(w, status, "WebSocket upstream connection failed", "upstream_error")
 		return
 	}
@@ -98,6 +107,7 @@ func (p *CodexProxy) ProxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	clientConn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[ws-proxy] client upgrade failed: %v", err)
+		p.recordCall(entry, r, nil, http.StatusBadRequest, passthrough, start, err.Error())
 		return
 	}
 	defer clientConn.Close()
@@ -105,11 +115,14 @@ func (p *CodexProxy) ProxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	if entry.requests != nil {
 		atomic.AddInt64(entry.requests, 1)
 	}
+	if entry.source == "codex" && p.codexDB != nil {
+		p.codexDB.IncrementRequestCount(entry.id) //nolint:errcheck
+	}
 
 	done := make(chan struct{})
 
 	// upstream → client (server messages: responses, events). Messages are
-	// streamed directly; EasyLLM does not retain API call logs.
+	// streamed directly; EasyLLM only retains metadata for the recent-call view.
 	go func() {
 		defer close(done)
 		for {
@@ -139,6 +152,7 @@ func (p *CodexProxy) ProxyWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	<-done
+	p.recordCall(entry, r, nil, http.StatusSwitchingProtocols, passthrough, start, "")
 }
 
 func extractWSUsage(msg []byte) (model string, inputTokens, outputTokens int64) {

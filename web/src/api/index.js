@@ -49,7 +49,7 @@ export const authAPI = {
 
 // OpenAI API
 export const openaiAPI = {
-  list: () => api.get('/openai/accounts'),
+  list: (params = {}) => api.get('/openai/accounts', { params }),
   exportJSON: () => api.get('/openai/export'),
   refreshAll: () => longApi.post('/openai/accounts/refresh-all'),
   generateOAuthUrl: (data) => api.post('/openai/oauth/generate-url', data),
@@ -70,6 +70,8 @@ export const openaiAPI = {
   toggleCodex: (id) => api.post(`/openai/codex/accounts/${id}/toggle`),
   getCodexPool: () => api.get('/openai/codex/pool'),
   refreshCodexPool: () => api.post('/openai/codex/pool/refresh'),
+  getCodexCalls: () => api.get('/openai/codex/calls'),
+  clearCodexCalls: () => api.delete('/openai/codex/calls'),
   getAvailableModels: (refresh = false) =>
     api.get('/openai/available-models', { params: refresh ? { refresh: '1' } : {} }),
 }
@@ -86,6 +88,9 @@ export const settingsAPI = {
   updateProxy: (data) => api.put('/settings/proxy', data),
   getDatabase: () => api.get('/settings/database'),
   updateDatabase: (data) => api.put('/settings/database', data),
+  getQuotaCheck: () => api.get('/settings/quota-check'),
+  updateQuotaCheck: (data) => api.put('/settings/quota-check', data),
+  runQuotaCheck: () => longApi.post('/openai/accounts/fetch-quotas', { ids: [] }),
   health: () => api.get('/health'),
   systemInfo: () => api.get('/system/info'),
   apiServerStatus: () => api.get('/api-server/status'),

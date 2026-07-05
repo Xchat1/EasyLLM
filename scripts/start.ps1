@@ -1,8 +1,8 @@
 # EasyLLM 快速启动脚本 (PowerShell - Mac / Windows / Linux)
 # 用法:
 #   .\scripts\start.ps1           # go run 模式（开发）
-#   .\scripts\start.ps1 --build   # 先编译再运行
-#   .\scripts\start.ps1 --prod    # 运行已编译的二进制
+#   .\scripts\start.ps1 -build    # 先编译再运行
+#   .\scripts\start.ps1 -prod     # 运行已编译的二进制
 
 param(
     [switch]$build,
@@ -135,7 +135,7 @@ switch ($mode) {
     "prod" {
         $bin = if ($IsWindows -or ($PSVersionTable.PSVersion.Major -le 5)) { ".\easyllm.exe" } else { "./easyllm" }
         if (-not (Test-Path ($bin -replace '\./', ''))) {
-            Write-Color "✗  未找到二进制文件，请先运行: .\scripts\start.ps1 --build" Red
+            Write-Color "✗  未找到二进制文件，请先运行: .\scripts\start.ps1 -build" Red
             exit 1
         }
         Write-Color "`n→  启动本地二进制" Cyan

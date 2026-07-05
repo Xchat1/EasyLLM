@@ -43,14 +43,34 @@ DEFAULT_PASSWORD=replace-before-first-start
 
 ## 3. Codex CLI 接入
 
-### 方式一：OAuth 账号切换（代理池模式）
+### 方式一：Codex 本地 API 服务（推荐）
+
+导入 OAuth 账号并刷新配额后，在「OpenAI / Codex → 服务配置」里点击「启动并注入 Codex」。EasyLLM 会启用本地代理池、生成本机 API Key，并写入 Codex 配置。
+
+注入后 `config.toml` 中的关键配置：
+
+```toml
+model_provider = "easyllm"
+model = "gpt-5.5"
+
+[model_providers.easyllm]
+name = "EasyLLM API Service"
+base_url = "http://localhost:8022/backend-api/codex"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+```
+
+对应的 `OPENAI_API_KEY` 会写入 `~/.codex/auth.json`，Codex 客户端 / Codex CLI 会通过 EasyLLM 本地服务访问账号池。
+
+### 方式二：OAuth 账号切换
 
 导入 OAuth 账号后，在账号卡片点击「切换」。EasyLLM 会写入本机 Codex 配置：
 
 - `~/.codex/auth.json`
 - `~/.codex/config.toml`
 
-### 方式二：API Key 账号切换
+### 方式三：API Key 账号切换
 
 在「API 账号」标签添加：
 
@@ -62,7 +82,7 @@ DEFAULT_PASSWORD=replace-before-first-start
 
 点击「切换」后写入 `~/.codex/config.toml`。
 
-### 方式三：代理池模式
+### 方式四：代理池模式
 
 在「配置」里开启「代理池服务」，再将需要参与轮询的 OAuth 账号加入代理池。Codex CLI 可以指向本地服务：
 
@@ -70,15 +90,17 @@ DEFAULT_PASSWORD=replace-before-first-start
 chatgpt_base_url = "http://localhost:8022"
 ```
 
-### 方式四：Relay 模式（对接第三方上游）
+### 方式五：Relay 模式（对接第三方上游）
 
-Relay 模式让 Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容的上游提供商（DeepSeek、Kimi、Qwen、OpenRouter 等），无需依赖 chatgpt.com。
+Relay 模式让 Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容的上游提供商（DeepSeek、Mistral、OpenRouter、Kimi、Qwen、MiMo 等），无需依赖 chatgpt.com。
 
 进入侧边栏 **Codex → Relay**：
 
 1. 在「上游渠道」区域点击「添加渠道」，填写上游 URL 和 API Key
 2. 根据需要配置模型映射（如 `{"gpt-5.4":"deepseek-chat"}`）
 3. 点击「启动并注入 Codex」，EasyLLM 自动写入 `~/.codex/config.toml`
+
+多个启用渠道会按 round-robin 轮询；渠道 URL、API Key、认证头和认证前缀会在保存时自动去除多余空白，空 URL 的渠道不会参与转发。
 
 注入后 `config.toml` 中的关键配置：
 
@@ -124,7 +146,7 @@ curl http://localhost:8022/v1/responses \
 
 ## 5. 管理 API
 
-常用管理接口位于 `/api/v1` 下：
+常用管理接口主要位于 `/api/v1` 下；`/api/health` 和 `/pool/status` 是兼容旧版的公开接口：
 
 ```text
 GET  /api/v1/openai/accounts
@@ -136,9 +158,17 @@ POST /api/v1/openai/accounts/fetch-quotas
 GET  /api/v1/relay/config
 PUT  /api/v1/relay/config
 GET  /api/v1/relay/usage
+DELETE /api/v1/relay/usage/history
 GET  /api/v1/relay/logs
+GET  /api/v1/relay/logs/stream
+DELETE /api/v1/relay/logs
+POST /api/v1/relay/sessions/clear
+GET  /api/v1/relay/sessions/stats
+POST /api/v1/relay/inject-codex
+GET  /api/v1/health
 GET  /api/v1/system/info
 GET  /api/health
+GET  /pool/status
 ```
 
 自适应导入通过浏览器文件选择或 multipart 上传 JSON，不提供后端路径扫描接口。
@@ -157,7 +187,9 @@ GET  /api/health
 
 ## 7. 隐私与安全
 
-- 默认不保留代理请求日志。
+- 默认不保留代理请求/响应正文。
+- Relay 调用统计只保存时间、上游、模型和 Token 用量等元数据；不保存请求提示词或模型响应正文。
 - 导出的账号备份包含敏感 Token，请只保存在可信位置。
 - EasyLLM 面向本机 Codex/OpenAI 对接，脚本模式默认监听 `127.0.0.1:8022`，不要对公网开放。
-- 不要将 `.env`、数据库、Token JSON 或导出备份提交到 Git。
+- 不要将 `.env`、`data/`、`auth/`、数据库、Token/CPA JSON、导出备份、日志、`build/`、`web/dist/` 或本地助手目录提交到 Git。
+- 生成 release zip 后，建议运行 `./scripts/check-release-archives.sh build/release/*.zip` 检查发布包是否包含私有文件或疑似密钥。
