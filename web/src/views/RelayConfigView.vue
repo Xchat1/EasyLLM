@@ -889,8 +889,8 @@ onUnmounted(() => {
 }
 
 .relay-segment button.is-active {
-  color: #bfdbfe;
-  background: rgba(59, 130, 246, .28);
+  color: var(--app-accent);
+  background: var(--app-accent-tint);
 }
 
 /* ── Add/edit form ───────────────────────────────────── */
@@ -946,8 +946,8 @@ onUnmounted(() => {
 }
 .relay-log-message { min-width: 0; flex: 1; word-break: break-all; color: var(--app-text-secondary); }
 .relay-log-line--info .relay-log-level { background: var(--app-control-bg); color: var(--app-text-muted); }
-.relay-log-line--warn .relay-log-level { background: color-mix(in srgb, #f59e0b 15%, transparent); color: color-mix(in srgb, #f59e0b 85%, white); }
-.relay-log-line--warn .relay-log-message { color: var(--app-text-primary); }
-.relay-log-line--error .relay-log-level { background: color-mix(in srgb, #ef4444 15%, transparent); color: color-mix(in srgb, #ef4444 85%, white); }
-.relay-log-line--error .relay-log-message { color: var(--app-text-primary); }
+.relay-log-line--warn .relay-log-level { background: color-mix(in srgb, var(--app-warning) 15%, transparent); color: var(--app-warning); }
+.relay-log-line--warn .relay-log-message { color: var(--app-text); }
+.relay-log-line--error .relay-log-level { background: color-mix(in srgb, var(--app-danger) 15%, transparent); color: var(--app-danger); }
+.relay-log-line--error .relay-log-message { color: var(--app-text); }
 </style>

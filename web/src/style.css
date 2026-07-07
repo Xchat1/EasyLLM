@@ -12,9 +12,11 @@
   --app-surface-elevated: rgba(44, 44, 46, 0.9);
   --app-control-bg: rgba(31, 41, 55, 0.72);
   --app-control-hover-bg: rgba(55, 65, 81, 0.76);
+  --app-control-active-bg: rgba(10, 132, 255, 0.2);
   --app-border: rgba(84, 84, 88, 0.5);
   --app-border-soft: rgba(84, 84, 88, 0.28);
   --app-text: #f5f5f7;
+  --app-text-primary: #f5f5f7;
   --app-text-secondary: #d1d1d6;
   --app-text-muted: #8e8e93;
   --app-text-faint: #636366;
@@ -33,9 +35,11 @@
   --app-surface-elevated: rgba(255, 255, 255, 0.94);
   --app-control-bg: rgba(242, 242, 247, 0.78);
   --app-control-hover-bg: rgba(229, 229, 234, 0.92);
+  --app-control-active-bg: rgba(10, 132, 255, 0.12);
   --app-border: rgba(60, 60, 67, 0.18);
   --app-border-soft: rgba(60, 60, 67, 0.1);
   --app-text: #1d1d1f;
+  --app-text-primary: #1d1d1f;
   --app-text-secondary: #3a3a3c;
   --app-text-muted: #6e6e73;
   --app-text-faint: #8e8e93;
@@ -229,12 +233,65 @@
   color: var(--app-text-muted) !important;
 }
 
+[data-theme-mode='light'] .text-blue-100,
+[data-theme-mode='light'] .text-blue-200,
 [data-theme-mode='light'] .text-blue-300,
 [data-theme-mode='light'] .text-blue-400,
+[data-theme-mode='light'] .text-sky-100,
 [data-theme-mode='light'] .text-sky-200,
 [data-theme-mode='light'] .text-sky-300,
 [data-theme-mode='light'] .text-sky-400 {
   color: var(--app-accent) !important;
+}
+
+[data-theme-mode='light'] .text-green-100,
+[data-theme-mode='light'] .text-green-200,
+[data-theme-mode='light'] .text-green-300,
+[data-theme-mode='light'] .text-green-400,
+[data-theme-mode='light'] .text-emerald-100,
+[data-theme-mode='light'] .text-emerald-200,
+[data-theme-mode='light'] .text-emerald-300,
+[data-theme-mode='light'] .text-emerald-400 {
+  color: #15803d !important;
+}
+
+[data-theme-mode='light'] .text-red-100,
+[data-theme-mode='light'] .text-red-200,
+[data-theme-mode='light'] .text-red-300,
+[data-theme-mode='light'] .text-red-400 {
+  color: #b91c1c !important;
+}
+
+[data-theme-mode='light'] .text-yellow-200,
+[data-theme-mode='light'] .text-yellow-300,
+[data-theme-mode='light'] .text-yellow-400,
+[data-theme-mode='light'] .text-amber-100,
+[data-theme-mode='light'] .text-amber-200,
+[data-theme-mode='light'] .text-amber-300 {
+  color: #b45309 !important;
+}
+
+[data-theme-mode='light'] .text-purple-200,
+[data-theme-mode='light'] .text-purple-300,
+[data-theme-mode='light'] .text-purple-400,
+[data-theme-mode='light'] .text-violet-200,
+[data-theme-mode='light'] .text-violet-300,
+[data-theme-mode='light'] .text-violet-400 {
+  color: #7c3aed !important;
+}
+
+[data-theme-mode='light'] .text-cyan-200,
+[data-theme-mode='light'] .text-cyan-300,
+[data-theme-mode='light'] .text-cyan-400,
+[data-theme-mode='light'] .text-teal-200,
+[data-theme-mode='light'] .text-teal-300,
+[data-theme-mode='light'] .text-teal-400 {
+  color: #0e7490 !important;
+}
+
+[data-theme-mode='light'] .text-orange-300,
+[data-theme-mode='light'] .text-orange-400 {
+  color: #c2410c !important;
 }
 
 [data-theme-mode='light'] .border-gray-600,
@@ -244,6 +301,51 @@
 [data-theme-mode='light'] [class~='border-gray-800/80'],
 [data-theme-mode='light'] [class~='border-white/10'] {
   border-color: var(--app-border) !important;
+}
+
+[data-theme-mode='light'] [class~='border-green-500/20'],
+[data-theme-mode='light'] [class~='border-green-500/30'],
+[data-theme-mode='light'] [class~='border-green-500/40'],
+[data-theme-mode='light'] [class~='border-green-500/50'],
+[data-theme-mode='light'] [class~='border-green-700/40'],
+[data-theme-mode='light'] [class~='border-emerald-500/30'],
+[data-theme-mode='light'] [class~='border-emerald-600/40'],
+[data-theme-mode='light'] [class~='border-emerald-700/40'] {
+  border-color: rgba(21, 128, 61, 0.24) !important;
+}
+
+[data-theme-mode='light'] [class~='border-red-500/30'],
+[data-theme-mode='light'] [class~='border-red-500/40'],
+[data-theme-mode='light'] [class~='border-red-600/40'],
+[data-theme-mode='light'] .border-red-700,
+[data-theme-mode='light'] [class~='border-red-700/40'] {
+  border-color: rgba(185, 28, 28, 0.24) !important;
+}
+
+[data-theme-mode='light'] [class~='border-yellow-700/40'],
+[data-theme-mode='light'] [class~='border-amber-500/30'],
+[data-theme-mode='light'] [class~='border-amber-500/40'] {
+  border-color: rgba(180, 83, 9, 0.26) !important;
+}
+
+[data-theme-mode='light'] [class~='border-blue-500/20'],
+[data-theme-mode='light'] [class~='border-blue-500/30'],
+[data-theme-mode='light'] [class~='border-blue-500/40'],
+[data-theme-mode='light'] [class~='border-blue-500/50'],
+[data-theme-mode='light'] [class~='border-blue-700/40'],
+[data-theme-mode='light'] [class~='border-sky-500/30'],
+[data-theme-mode='light'] [class~='border-sky-600/40'] {
+  border-color: var(--app-accent-soft) !important;
+}
+
+[data-theme-mode='light'] [class~='border-purple-700/40'],
+[data-theme-mode='light'] [class~='border-violet-500/40'],
+[data-theme-mode='light'] [class~='border-violet-700/40'] {
+  border-color: rgba(124, 58, 237, 0.24) !important;
+}
+
+[data-theme-mode='light'] [class~='border-orange-500/40'] {
+  border-color: rgba(194, 65, 12, 0.24) !important;
 }
 
 [data-theme-mode='light'] .bg-gray-950,
@@ -290,6 +392,74 @@
   background-color: var(--app-accent-tint) !important;
 }
 
+[data-theme-mode='light'] [class~='bg-green-500/10'],
+[data-theme-mode='light'] [class~='bg-green-500/15'],
+[data-theme-mode='light'] [class~='bg-green-500/20'],
+[data-theme-mode='light'] [class~='bg-green-500/25'],
+[data-theme-mode='light'] [class~='bg-green-900/20'],
+[data-theme-mode='light'] [class~='bg-emerald-500/10'],
+[data-theme-mode='light'] [class~='bg-emerald-600/20'],
+[data-theme-mode='light'] [class~='bg-emerald-700/60'],
+[data-theme-mode='light'] [class~='bg-emerald-950/90'] {
+  background-color: rgba(34, 197, 94, 0.12) !important;
+}
+
+[data-theme-mode='light'] [class~='bg-red-500/10'],
+[data-theme-mode='light'] [class~='bg-red-500/15'],
+[data-theme-mode='light'] [class~='bg-red-500/20'],
+[data-theme-mode='light'] [class~='bg-red-600/20'],
+[data-theme-mode='light'] [class~='bg-red-900/20'],
+[data-theme-mode='light'] [class~='bg-red-900/30'],
+[data-theme-mode='light'] [class~='bg-red-950/90'] {
+  background-color: rgba(239, 68, 68, 0.1) !important;
+}
+
+[data-theme-mode='light'] [class~='bg-yellow-700/60'],
+[data-theme-mode='light'] [class~='bg-yellow-900/20'],
+[data-theme-mode='light'] [class~='bg-amber-500/10'],
+[data-theme-mode='light'] [class~='bg-amber-500/15'],
+[data-theme-mode='light'] [class~='bg-amber-700/60'],
+[data-theme-mode='light'] [class~='bg-amber-950/90'] {
+  background-color: rgba(245, 158, 11, 0.12) !important;
+}
+
+[data-theme-mode='light'] [class~='bg-blue-500/5'],
+[data-theme-mode='light'] [class~='bg-blue-600/20'],
+[data-theme-mode='light'] [class~='bg-blue-600/30'],
+[data-theme-mode='light'] [class~='bg-blue-700/60'],
+[data-theme-mode='light'] [class~='bg-blue-900/10'],
+[data-theme-mode='light'] [class~='bg-blue-900/20'],
+[data-theme-mode='light'] [class~='bg-sky-950/90'] {
+  background-color: var(--app-accent-tint) !important;
+}
+
+[data-theme-mode='light'] [class~='bg-purple-500/10'],
+[data-theme-mode='light'] [class~='bg-purple-700/60'],
+[data-theme-mode='light'] [class~='bg-purple-900/10'],
+[data-theme-mode='light'] [class~='bg-purple-900/20'],
+[data-theme-mode='light'] [class~='bg-violet-700/60'],
+[data-theme-mode='light'] [class~='bg-violet-900/10'],
+[data-theme-mode='light'] [class~='bg-violet-900/20'] {
+  background-color: rgba(124, 58, 237, 0.1) !important;
+}
+
+[data-theme-mode='light'] [class~='bg-cyan-700/60'],
+[data-theme-mode='light'] [class~='bg-cyan-900/20'],
+[data-theme-mode='light'] [class~='bg-teal-500/10'] {
+  background-color: rgba(14, 116, 144, 0.1) !important;
+}
+
+[data-theme-mode='light'] [class~='bg-orange-500/20'] {
+  background-color: rgba(249, 115, 22, 0.12) !important;
+}
+
+[data-theme-mode='light'] [class~='bg-green-800/60'],
+[data-theme-mode='light'] [class~='bg-yellow-800/60'],
+[data-theme-mode='light'] [class~='bg-purple-800/60'],
+[data-theme-mode='light'] [class~='bg-violet-800/60'] {
+  background-color: var(--app-control-bg) !important;
+}
+
 [data-theme-mode='light'] .to-gray-950 {
   --tw-gradient-to: var(--app-bg) var(--tw-gradient-to-position) !important;
 }
@@ -306,8 +476,53 @@
   background-color: var(--app-control-hover-bg) !important;
 }
 
+[data-theme-mode='light'] [class~='hover:bg-blue-600/30']:hover,
+[data-theme-mode='light'] [class~='hover:bg-blue-900/10']:hover,
+[data-theme-mode='light'] [class~='hover:bg-sky-500/15']:hover {
+  background-color: var(--app-accent-tint) !important;
+}
+
+[data-theme-mode='light'] [class~='hover:bg-green-500/35']:hover,
+[data-theme-mode='light'] [class~='hover:bg-green-700/80']:hover {
+  background-color: rgba(34, 197, 94, 0.16) !important;
+}
+
+[data-theme-mode='light'] [class~='hover:bg-yellow-700/80']:hover {
+  background-color: rgba(245, 158, 11, 0.16) !important;
+}
+
+[data-theme-mode='light'] [class~='hover:bg-purple-700/80']:hover,
+[data-theme-mode='light'] [class~='hover:bg-purple-900/10']:hover,
+[data-theme-mode='light'] [class~='hover:bg-violet-700/80']:hover,
+[data-theme-mode='light'] [class~='hover:bg-violet-900/10']:hover {
+  background-color: rgba(124, 58, 237, 0.14) !important;
+}
+
+[data-theme-mode='light'] .hover\:border-blue-500:hover,
+[data-theme-mode='light'] [class~='hover:border-blue-500/50']:hover {
+  border-color: var(--app-accent-soft) !important;
+}
+
+[data-theme-mode='light'] .hover\:border-purple-500:hover,
+[data-theme-mode='light'] .hover\:border-violet-500:hover {
+  border-color: rgba(124, 58, 237, 0.32) !important;
+}
+
+[data-theme-mode='light'] [class~='hover:border-red-500/40']:hover {
+  border-color: rgba(185, 28, 28, 0.28) !important;
+}
+
 [data-theme-mode='light'] .hover\:text-white:hover {
   color: var(--app-text) !important;
+}
+
+[data-theme-mode='light'] .hover\:text-red-300:hover,
+[data-theme-mode='light'] .hover\:text-red-400:hover {
+  color: #b91c1c !important;
+}
+
+[data-theme-mode='light'] .disabled\:bg-blue-800:disabled {
+  background-color: color-mix(in srgb, var(--app-accent) 42%, var(--app-control-bg)) !important;
 }
 
 ::-webkit-scrollbar {

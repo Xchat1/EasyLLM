@@ -1283,7 +1283,7 @@
               </div>
             </div>
 
-            <div v-if="serviceAdvancedOpen" ref="serviceAdvancedRef" class="grid lg:grid-cols-[1fr_1fr] gap-4">
+            <div v-if="serviceAdvancedOpen" ref="serviceAdvancedRef" class="max-w-3xl">
               <div class="space-y-3">
                 <div class="grid gap-1">
                   <input :value="localAccessPortInput" class="input text-xs" readonly />
@@ -1352,32 +1352,137 @@
                   </div>
                 </div>
               </div>
+            </div>
+          </section>
 
-              <div class="space-y-2">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                  <div class="text-xs font-medium text-gray-300">API 服务账号集合</div>
+          <section class="api-service-section api-service-pool-section">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <svg class="h-5 w-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M7 12h10M10 18h4"/>
+                  </svg>
+                  <h3 class="text-base font-semibold text-white">轮询账号池</h3>
+                  <span class="api-service-pill" :class="localAccessConfigDirty ? 'api-service-icon-action--warn' : 'api-service-pill--muted'">
+                    {{ localAccessConfigDirty ? '未保存' : '已保存' }}
+                  </span>
+                </div>
+                <div class="mt-1 text-xs text-gray-400">
+                  选择要参与对外 API 轮询的 OAuth 账号；保存后 `/v1/responses` 会按策略从集合中调度。
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="api-service-pill">已选 {{ localAccessSelectedCount }}</span>
+                <span class="api-service-pill">可用 {{ localAccessEligibleCount }}</span>
+                <button @click="saveLocalAccessAccounts" :disabled="localAccessBusy" class="btn btn-sm btn-secondary">
+                  {{ localAccessBusy ? '保存中...' : '保存集合' }}
+                </button>
+                <button @click="activateLocalAccess" :disabled="localAccessActionDisabled" class="btn btn-sm btn-primary">
+                  {{ localAccessActionLabel }}
+                </button>
+              </div>
+            </div>
+
+            <div class="api-service-pool-toolbar">
+              <input
+                v-model="localAccessPoolSearch"
+                class="input api-service-pool-search"
+                placeholder="搜索邮箱、账号 ID、Workspace"
+              />
+              <select v-model="localAccessPoolPlanFilter" class="input api-service-pool-select">
+                <option v-for="option in localAccessPoolPlanOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
+              </select>
+              <select v-model="localAccessPoolStatusFilter" class="input api-service-pool-select">
+                <option value="eligible">只看可加入</option>
+                <option value="selected">只看已选</option>
+                <option value="problem">只看不可用</option>
+                <option value="all">全部账号</option>
+              </select>
+              <select
+                :value="localAccess.collection?.routing_strategy || serviceConfig.strategy"
+                @change="updateLocalAccessRouting($event.target.value)"
+                class="input api-service-pool-select"
+              >
+                <option v-for="s in strategies" :key="s.id" :value="s.id">{{ s.label }}</option>
+              </select>
+              <label class="api-service-checkbox">
+                <input v-model="localAccessRestrictFree" type="checkbox" />
+                <span>排除 Free</span>
+              </label>
+            </div>
+
+            <div class="api-service-pool-grid">
+              <div class="api-service-pool-panel">
+                <div class="api-service-pool-panel-head">
+                  <div>
+                    <div class="text-sm font-semibold text-white">账号列表</div>
+                    <div class="text-xs text-gray-500">当前筛选 {{ localAccessPoolVisibleAccounts.length }} 个，可加入 {{ localAccessPoolVisibleEligibleAccounts.length }} 个</div>
+                  </div>
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-[11px] text-gray-500">{{ localAccessSelectedCount }}/{{ localAccessEligibleCount }}</span>
-                    <button @click="selectAllLocalAccessAccounts" :disabled="localAccessBusy || localAccessEligibleCount === 0" class="btn btn-xs btn-secondary">全选成功</button>
-                    <button @click="clearLocalAccessAccounts" :disabled="localAccessBusy || localAccessSelectedIds.length === 0" class="btn btn-xs btn-secondary">清空</button>
-                    <button @click="saveAllLocalAccessAccounts" :disabled="localAccessBusy || localAccessEligibleCount === 0" class="btn btn-xs btn-primary">加入</button>
-                    <button @click="saveLocalAccessAccounts" :disabled="localAccessBusy" class="btn btn-xs btn-primary">保存集合</button>
+                    <button @click="selectVisibleLocalAccessAccounts" :disabled="localAccessBusy || localAccessPoolVisibleEligibleAccounts.length === 0" class="btn btn-xs btn-secondary">加入当前筛选</button>
+                    <button @click="selectAllLocalAccessAccounts" :disabled="localAccessBusy || localAccessEligibleCount === 0" class="btn btn-xs btn-secondary">全选可用</button>
                   </div>
                 </div>
-                <div class="max-h-36 overflow-y-auto rounded-lg border border-gray-700 bg-gray-900/60 p-2 space-y-1">
-                  <label v-for="account in oauthAccounts" :key="account.id" class="flex items-center gap-2 rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-800" :class="{ 'opacity-50': !isLocalAccessEligibleAccount(account) }">
+
+                <div class="api-service-account-list">
+                  <label
+                    v-for="account in localAccessPoolVisibleAccounts"
+                    :key="account.id"
+                    class="api-service-account-row"
+                    :class="{ 'api-service-account-row--disabled': !isLocalAccessEligibleAccount(account), 'api-service-account-row--selected': localAccessSelectedIDSet.has(accountId(account.id)) }"
+                  >
                     <input
                       type="checkbox"
-                      :checked="localAccessSelectedIds.includes(accountId(account.id)) && isLocalAccessEligibleAccount(account)"
+                      :checked="localAccessSelectedIDSet.has(accountId(account.id)) && isLocalAccessEligibleAccount(account)"
                       :disabled="!isLocalAccessEligibleAccount(account)"
                       @change="toggleLocalAccessAccount(account.id)"
                     />
-                    <span class="truncate flex-1" :title="accountDisplayTitle(account)">{{ accountDisplayLabel(account) }}</span>
-                    <span v-if="account.plan" class="text-gray-500">{{ account.plan }}</span>
-                    <span v-if="Number(account._quota_http_status) === 200 && !account.quota_is_forbidden" class="text-green-400">200</span>
-                    <span v-else class="text-gray-600">{{ account._quota_http_status || '未查' }}</span>
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-sm font-medium text-white" :title="accountDisplayTitle(account)">{{ accountDisplayLabel(account) }}</span>
+                      <span class="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
+                        <span v-if="account.plan">{{ account.plan }}</span>
+                        <span v-if="account.workspace_id">WS {{ shortWorkspaceID(account.workspace_id) }}</span>
+                        <span v-if="account.chatgpt_account_id">{{ account.chatgpt_account_id.slice(0, 12) }}</span>
+                      </span>
+                    </span>
+                    <span class="api-service-account-status" :class="isLocalAccessEligibleAccount(account) ? 'api-service-account-status--ok' : 'api-service-account-status--bad'">
+                      {{ Number(account._quota_http_status) === 200 && !account.quota_is_forbidden ? '200' : (account._quota_http_status || '未查') }}
+                    </span>
                   </label>
-                  <div v-if="oauthAccounts.length === 0" class="text-xs text-gray-500 px-2 py-3 text-center">暂无 OAuth 账号</div>
+                  <div v-if="localAccessPoolVisibleAccounts.length === 0" class="api-service-pool-empty">
+                    没有匹配的账号
+                  </div>
+                </div>
+              </div>
+
+              <div class="api-service-pool-panel api-service-pool-panel--selected">
+                <div class="api-service-pool-panel-head">
+                  <div>
+                    <div class="text-sm font-semibold text-white">已加入轮询</div>
+                    <div class="text-xs text-gray-500">{{ localAccessSelectedAccounts.length }} 个账号会进入 API 服务集合</div>
+                  </div>
+                  <button @click="clearLocalAccessSelection" :disabled="localAccessBusy || localAccessSelectedIds.length === 0" class="btn btn-xs btn-secondary">清空</button>
+                </div>
+
+                <div class="api-service-selected-list">
+                  <div v-for="account in localAccessSelectedAccounts" :key="account.id" class="api-service-selected-row">
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-sm font-medium text-white" :title="accountDisplayTitle(account)">{{ accountDisplayLabel(account) }}</span>
+                      <span class="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
+                        <span>{{ account.plan || 'unknown' }}</span>
+                        <span v-if="Number(account._quota_http_status) === 200 && !account.quota_is_forbidden" class="text-green-400">可用</span>
+                        <span v-else class="text-red-400">不可用</span>
+                      </span>
+                    </span>
+                    <button @click="removeLocalAccessAccount(account.id)" class="api-service-remove-btn" title="移出轮询">
+                      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18 18 6M6 6l12 12"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div v-if="localAccessSelectedAccounts.length === 0" class="api-service-pool-empty">
+                    还没有选择账号
+                  </div>
                 </div>
               </div>
             </div>
@@ -1716,6 +1821,9 @@ const localAccessBusy = ref(false)
 const localAccessSelectedIds = ref([])
 const localAccessPortInput = ref('')
 const localAccessRestrictFree = ref(true)
+const localAccessPoolSearch = ref('')
+const localAccessPoolPlanFilter = ref('all')
+const localAccessPoolStatusFilter = ref('eligible')
 const strategies = [
   { id: 'auto', label: '自动' },
   { id: 'quota_high_first', label: '优先高配额' },
@@ -1771,8 +1879,47 @@ const activeGroup = computed(() => accountGroups.value.find(g => g.id === active
 const activeGroupAccountIDs = computed(() => new Set(activeGroup.value?.account_ids || []))
 const localAccessEligibleAccounts = computed(() => oauthAccounts.value.filter(isLocalAccessEligibleAccount))
 const localAccessEligibleIDSet = computed(() => new Set(localAccessEligibleAccounts.value.map(account => accountId(account.id))))
+const localAccessSelectedIDSet = computed(() => new Set(localAccessSelectedIds.value.map(accountId)))
 const localAccessSelectedCount = computed(() => localAccessSelectedIds.value.filter(id => localAccessEligibleIDSet.value.has(id)).length)
 const localAccessEligibleCount = computed(() => localAccessEligibleAccounts.value.length)
+const localAccessAccountMap = computed(() => new Map(oauthAccounts.value.map(account => [accountId(account.id), account])))
+const localAccessSelectedAccounts = computed(() => localAccessSelectedIds.value
+  .map(id => localAccessAccountMap.value.get(accountId(id)))
+  .filter(Boolean))
+const localAccessPoolPlanOptions = computed(() => [
+  { id: 'all', label: `全部套餐（${oauthAccounts.value.length}）` },
+  { id: 'team', label: `Team（${countOAuthAccountsByPlan('team')}）` },
+  { id: 'k12', label: `K12（${countOAuthAccountsByPlan('k12')}）` },
+  { id: 'plus', label: `Plus（${countOAuthAccountsByPlan('plus')}）` },
+  { id: 'pro', label: `Pro（${countOAuthAccountsByPlan('pro') + countOAuthAccountsByPlan('prolite') + countOAuthAccountsByPlan('promax')}）` },
+  { id: 'free', label: `Free（${countOAuthAccountsByPlan('free')}）` },
+])
+const localAccessPoolVisibleAccounts = computed(() => {
+  const q = localAccessPoolSearch.value.trim().toLowerCase()
+  return oauthAccounts.value.filter(account => {
+    if (q) {
+      const haystack = [
+        account.email,
+        account.chatgpt_account_id,
+        account.account_id,
+        account.workspace_id,
+        account.organization_id,
+      ].map(value => String(value || '').toLowerCase()).join(' ')
+      if (!haystack.includes(q)) return false
+    }
+    const plan = accountPlanType(account)
+    if (localAccessPoolPlanFilter.value === 'pro') {
+      if (!['pro', 'prolite', 'promax'].includes(plan)) return false
+    } else if (localAccessPoolPlanFilter.value !== 'all' && plan !== localAccessPoolPlanFilter.value) {
+      return false
+    }
+    if (localAccessPoolStatusFilter.value === 'eligible') return isLocalAccessEligibleAccount(account)
+    if (localAccessPoolStatusFilter.value === 'selected') return localAccessSelectedIDSet.value.has(accountId(account.id))
+    if (localAccessPoolStatusFilter.value === 'problem') return !isLocalAccessEligibleAccount(account)
+    return true
+  })
+})
+const localAccessPoolVisibleEligibleAccounts = computed(() => localAccessPoolVisibleAccounts.value.filter(isLocalAccessEligibleAccount))
 const localAccessConfigDirty = computed(() => {
   const savedIDs = normalizeIDList(localAccess.value.collection?.account_ids || [])
   const selectedIDs = normalizeIDList(localAccessSelectedIds.value)
@@ -3536,6 +3683,24 @@ function selectAllLocalAccessAccounts() {
   localAccessSelectedIds.value = localAccessEligibleAccounts.value.map(account => accountId(account.id)).filter(Boolean)
 }
 
+function selectVisibleLocalAccessAccounts() {
+  const next = new Set(localAccessSelectedIds.value.map(accountId))
+  for (const account of localAccessPoolVisibleEligibleAccounts.value) {
+    const id = accountId(account.id)
+    if (id) next.add(id)
+  }
+  localAccessSelectedIds.value = Array.from(next)
+}
+
+function removeLocalAccessAccount(id) {
+  const key = accountId(id)
+  localAccessSelectedIds.value = localAccessSelectedIds.value.filter(item => accountId(item) !== key)
+}
+
+function clearLocalAccessSelection() {
+  localAccessSelectedIds.value = []
+}
+
 function normalizeIDList(ids) {
   return Array.from(new Set((ids || []).map(accountId).filter(Boolean))).sort()
 }
@@ -4341,51 +4506,51 @@ onBeforeUnmount(() => {
   backdrop-filter: blur(6px);
 }
 .import-dialog-panel {
-  background: #0f172a;
-  border-color: rgba(148, 163, 184, 0.28);
-  color: #e5e7eb;
+  background: var(--app-surface-elevated) !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text);
 }
 .import-dialog-panel .border-gray-700 {
-  border-color: rgba(148, 163, 184, 0.24) !important;
+  border-color: var(--app-border) !important;
 }
 .import-dialog-panel .bg-gray-800,
 .import-dialog-panel [class~='bg-gray-800'] {
-  background: #1f2937 !important;
+  background: var(--app-control-bg) !important;
 }
 .import-dialog-panel .text-gray-300 {
-  color: #e5e7eb !important;
+  color: var(--app-text-secondary) !important;
 }
 .import-dialog-panel .text-gray-400 {
-  color: #cbd5e1 !important;
+  color: var(--app-text-secondary) !important;
 }
 .import-dialog-panel .text-gray-500,
 .import-dialog-panel .text-gray-600 {
-  color: #94a3b8 !important;
+  color: var(--app-text-muted) !important;
 }
 .import-dialog-panel .border-gray-600 {
-  border-color: rgba(148, 163, 184, 0.58) !important;
+  border-color: var(--app-border) !important;
 }
 .import-dialog-panel .border-dashed {
-  background: #111827;
+  background: var(--app-surface-muted);
 }
 .import-dialog-panel [class~='bg-green-900/20'] {
-  background: #0f2a1c !important;
+  background: color-mix(in srgb, var(--app-success) 14%, var(--app-surface)) !important;
 }
 .import-dialog-panel [class~='bg-blue-900/20'] {
-  background: #10213f !important;
+  background: var(--app-accent-tint) !important;
 }
 .import-dialog-panel [class~='bg-yellow-900/20'] {
-  background: #2d260f !important;
+  background: color-mix(in srgb, var(--app-warning) 14%, var(--app-surface)) !important;
 }
 .import-dialog-panel [class~='bg-violet-900/20'],
 .import-dialog-panel [class~='bg-purple-900/20'] {
-  background: #25183f !important;
+  background: color-mix(in srgb, #7c3aed 12%, var(--app-surface)) !important;
 }
 .import-dialog-panel [class~='bg-cyan-900/20'] {
-  background: #0d2c35 !important;
+  background: color-mix(in srgb, #0891b2 12%, var(--app-surface)) !important;
 }
 .import-dialog-panel [class~='text-blue-400/70'] {
-  color: #93c5fd !important;
+  color: var(--app-accent) !important;
 }
 
 .account-card-compact {
@@ -4902,6 +5067,21 @@ onBeforeUnmount(() => {
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
 }
 
+[data-theme-mode='light'] .api-service-shell {
+  --app-border: rgba(60, 60, 67, 0.18);
+  --app-border-soft: rgba(60, 60, 67, 0.1);
+  --app-control-bg: rgba(242, 242, 247, 0.82);
+  --app-control-hover-bg: rgba(229, 229, 234, 0.94);
+  --app-surface: rgba(255, 255, 255, 0.9);
+  --app-surface-muted: rgba(248, 250, 252, 0.94);
+  --app-text: #1d1d1f;
+  --app-text-secondary: #3a3a3c;
+  --app-text-muted: #6e6e73;
+  --app-text-faint: #8e8e93;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18);
+}
+
 .api-service-header {
   display: flex;
   align-items: center;
@@ -5141,6 +5321,237 @@ onBeforeUnmount(() => {
 .api-service-stat-card--violet { border-color: rgba(167, 139, 250, .34); color: #c4b5fd; }
 .api-service-stat-card--orange { border-color: rgba(251, 146, 60, .34); color: #fdba74; }
 
+.api-service-pool-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.api-service-pool-toolbar {
+  display: grid;
+  grid-template-columns: minmax(18rem, 1fr) repeat(3, minmax(8.5rem, auto)) auto;
+  gap: .75rem;
+  align-items: center;
+}
+
+.api-service-pool-search,
+.api-service-pool-select {
+  min-height: 2.5rem;
+  font-size: .8rem;
+}
+
+.api-service-checkbox {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: .45rem;
+  border: 1px solid var(--app-border);
+  border-radius: .75rem;
+  padding: 0 .75rem;
+  color: var(--app-text-secondary);
+  background: var(--app-control-bg);
+  font-size: .78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.api-service-checkbox input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--app-accent);
+}
+
+.api-service-pool-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(18rem, .75fr);
+  gap: 1rem;
+}
+
+.api-service-pool-panel {
+  min-width: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 1rem;
+  background: rgba(2, 6, 23, .34);
+  overflow: hidden;
+}
+
+.api-service-pool-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  border-bottom: 1px solid var(--app-border);
+  padding: .875rem 1rem;
+}
+
+.api-service-account-list,
+.api-service-selected-list {
+  display: grid;
+  align-content: start;
+  gap: .35rem;
+  max-height: 23rem;
+  overflow-y: auto;
+  padding: .75rem;
+}
+
+.api-service-account-row,
+.api-service-selected-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: .75rem;
+  border: 1px solid transparent;
+  border-radius: .75rem;
+  padding: .65rem .75rem;
+  color: var(--app-text-secondary);
+  background: var(--app-control-bg);
+  transition: background .15s ease, border-color .15s ease, opacity .15s ease;
+}
+
+.api-service-account-row {
+  cursor: pointer;
+}
+
+.api-service-account-row:hover,
+.api-service-selected-row:hover {
+  border-color: var(--app-accent-soft);
+  background: var(--app-control-hover-bg);
+}
+
+.api-service-account-row input {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  accent-color: var(--app-accent);
+}
+
+.api-service-account-row--selected {
+  border-color: var(--app-accent-soft);
+  background: var(--app-accent-tint);
+}
+
+.api-service-account-row--disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.api-service-account-status {
+  display: inline-flex;
+  min-width: 3rem;
+  justify-content: center;
+  border-radius: 9999px;
+  padding: .2rem .5rem;
+  font-size: .7rem;
+  font-weight: 800;
+}
+
+.api-service-account-status--ok {
+  color: #86efac;
+  background: rgba(34, 197, 94, .14);
+}
+
+.api-service-account-status--bad {
+  color: var(--app-text-muted);
+  background: var(--app-surface-muted);
+}
+
+.api-service-remove-btn {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--app-border);
+  border-radius: .65rem;
+  color: var(--app-text-muted);
+  background: var(--app-control-bg);
+}
+
+.api-service-remove-btn:hover {
+  color: var(--app-danger);
+  border-color: rgba(239, 68, 68, .34);
+}
+
+.api-service-pool-empty {
+  display: grid;
+  min-height: 8rem;
+  place-items: center;
+  border: 1px dashed var(--app-border);
+  border-radius: .85rem;
+  color: var(--app-text-muted);
+  font-size: .85rem;
+}
+
+[data-theme-mode='light'] .api-service-body {
+  background: radial-gradient(circle at 20% 0%, rgba(10, 132, 255, .1), transparent 34%),
+    radial-gradient(circle at 88% 12%, rgba(14, 165, 233, .08), transparent 28%),
+    rgba(248, 250, 252, .72);
+}
+
+[data-theme-mode='light'] .api-service-section {
+  background: rgba(255, 255, 255, .72);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, .08);
+}
+
+[data-theme-mode='light'] .api-service-stat-card,
+[data-theme-mode='light'] .api-service-config-card,
+[data-theme-mode='light'] .api-service-pool-panel {
+  background: rgba(255, 255, 255, .82);
+}
+
+[data-theme-mode='light'] .api-service-value-field {
+  border-color: rgba(148, 163, 184, .38);
+  background: rgba(255, 255, 255, .86);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8);
+}
+
+[data-theme-mode='light'] .api-service-value {
+  color: #0f172a;
+}
+
+[data-theme-mode='light'] .api-service-value--blue,
+[data-theme-mode='light'] .api-service-stat-card--blue {
+  color: var(--app-accent);
+}
+
+[data-theme-mode='light'] .api-service-value--green,
+[data-theme-mode='light'] .api-service-pill--success,
+[data-theme-mode='light'] .api-service-account-status--ok,
+[data-theme-mode='light'] .api-service-stat-card--green {
+  color: #15803d;
+}
+
+[data-theme-mode='light'] .api-service-pill--success {
+  border-color: rgba(34, 197, 94, .28);
+  background: rgba(34, 197, 94, .12);
+}
+
+[data-theme-mode='light'] .api-service-account-status--ok {
+  background: rgba(34, 197, 94, .12);
+}
+
+[data-theme-mode='light'] .api-service-danger {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, .1);
+}
+
+[data-theme-mode='light'] .api-service-action--active,
+[data-theme-mode='light'] .api-service-icon-action--active,
+[data-theme-mode='light'] .api-service-segment button.is-active {
+  color: var(--app-accent);
+  background: var(--app-accent-tint);
+  border-color: var(--app-accent-soft);
+}
+
+[data-theme-mode='light'] .api-service-stat-card--violet {
+  color: #7c3aed;
+}
+
+[data-theme-mode='light'] .api-service-stat-card--orange {
+  color: #c2410c;
+}
+
 @media (max-width: 1100px) {
   .api-service-toolbar {
     align-items: flex-start;
@@ -5149,6 +5560,10 @@ onBeforeUnmount(() => {
   .api-service-stats-grid,
   .api-service-config-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .api-service-pool-toolbar,
+  .api-service-pool-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -5159,6 +5574,10 @@ onBeforeUnmount(() => {
   }
   .api-service-body {
     padding: 1rem;
+  }
+  .api-service-pool-panel-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
