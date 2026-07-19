@@ -9,6 +9,7 @@ import (
 	"easyllm/internal/proxy"
 	"easyllm/internal/storage"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -66,6 +67,100 @@ func TestAllowLocalProxyFallback(t *testing.T) {
 	ctx.Request = req
 	if !allowLocalProxyFallback(ctx) {
 		t.Fatalf("expected remote request with proxy_api_key configured to be allowed")
+	}
+}
+
+func TestAuthorizeProxyRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupProxyAccessTestDB(t)
+	if err := storage.SaveSetting("proxy_api_key", "secret"); err != nil {
+		t.Fatalf("save proxy_api_key: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		authHeader string
+		allowToken func(string) bool
+		want       bool
+	}{
+		{name: "missing token", want: false},
+		{name: "wrong token", authHeader: "Bearer wrong", want: false},
+		{name: "proxy key", authHeader: "Bearer secret", want: true},
+		{
+			name:       "managed token",
+			authHeader: "Bearer managed",
+			allowToken: func(token string) bool { return token == "managed" },
+			want:       true,
+		},
+	}
+
+	app := &App{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			req.RemoteAddr = "127.0.0.1:12345"
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+			ctx.Request = req
+
+			if got := app.authorizeProxyRequest(ctx, tc.allowToken); got != tc.want {
+				t.Fatalf("authorizeProxyRequest() = %v, want %v", got, tc.want)
+			}
+			if !tc.want && recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+			}
+		})
+	}
+}
+
+func TestAllowedBrowserOrigin(t *testing.T) {
+	tests := []struct {
+		origin string
+		want   bool
+	}{
+		{origin: "http://localhost:8022", want: true},
+		{origin: "https://LOCALHOST:5180", want: true},
+		{origin: "http://127.0.0.1:5180", want: true},
+		{origin: "http://[::1]:8022", want: true},
+		{origin: "https://example.com", want: false},
+		{origin: "http://localhost.example.com", want: false},
+		{origin: "null", want: false},
+		{origin: "file:///tmp/index.html", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.origin, func(t *testing.T) {
+			if got := isAllowedBrowserOrigin(tc.origin); got != tc.want {
+				t.Fatalf("isAllowedBrowserOrigin(%q) = %v, want %v", tc.origin, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLocalCORSMiddlewareRejectsExternalOrigin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handled := false
+	router := gin.New()
+	router.Use(cors.New(localCORSConfig()))
+	router.POST("/api/v1/auth/setup", func(c *gin.Context) {
+		handled = true
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/setup", nil)
+	req.Host = "127.0.0.1:8022"
+	req.Header.Set("Origin", "https://example.com")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if handled {
+		t.Fatal("expected disallowed cross-origin request to be aborted before the handler")
 	}
 }
 

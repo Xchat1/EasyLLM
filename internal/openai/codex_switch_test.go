@@ -67,7 +67,7 @@ func TestSwitchCodexAPIServiceWritesLocalProviderAndPreservesOtherConfig(t *test
 	config := string(configData)
 	for _, want := range []string{
 		`model_provider = "easyllm"`,
-		`model = "gpt-5.5"`,
+		`model = "gpt-5.6-sol"`,
 		`[model_providers.easyllm]`,
 		`name = "EasyLLM API Service"`,
 		`base_url = "http://localhost:18080/v1"`,
@@ -137,7 +137,7 @@ func TestSwitchCodexOAuthAccountWritesTokensAndValidProxyURL(t *testing.T) {
 	configPath := filepath.Join(codexDir, "config.toml")
 	initialConfig := strings.Join([]string{
 		`model_provider = "easyllm"`,
-		`model = "gpt-5.5"`,
+		`model = "gpt-5.6-sol"`,
 		``,
 		`[model_providers.easyllm]`,
 		`name = "EasyLLM API Service"`,

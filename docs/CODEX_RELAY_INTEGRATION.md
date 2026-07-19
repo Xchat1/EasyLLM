@@ -21,7 +21,7 @@ EasyLLM Relay (localhost:8022)
 - **SSE 流式**：上游流式 delta → Responses API 事件序列，实时推送给 Codex CLI
 - **会话历史**：`previous_response_id` 机制自动拼接历史 messages，支持多轮对话
 - **多上游轮询**：可配置多个上游渠道，按 round-robin 策略自动分流
-- **模型映射**：全局模型名映射（如 `gpt-5.4` → `deepseek-chat`）
+- **模型映射**：全局模型名映射（如 `gpt-5.6-sol` → `deepseek-reasoner`）
 - **工具过滤**：通过工具拒绝列表屏蔽不被上游支持的工具类型
 - **MiMo 适配**：针对 Xiaomi MiMo 思考模型自动处理 thinking、tool choice、max completion tokens 和 reasoning_content 往返
 - **运行观测**：Dashboard 展示 Relay 累计 Token、最近 100 条调用元数据和渠道过滤；Relay 页面提供实时日志
@@ -64,7 +64,7 @@ Relay 端点与现有 OpenAI 兼容代理共用 `/v1` 根路径，优先匹配�
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | 默认模型 | 空 | 无映射匹配时的兜底模型 |
-| 模型映射 | `{}` | JSON 格式，如 `{"gpt-5.4":"deepseek-chat"}` |
+| 模型映射 | `{}` | JSON 格式，如 `{"gpt-5.6-sol":"deepseek-reasoner","gpt-5.6-terra":"deepseek-chat","gpt-5.6-luna":"deepseek-chat"}` |
 | 工具拒绝列表 | 空 | 逗号分隔，如 `web_search,image_generation` |
 | 最大会话数 | 256 | 超出后 LRU 淘汰最旧会话 |
 | 最大历史字节 | 512MB | 单次会话历史的字节上限 |
@@ -129,13 +129,14 @@ Codex CLI 始终连接本地 `http://localhost:8022/v1`，无感知上游切换�
 
 ```json
 {
-  "gpt-5.4": "deepseek-chat",
-  "gpt-5.5": "deepseek-reasoner",
+  "gpt-5.6-sol": "deepseek-reasoner",
+  "gpt-5.6-terra": "deepseek-chat",
+  "gpt-5.6-luna": "deepseek-chat",
   "o3": "mistral-large-latest"
 }
 ```
 
-Codex CLI 请求 `gpt-5.4` 时，EasyLLM 实际向上游发送 `deepseek-chat`。
+Codex CLI 请求 `gpt-5.6-sol` 时，EasyLLM 实际向上游发送 `deepseek-reasoner`。`gpt-5.6` 是 Sol 的别名；如无特殊兼容需求，建议在映射中使用显式的 `gpt-5.6-sol`。
 
 ## 调用示例
 
@@ -143,12 +144,12 @@ Codex CLI 请求 `gpt-5.4` 时，EasyLLM 实际向上游发送 `deepseek-chat`�
 # 非流式
 curl -X POST http://localhost:8022/v1/responses \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.4","input":"你好","stream":false}'
+  -d '{"model":"gpt-5.6-sol","input":"你好","stream":false}'
 
 # 流式
 curl -X POST http://localhost:8022/v1/responses \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.4","input":"你好","stream":true}'
+  -d '{"model":"gpt-5.6-sol","input":"你好","stream":true}'
 ```
 
 ## 相关模块

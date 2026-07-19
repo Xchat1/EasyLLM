@@ -68,7 +68,7 @@
           <div class="doc-code">
             <div class="doc-code-header">自动配置的 ~/.codex/config.toml</div>
             <pre>model_provider = "easyllm"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 
 [model_providers.easyllm]
 name = "EasyLLM API Service"
@@ -98,7 +98,7 @@ supports_websockets = false</pre>
           <div class="doc-code">
             <div class="doc-code-header">示例：自定义 API 账号</div>
             <pre>model_provider = "my-provider"
-model = "gpt-5.4"
+model = "gpt-5.6-sol"
 
 [model_providers.my-provider]
 name = "my-provider"
@@ -115,7 +115,7 @@ wire_api = "responses"</pre>
           <div class="doc-code">
             <div class="doc-code-header">自动配置的 ~/.codex/config.toml</div>
             <pre>model_provider = "relay"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 
 [model_providers.relay]
 name = "EasyLLM Relay"
@@ -154,7 +154,7 @@ requires_openai_auth = false</pre>
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "model": "gpt-5.4",
+    "model": "gpt-5.6-sol",
     "input": "写一个快速排序算法",
     "stream": true
   }'</pre>
@@ -200,7 +200,7 @@ client = OpenAI(
 )
 
 response = client.responses.create(
-    model="gpt-5.4",
+    model="gpt-5.6-sol",
     input="用 Python 写一个命令行参数解析示例",
 )
 
@@ -236,7 +236,7 @@ print(response.output_text)</pre>
         <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
           <span class="text-2xl">📦</span> 批量导入
         </h2>
-        <p class="text-sm text-gray-400 mb-4">支持 token 文件、自适应导入（上传单个/多个 JSON 自动识别格式）、refresh_token、CPA JSON，以及 EasyLLM 备份文件。</p>
+        <p class="text-sm text-gray-400 mb-4">支持 token 文件、自适应导入（自动识别 Sub2API 等格式）、refresh_token、CPA JSON，以及 EasyLLM 备份文件。</p>
 
         <div class="space-y-4">
           <div>
@@ -257,7 +257,7 @@ print(response.output_text)</pre>
 
           <div>
             <h3 class="text-sm font-semibold text-white mb-2">自适应导入（上传 JSON）</h3>
-            <p class="text-xs text-gray-400 mb-2">在 Web 端选择单个或多个 JSON 文件即可自动识别并导入；也可用 API 上传 multipart 文件。</p>
+            <p class="text-xs text-gray-400 mb-2">在 Web 端选择单个或多个 JSON 文件即可自动识别并导入；支持 Sub2API 当前 v1 与旧版账号导出，也可用 API 上传 multipart 文件。</p>
             <div class="doc-code">
               <div class="doc-code-header">bash</div>
               <pre>curl -X POST http://localhost:{{ port }}/api/v1/openai/import/auto-files \
@@ -382,7 +382,7 @@ const faqs = [
 
 const curlSnippets = {
   'codex-oauth': `model_provider = "easyllm"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 
 [model_providers.easyllm]
 name = "EasyLLM API Service"
@@ -391,7 +391,7 @@ wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = false`,
   'api-account': `model_provider = "my-provider"
-model = "gpt-5.4"
+model = "gpt-5.6-sol"
 
 [model_providers.my-provider]
 name = "my-provider"
@@ -399,7 +399,7 @@ base_url = "https://api.example.com/v1"
 wire_api = "responses"`,
   'codex-pool': `chatgpt_base_url = "http://localhost:PORT"`,
   'codex-relay': `model_provider = "relay"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 
 [model_providers.relay]
 name = "EasyLLM Relay"
@@ -410,7 +410,7 @@ requires_openai_auth = false`,
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{
-    "model": "gpt-5.4",
+    "model": "gpt-5.6-sol",
     "input": "写一个快速排序算法",
     "stream": true
   }'`,
@@ -425,7 +425,7 @@ client = OpenAI(
 )
 
 response = client.responses.create(
-    model="gpt-5.4",
+    model="gpt-5.6-sol",
     input="用 Python 写一个命令行参数解析示例",
 )
 

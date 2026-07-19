@@ -21,7 +21,7 @@ func newDatabaseTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestAutoMigrateDropsNonOpenAITables(t *testing.T) {
+func TestAutoMigratePreservesUnmanagedTables(t *testing.T) {
 	db := newDatabaseTestDB(t)
 	extraTables := []string{
 		"open_ai_api_keys",
@@ -41,8 +41,8 @@ func TestAutoMigrateDropsNonOpenAITables(t *testing.T) {
 	}
 
 	for _, table := range extraTables {
-		if db.Migrator().HasTable(table) {
-			t.Fatalf("expected non-openai table %s to be dropped", table)
+		if !db.Migrator().HasTable(table) {
+			t.Fatalf("expected unmanaged table %s to be preserved", table)
 		}
 	}
 

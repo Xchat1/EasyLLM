@@ -23,6 +23,7 @@ import (
 // 自适应导入格式标识（与前端展示一致）
 const (
 	scanFormatEasyLLMExport = "easyllm-export"
+	scanFormatSub2API       = "sub2api"
 	scanFormatCPA           = "cpa"
 	scanFormatToken         = "token"
 )
@@ -31,6 +32,8 @@ func scanFormatLabel(format string) string {
 	switch format {
 	case scanFormatEasyLLMExport:
 		return "EasyLLM 备份"
+	case scanFormatSub2API:
+		return "Sub2API"
 	case scanFormatCPA:
 		return "CPA"
 	case scanFormatToken:
@@ -49,6 +52,9 @@ func detectAutoImportFormat(raw []byte, filename string) string {
 
 	if looksLikeEasyLLMExportJSON(trimmed) {
 		return scanFormatEasyLLMExport
+	}
+	if looksLikeSub2APIExportJSON(trimmed) {
+		return scanFormatSub2API
 	}
 
 	// 文件名或 type 字段优先识别 CPA。
@@ -86,6 +92,161 @@ func detectAutoImportFormat(raw []byte, filename string) string {
 		return scanFormatToken
 	}
 	return ""
+}
+
+type sub2APIExportPayload struct {
+	Type       string           `json:"type"`
+	Version    int              `json:"version"`
+	ExportedAt string           `json:"exported_at"`
+	Accounts   []sub2APIAccount `json:"accounts"`
+}
+
+type sub2APIAccount struct {
+	Name        string                     `json:"name"`
+	Platform    string                     `json:"platform"`
+	Type        string                     `json:"type"`
+	Credentials map[string]json.RawMessage `json:"credentials"`
+}
+
+func sub2APIPayloadBytes(raw []byte) []byte {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(raw, &root) != nil {
+		return raw
+	}
+	if _, ok := root["accounts"]; ok {
+		return raw
+	}
+	data := bytes.TrimSpace(root["data"])
+	if len(data) > 0 && data[0] == '{' {
+		return data
+	}
+	return raw
+}
+
+func looksLikeSub2APIExportJSON(raw []byte) bool {
+	payloadRaw := sub2APIPayloadBytes(raw)
+	var root struct {
+		Type     string          `json:"type"`
+		Accounts json.RawMessage `json:"accounts"`
+	}
+	if err := json.Unmarshal(payloadRaw, &root); err != nil {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(root.Type)), "sub2api-") {
+		return true
+	}
+	if len(bytes.TrimSpace(root.Accounts)) == 0 {
+		return false
+	}
+	var accounts []sub2APIAccount
+	if err := json.Unmarshal(root.Accounts, &accounts); err != nil || len(accounts) == 0 {
+		return false
+	}
+	for _, account := range accounts {
+		if len(account.Credentials) > 0 &&
+			(strings.TrimSpace(account.Platform) != "" || strings.TrimSpace(account.Type) != "") {
+			return true
+		}
+	}
+	return false
+}
+
+func parseSub2APIExport(raw []byte) ([]sub2APIAccount, error) {
+	var payload sub2APIExportPayload
+	if err := json.Unmarshal(sub2APIPayloadBytes(raw), &payload); err != nil {
+		return nil, fmt.Errorf("无效的 Sub2API 数据: %w", err)
+	}
+	payloadType := strings.ToLower(strings.TrimSpace(payload.Type))
+	if payloadType != "" && payloadType != "sub2api-data" && payloadType != "sub2api-bundle" {
+		return nil, fmt.Errorf("不支持的 Sub2API 数据类型: %s", payload.Type)
+	}
+	if payload.Version != 0 && payload.Version != 1 {
+		return nil, fmt.Errorf("不支持的 Sub2API 数据版本: %d", payload.Version)
+	}
+	if len(payload.Accounts) == 0 {
+		return nil, fmt.Errorf("Sub2API 文件中没有账号数据")
+	}
+	return payload.Accounts, nil
+}
+
+func sub2APICredentialString(credentials map[string]json.RawMessage, keys ...string) string {
+	for _, key := range keys {
+		raw := bytes.TrimSpace(credentials[key])
+		if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err == nil && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func sub2APIExpiry(credentials map[string]json.RawMessage) string {
+	for _, key := range []string{"expires_at", "expiresAt", "expires"} {
+		raw := bytes.TrimSpace(credentials[key])
+		if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err == nil {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if _, err := time.Parse(time.RFC3339, value); err == nil {
+				return value
+			}
+			if unixValue, err := strconv.ParseInt(value, 10, 64); err == nil {
+				return sub2APIUnixTime(unixValue)
+			}
+			continue
+		}
+		var unixValue int64
+		if err := json.Unmarshal(raw, &unixValue); err == nil {
+			return sub2APIUnixTime(unixValue)
+		}
+		var unixFloat float64
+		if err := json.Unmarshal(raw, &unixFloat); err == nil {
+			return sub2APIUnixTime(int64(unixFloat))
+		}
+	}
+	return ""
+}
+
+func sub2APIUnixTime(value int64) string {
+	if value <= 0 {
+		return ""
+	}
+	for value > 10_000_000_000 {
+		value /= 1000
+	}
+	return time.Unix(value, 0).UTC().Format(time.RFC3339)
+}
+
+func sub2APIAccountTokenData(account sub2APIAccount) (*tokenFileData, error) {
+	credentials := account.Credentials
+	data := &tokenFileData{
+		IDToken:        sub2APICredentialString(credentials, "id_token", "idToken"),
+		AccessToken:    sub2APICredentialString(credentials, "access_token", "accessToken"),
+		RefreshToken:   sub2APICredentialString(credentials, "refresh_token", "refreshToken"),
+		AccountID:      sub2APICredentialString(credentials, "chatgpt_account_id", "account_id", "accountId", "chatgptAccountId"),
+		ChatGPTUserID:  sub2APICredentialString(credentials, "chatgpt_user_id", "user_id", "userId", "chatgptUserId"),
+		OrganizationID: sub2APICredentialString(credentials, "organization_id", "organizationId"),
+		Email:          sub2APICredentialString(credentials, "email"),
+		PlanType:       sub2APICredentialString(credentials, "plan_type", "planType"),
+		Expired:        sub2APIExpiry(credentials),
+		Type:           "codex",
+	}
+	if data.Email == "" {
+		data.Email = strings.TrimSpace(account.Name)
+	}
+	data.Normalize()
+	if err := validateCPAEntry(data); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func looksLikeEasyLLMExportJSON(raw []byte) bool {
@@ -158,7 +319,7 @@ func (h *OpenAIHandler) importAutoJSONFile(filename string, raw []byte, existing
 		return []tokenImportResult{{
 			Filename: filename,
 			Success:  false,
-			Error:    "无法识别 JSON 格式，支持 Token、CPA、EasyLLM 备份",
+			Error:    "无法识别 JSON 格式，支持 Token、CPA、Sub2API、EasyLLM 备份",
 		}}
 	}
 
@@ -169,6 +330,44 @@ func (h *OpenAIHandler) importAutoJSONFile(filename string, raw []byte, existing
 			return []tokenImportResult{{Filename: filename, Format: format, Success: false, Error: err.Error()}}
 		}
 		return ginResultsToTokenImportResults(filename, format, out)
+
+	case scanFormatSub2API:
+		accounts, err := parseSub2APIExport(raw)
+		if err != nil {
+			return []tokenImportResult{{Filename: filename, Format: format, Success: false, Error: err.Error()}}
+		}
+		results := make([]tokenImportResult, 0, len(accounts))
+		for _, account := range accounts {
+			label := strings.TrimSpace(account.Name)
+			platform := strings.ToLower(strings.TrimSpace(account.Platform))
+			accountType := strings.ToLower(strings.TrimSpace(account.Type))
+			if platform != "openai" || (accountType != "" && accountType != "oauth") {
+				results = append(results, tokenImportResult{
+					Filename: filename,
+					Format:   format,
+					Email:    label,
+					Skipped:  true,
+					Error:    fmt.Sprintf("跳过不支持的 Sub2API 账号: platform=%s type=%s", account.Platform, account.Type),
+				})
+				continue
+			}
+			entry, err := sub2APIAccountTokenData(account)
+			if err != nil {
+				results = append(results, tokenImportResult{
+					Filename: filename, Format: format, Email: label, Error: err.Error(),
+				})
+				continue
+			}
+			saved, action, skipped, err := h.importSingleTokenFileWithAction(entry, existingAccounts)
+			if err != nil {
+				results = append(results, tokenImportResult{
+					Filename: filename, Format: format, Email: entry.Email, Skipped: skipped, Error: err.Error(),
+				})
+				continue
+			}
+			results = append(results, tokenImportSuccessResult(filename, format, saved, action))
+		}
+		return results
 
 	case scanFormatCPA:
 		entries, err := parseCPAFileEntries(raw)
@@ -438,6 +637,47 @@ func (h *OpenAIHandler) importEasyLLMExportBytes(raw []byte, existingAccounts *[
 	return h.applyEasyLLMExportPayload(&payload, existingAccounts)
 }
 
+func easyLLMExportRestoresLocalAccess(raw []byte) bool {
+	if detectAutoImportFormat(raw, "manual-input.json") != scanFormatEasyLLMExport {
+		return false
+	}
+	var payload easyLLMExportPayload
+	return json.Unmarshal(raw, &payload) == nil && payload.LocalAccess != nil
+}
+
+// ImportByAutoJSON imports pasted JSON or NDJSON using the same format
+// detection as file uploads.
+func (h *OpenAIHandler) ImportByAutoJSON(c *gin.Context) {
+	body := http.MaxBytesReader(c.Writer, c.Request.Body, maxImportMultipartMemory)
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "读取导入内容失败: " + err.Error(), Code: "INVALID_REQUEST"})
+		return
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "导入内容不能为空", Code: "INVALID_REQUEST"})
+		return
+	}
+
+	existingAccounts, _ := h.storage.List()
+	restoredLocalAccess := easyLLMExportRestoresLocalAccess(raw)
+	results := h.importAutoJSONFile("manual-input.json", raw, &existingAccounts)
+	successCount, skippedCount, failedCount, createdCount, updatedCount := summarizeTokenImportResults(results)
+	if successCount > 0 {
+		refreshCodexProxyPool()
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"total":                 len(results),
+		"success":               successCount,
+		"skipped":               skippedCount,
+		"failed":                failedCount,
+		"created":               createdCount,
+		"updated":               updatedCount,
+		"restored_local_access": restoredLocalAccess,
+		"results":               results,
+	})
+}
+
 // ImportByAutoFiles 上传单个或多个 JSON 文件，自动识别格式并导入（与扫描目录逻辑一致）。
 func (h *OpenAIHandler) ImportByAutoFiles(c *gin.Context) {
 	if err := c.Request.ParseMultipartForm(maxImportMultipartMemory); err != nil {
@@ -459,6 +699,7 @@ func (h *OpenAIHandler) ImportByAutoFiles(c *gin.Context) {
 	existingAccounts, _ := h.storage.List()
 	resultsMu := sync.Mutex{}
 	results := make([]tokenImportResult, 0)
+	restoredLocalAccess := false
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 10)
 
@@ -497,6 +738,11 @@ func (h *OpenAIHandler) ImportByAutoFiles(c *gin.Context) {
 				resultsMu.Unlock()
 				return
 			}
+			if easyLLMExportRestoresLocalAccess(raw) {
+				resultsMu.Lock()
+				restoredLocalAccess = true
+				resultsMu.Unlock()
+			}
 
 			existingMu.Lock()
 			fileResults := h.importAutoJSONFile(fname, raw, &existingAccounts)
@@ -514,12 +760,13 @@ func (h *OpenAIHandler) ImportByAutoFiles(c *gin.Context) {
 		refreshCodexProxyPool()
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"total":   len(results),
-		"success": successCount,
-		"skipped": skippedCount,
-		"failed":  failedCount,
-		"created": createdCount,
-		"updated": updatedCount,
-		"results": results,
+		"total":                 len(results),
+		"success":               successCount,
+		"skipped":               skippedCount,
+		"failed":                failedCount,
+		"created":               createdCount,
+		"updated":               updatedCount,
+		"restored_local_access": restoredLocalAccess,
+		"results":               results,
 	})
 }

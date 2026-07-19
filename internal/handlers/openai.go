@@ -184,6 +184,7 @@ func (h *OpenAIHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	// Batch import: token JSON files (no API call needed, parse directly)
 	g.POST("/import/token-files", h.ImportByTokenFiles)       // upload multiple JSON files
 	g.POST("/import/auto-files", h.ImportByAutoFiles)         // 上传单个/多个 JSON，自动识别格式导入
+	g.POST("/import/auto-json", h.ImportByAutoJSON)           // 粘贴 JSON/NDJSON，自动识别格式导入
 	g.POST("/import/refresh-tokens", h.ImportByRefreshTokens) // legacy: refresh_token list
 	g.POST("/import/cpa", h.ImportCPA)                        // CPA / *-cpa.json 单文件或多文件
 	g.POST("/import/from-export", h.ImportFromExport)         // re-import from exported backup JSON (no API calls)
@@ -621,8 +622,10 @@ type tokenFileData struct {
 	RefreshToken          string `json:"refresh_token"`
 	AccountID             string `json:"account_id"`
 	ChatGPTAccountID      string `json:"chatgpt_account_id,omitempty"`
+	ChatGPTUserID         string `json:"chatgpt_user_id,omitempty"`
 	CamelAccountID        string `json:"accountId,omitempty"`
 	CamelChatGPTAccountID string `json:"chatgptAccountId,omitempty"`
+	CamelChatGPTUserID    string `json:"chatgptUserId,omitempty"`
 	OrganizationID        string `json:"organization_id"`
 	CamelOrganizationID   string `json:"organizationId,omitempty"`
 	LastRefresh           string `json:"last_refresh"`
@@ -657,6 +660,9 @@ func (t *tokenFileData) Normalize() {
 	}
 	if t.OrganizationID == "" {
 		t.OrganizationID = strings.TrimSpace(t.CamelOrganizationID)
+	}
+	if t.ChatGPTUserID == "" {
+		t.ChatGPTUserID = strings.TrimSpace(t.CamelChatGPTUserID)
 	}
 	if t.AccountObj != nil {
 		if t.AccountID == "" {
@@ -847,6 +853,9 @@ func (h *OpenAIHandler) importSingleTokenFileWithAction(data *tokenFileData, exi
 	}
 	if data.OrganizationID != "" && strings.TrimSpace(derefStr(account.OrganizationID)) == "" {
 		account.OrganizationID = sPtr(data.OrganizationID)
+	}
+	if data.ChatGPTUserID != "" && strings.TrimSpace(derefStr(account.ChatGPTUserID)) == "" {
+		account.ChatGPTUserID = sPtr(data.ChatGPTUserID)
 	}
 
 	action := "created"
@@ -2199,7 +2208,7 @@ func (h *OpenAIHandler) TestAPIAccount(c *gin.Context) {
 		return
 	}
 	if model == "" {
-		model = "gpt-5.4"
+		model = openaiplatform.CodexDefaultModel
 	}
 
 	wireAPI := strings.ToLower(strings.TrimSpace(derefStr(account.WireAPI)))
@@ -3279,7 +3288,7 @@ func (h *OpenAIHandler) codexLocalAccessState(c *gin.Context) models.CodexLocalA
 		Running:     running,
 		BaseURL:     baseURL,
 		APIPortURL:  strings.TrimRight(baseURL, "/") + "/responses",
-		ModelIDs:    []string{"gpt-5.5", "gpt-5.4"},
+		ModelIDs:    openaiplatform.GPT56CodexModelIDs(),
 		MemberCount: len(collection.AccountIDs),
 		Stats:       h.buildCodexLocalAccessStats(),
 	}

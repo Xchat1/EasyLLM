@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -109,15 +110,7 @@ func (a *App) setupRouter() {
 	r.Use(noStoreAPIMiddleware())
 	r.Use(webUICacheMiddleware())
 
-	// CORS - allow all origins since this is a local tool
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowHeaders:     []string{"*"},
-		ExposeHeaders:    []string{"Content-Length", "Content-Disposition"},
-		AllowCredentials: false,
-		MaxAge:           12 * time.Hour,
-	}))
+	r.Use(cors.New(localCORSConfig()))
 
 	// Serve embedded web UI
 	r.Use(ginStatic.Serve("/", ginStatic.LocalFile("./web/dist", false)))
@@ -131,7 +124,7 @@ func (a *App) setupRouter() {
 	// 公开：API 服务状态（侧栏轮询用，不鉴权，避免 401 导致反复跳登录）
 	api.GET("/api-server/status", a.settings.GetAPIServerStatus)
 
-	// Protected routes — require valid JWT when password is set
+	// Protected routes require a valid login JWT.
 	protected := r.Group("/api/v1")
 	protected.Use(handlers.AuthMiddleware())
 
@@ -240,18 +233,13 @@ func (a *App) proxyV1Request(c *gin.Context) {
 	// OAuth proxy pool instead of Relay (which may point at a different upstream).
 	if path == "/responses" && c.Request.Method == http.MethodPost {
 		if a.shouldRouteV1ResponsesToCodexProxy(c) {
-			if !allowLocalProxyFallback(c) {
+			if !a.authorizeProxyRequest(c, a.codexProxy.IsKnownToken) {
 				return
 			}
-			if requiredKey, ok := storage.GetSetting("proxy_api_key"); ok && requiredKey != "" {
-				token := extractBearerToken(c.GetHeader("Authorization"))
-				isPassthrough := a.codexProxy.IsKnownToken(token)
-				if token != requiredKey && !isPassthrough {
-					rejectUnauthorized(c)
-					return
-				}
-			}
 			a.codexProxy.ProxyRequest(c.Writer, c.Request)
+			return
+		}
+		if !a.authorizeProxyRequest(c, nil) {
 			return
 		}
 		a.relayHandler.HandleRelayResponses(c)
@@ -259,21 +247,15 @@ func (a *App) proxyV1Request(c *gin.Context) {
 	}
 	// Relay: /v1/models (proxied from upstream)
 	if path == "/models" {
+		if !a.authorizeProxyRequest(c, nil) {
+			return
+		}
 		a.relayHandler.HandleRelayModels(c)
 		return
 	}
 
-	if !allowLocalProxyFallback(c) {
+	if !a.authorizeProxyRequest(c, a.isActiveAPIAccountToken) {
 		return
-	}
-
-	// API key authentication: if proxy_api_key is set, require it (same as codex proxy).
-	if requiredKey, ok := storage.GetSetting("proxy_api_key"); ok && requiredKey != "" {
-		token := extractBearerToken(c.GetHeader("Authorization"))
-		if token != requiredKey && !a.isActiveAPIAccountToken(token) {
-			rejectUnauthorized(c)
-			return
-		}
 	}
 
 	// If explicitly configured to keep legacy behavior, route /v1/* into the Codex proxy.
@@ -457,6 +439,47 @@ func allowLocalProxyFallback(c *gin.Context) bool {
 		},
 	})
 	return false
+}
+
+func (a *App) authorizeProxyRequest(c *gin.Context, allowToken func(string) bool) bool {
+	if !allowLocalProxyFallback(c) {
+		return false
+	}
+	requiredKey, ok := storage.GetSetting("proxy_api_key")
+	requiredKey = strings.TrimSpace(requiredKey)
+	if !ok || requiredKey == "" {
+		return true
+	}
+	token := strings.TrimSpace(extractBearerToken(c.GetHeader("Authorization")))
+	if token == requiredKey || (allowToken != nil && allowToken(token)) {
+		return true
+	}
+	rejectUnauthorized(c)
+	return false
+}
+
+func localCORSConfig() cors.Config {
+	return cors.Config{
+		AllowOriginFunc:  isAllowedBrowserOrigin,
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
+		AllowHeaders:     []string{"*"},
+		ExposeHeaders:    []string{"Content-Length", "Content-Disposition"},
+		AllowCredentials: false,
+		MaxAge:           12 * time.Hour,
+	}
+}
+
+func isAllowedBrowserOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func isLoopbackRemoteAddr(remoteAddr string) bool {

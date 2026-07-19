@@ -10,7 +10,7 @@
         </div>
       </div>
       <div class="stable-actions">
-        <button @click="showImportDialog = true" class="btn btn-secondary header-action-btn" title="批量导入账号">
+        <button @click="showImportDialog = true" class="btn btn-secondary header-action-btn" title="导入账号">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
           </svg>
@@ -59,7 +59,7 @@
       <div v-if="loading" class="text-center py-12 text-gray-400">加载中...</div>
       <div v-else-if="oauthAccounts.length === 0" class="text-center py-12 text-gray-500">
         <p class="text-base mb-1">暂无 OAuth 账号</p>
-        <p class="text-sm">点击"批量导入"或"OAuth 登录"添加账号</p>
+        <p class="text-sm">点击"导入"或"OAuth 登录"添加账号</p>
       </div>
       <template v-else>
         <!-- Quota refresh bar -->
@@ -616,7 +616,7 @@
     <div v-if="showImportDialog" class="import-dialog-overlay fixed inset-0 flex items-center justify-center z-50 p-4">
       <div class="import-dialog-panel bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl shadow-2xl">
         <div class="flex items-center justify-between p-6 border-b border-gray-700">
-          <h2 class="text-lg font-semibold text-white">批量导入账号</h2>
+          <h2 class="text-lg font-semibold text-white">导入账号</h2>
           <button @click="closeImportDialog" class="text-gray-400 hover:text-white">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -626,7 +626,7 @@
         <div class="p-6 space-y-4">
 
           <!-- Import mode tabs -->
-          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-1 bg-gray-800 rounded-lg p-1">
+          <div class="grid grid-cols-3 gap-1 bg-gray-800 rounded-lg p-1">
             <button
               v-for="m in importModes"
               :key="m.id"
@@ -684,8 +684,8 @@
             <div class="bg-blue-900/20 border border-blue-700/40 rounded-lg p-3 text-xs text-blue-300 mb-3">
               <div class="flex items-start justify-between gap-2">
                 <div>
-                  🎯 选择 JSON 文件后<strong class="text-blue-200">自动识别</strong>格式并导入，无需知道文件属于哪种导出工具<br/>
-                  <span class="text-blue-400/70">支持单个或多个文件；自动适配 Token、CPA、EasyLLM 备份；单文件内也支持数组、NDJSON</span>
+                  选择 JSON 文件后自动识别格式并导入。<br/>
+                  <span class="text-blue-400/70">支持 CPA、Sub2API、EasyLLM、Token；可选择单文件、多文件或文件夹，单个文件也支持数组和 NDJSON。</span>
                 </div>
               </div>
             </div>
@@ -780,17 +780,17 @@
           <!-- Mode: JSON Text -->
           <div v-if="importMode === 'json-text'">
             <div class="bg-blue-900/20 border border-blue-700/40 rounded-lg p-3 text-xs text-blue-300 mb-3">
-              支持 ChatGPT Session JSON（<code class="text-blue-200">accessToken</code> + 账号信息）、CPA 格式，以及单对象、数组或 NDJSON。
+              粘贴后自动识别 CPA、Sub2API、EasyLLM、Token，支持单对象、数组和 NDJSON。
             </div>
             <div class="mb-3 flex items-center justify-between">
-              <span class="text-sm text-gray-300">粘贴 JSON 文本 (支持单个对象或数组)</span>
+              <span class="text-sm text-gray-300">粘贴 JSON 或 NDJSON</span>
               <button v-if="importJsonText" @click="importJsonText = ''; importResults = null" class="text-xs text-gray-500 hover:text-red-400">清空</button>
             </div>
             <textarea
               v-model="importJsonText"
               rows="12"
               class="input w-full font-mono text-xs whitespace-pre resize-y"
-              placeholder='粘贴 ChatGPT Session JSON 或其他支持的 JSON 格式...'
+              placeholder='粘贴 CPA、Sub2API、EasyLLM 或 Token JSON...'
             ></textarea>
           </div>
 
@@ -1009,7 +1009,7 @@
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Model <span class="text-red-400">*</span></label>
-            <input v-model="apiForm.model" class="input w-full" placeholder="e.g. gpt-5.4"/>
+            <input v-model="apiForm.model" class="input w-full" placeholder="e.g. gpt-5.6-sol"/>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Base URL <span class="text-red-400">*</span></label>
@@ -1724,17 +1724,14 @@ const selectingImportDirectory = ref(false)
 const importCPAFiles = ref([])
 const importCPAFileInput = ref(null)
 const importCPAAccountCount = ref(0)
-const importMode = ref('token-files')
+const importMode = ref('auto-files')
 const importBackupFile = ref(null)  // 从备份导入用的解析后的 JSON 对象
 const importBackupFileInput = ref(null)
 const importJsonText = ref('')
 const importModes = [
-  { id: 'token-files',  label: '⚡ Token文件' },
-  { id: 'auto-files',   label: '🎯 自适应' },
-  { id: 'json-text',    label: '📝 JSON 文本' },
-  { id: 'refresh-tokens', label: '🔄 refresh_token' },
-  { id: 'cpa',          label: '📋 CPA' },
-  { id: 'from-export',  label: '📦 从备份导入' },
+  { id: 'auto-files', label: '文件导入' },
+  { id: 'json-text', label: '手动输入' },
+  { id: 'refresh-tokens', label: 'Refresh Token' },
 ]
 
 // OAuth dialog
@@ -2755,27 +2752,18 @@ function countJsonTextAccounts(text) {
 }
 
 const canRunImport = computed(() => {
-  if (importMode.value === 'token-files') return importFiles.value.length > 0
   if (importMode.value === 'auto-files') return importAutoFiles.value.length > 0
   if (importMode.value === 'refresh-tokens') return importTokens.value.length > 0
   if (importMode.value === 'json-text') return countJsonTextAccounts(importJsonText.value) > 0
-  if (importMode.value === 'cpa') return importCPAFiles.value.length > 0
-  if (importMode.value === 'from-export') return !!importBackupFile.value
   return false
 })
 
 const importButtonLabel = computed(() => {
-  if (importMode.value === 'token-files') return `导入 ${importFiles.value.length} 个文件`
-  if (importMode.value === 'auto-files') return `自适应导入 ${importAutoFiles.value.length} 个文件`
+  if (importMode.value === 'auto-files') return `导入 ${importAutoFiles.value.length} 个文件`
   if (importMode.value === 'refresh-tokens') return `导入 ${importTokens.value.length} 个账号`
-  if (importMode.value === 'cpa') return `导入 ${importCPAAccountCount.value} 个 CPA 账号`
   if (importMode.value === 'json-text') {
     const count = countJsonTextAccounts(importJsonText.value)
-    return count > 1 ? `导入 ${count} 个账号` : '导入 1 个账号'
-  }
-  if (importMode.value === 'from-export') {
-    const total = (importBackupFile.value?.oauth_accounts?.length ?? 0) + (importBackupFile.value?.api_accounts?.length ?? 0)
-    return importBackupFile.value?.local_access ? `从备份导入 ${total} 个账号 + 本地服务配置` : `从备份导入 ${total} 个账号`
+    return count > 1 ? `导入 ${count} 条数据` : '导入'
   }
   return '导入'
 })
@@ -3013,7 +3001,7 @@ async function runImport() {
     } else if (importMode.value === 'json-text') {
       if (!importJsonText.value) throw new Error('请输入 JSON 文本')
       const token = localStorage.getItem('easyllm_token')
-      const fetchRes = await fetch('/api/v1/openai/import/cpa', {
+      const fetchRes = await fetch('/api/v1/openai/import/auto-json', {
         method: 'POST',
         body: importJsonText.value,
         headers: {
@@ -3031,6 +3019,8 @@ async function runImport() {
         skipped: res?.skipped ?? 0,
         failed: res?.failed ?? 0,
         total: res?.total ?? 0,
+        created: res?.created ?? 0,
+        updated: res?.updated ?? 0,
         results: res?.results ?? []
       }
 
@@ -3055,6 +3045,8 @@ async function runImport() {
         skipped: res?.skipped ?? 0,
         failed: res?.failed ?? 0,
         total: res?.total ?? 0,
+        created: res?.created ?? 0,
+        updated: res?.updated ?? 0,
         results: res?.results ?? []
       }
 
@@ -3115,7 +3107,7 @@ async function runImport() {
       }
     }
 
-    const restoredLocalAccess = importMode.value === 'from-export' && !!importBackupFile.value?.local_access
+    const restoredLocalAccess = !!res?.restored_local_access || (importMode.value === 'from-export' && !!importBackupFile.value?.local_access)
     const importedCount = importResults.value?.success ?? 0
     if (restoredLocalAccess || importedCount > 0) {
       const reloadTasks = [loadServiceConfig(), loadLocalAccess()]
@@ -4195,6 +4187,7 @@ function accountDisplayTitle(account) {
 
 const scanImportFormatLabels = {
   'easyllm-export': 'EasyLLM',
+  'sub2api': 'Sub2API',
   'cpa': 'CPA',
   'token': 'Token',
 }

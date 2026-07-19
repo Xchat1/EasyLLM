@@ -34,12 +34,12 @@ DEFAULT_PASSWORD=replace-before-first-start
 | 模式 | 适用场景 |
 | --- | --- |
 | Token 文件 | `token_*.json`、`codex_tokens_*.json`，支持单对象、数组、NDJSON |
-| 自适应 | 自动识别 Token、CPA、EasyLLM 备份 |
+| 自适应 | 自动识别 Token、CPA、Sub2API、EasyLLM 备份 |
 | refresh_token | 只有 refresh token 列表时使用，会请求 OpenAI 换票 |
 | CPA | `*-cpa.json`、`*.codex.cpa.json` |
 | 从备份导入 | EasyLLM「导出账号」生成的备份文件 |
 
-自适应导入支持选择单个 JSON、多选 JSON 或选择整个文件夹；文件夹导入会递归筛选 `.json` 文件。
+自适应导入支持选择单个 JSON、多选 JSON 或选择整个文件夹；文件夹导入会递归筛选 `.json` 文件。Sub2API 支持当前 `sub2api-data` v1、旧版 `sub2api-bundle` 和无类型标记的账号导出，只导入其中的 OpenAI OAuth 账号。
 
 ## 3. Codex CLI 接入
 
@@ -51,7 +51,7 @@ DEFAULT_PASSWORD=replace-before-first-start
 
 ```toml
 model_provider = "easyllm"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 
 [model_providers.easyllm]
 name = "EasyLLM API Service"
@@ -97,7 +97,7 @@ Relay 模式让 Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容的上游提�
 进入侧边栏 **Codex → Relay**：
 
 1. 在「上游渠道」区域点击「添加渠道」，填写上游 URL 和 API Key
-2. 根据需要配置模型映射（如 `{"gpt-5.4":"deepseek-chat"}`）
+2. 根据需要配置模型映射（如 `{"gpt-5.6-sol":"deepseek-reasoner","gpt-5.6-terra":"deepseek-chat","gpt-5.6-luna":"deepseek-chat"}`）
 3. 点击「启动并注入 Codex」，EasyLLM 自动写入 `~/.codex/config.toml`
 
 多个启用渠道会按 round-robin 轮询；渠道 URL、API Key、认证头和认证前缀会在保存时自动去除多余空白，空 URL 的渠道不会参与转发。
@@ -135,13 +135,13 @@ GET  /pool/status               代理池状态（兼容旧版）
 # Relay 模式：非流式
 curl -X POST http://localhost:8022/v1/responses \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.4","input":"你好","stream":false}'
+  -d '{"model":"gpt-5.6-sol","input":"你好","stream":false}'
 
 # 代理池模式：流式
 curl http://localhost:8022/v1/responses \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_PROXY_API_KEY" \
-  -d '{"model":"gpt-5.4","input":"hello","stream":true}'
+  -d '{"model":"gpt-5.6-sol","input":"hello","stream":true}'
 ```
 
 ## 5. 管理 API

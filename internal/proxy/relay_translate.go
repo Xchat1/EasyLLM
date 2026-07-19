@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	openaiplatform "easyllm/internal/openai"
 	"fmt"
 	"strings"
 
@@ -488,9 +489,13 @@ func isCodexPlaceholderModel(name string) bool {
 }
 
 // PreferredCodexModel picks the Codex-facing model name for ~/.codex/config.toml injection.
-// It prefers mapped gpt-* keys (e.g. gpt-5.5) over upstream default_model values (e.g. deepseek-reasoner).
+// It prefers mapped gpt-* keys (e.g. gpt-5.6-sol) over upstream default_model values (e.g. deepseek-reasoner).
 func PreferredCodexModel(modelMap map[string]string, defaultModel string) string {
-	for _, preferred := range []string{"gpt-5.5", "gpt-5.4"} {
+	preferredModels := append(openaiplatform.GPT56CompatibleCodexModelIDs(),
+		openaiplatform.CodexModelGPT55,
+		openaiplatform.CodexModelGPT54,
+	)
+	for _, preferred := range preferredModels {
 		if _, ok := modelMap[preferred]; ok {
 			return preferred
 		}
@@ -510,7 +515,7 @@ func PreferredCodexModel(modelMap map[string]string, defaultModel string) string
 	if isCodexPlaceholderModel(defaultModel) {
 		return defaultModel
 	}
-	return "gpt-5.5"
+	return openaiplatform.CodexDefaultModel
 }
 
 // ── Content conversion ─────────────────────────────────────────────────────────

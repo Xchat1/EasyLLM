@@ -1,7 +1,8 @@
 // importsub2api: 将 sub2api 导出的账户 JSON 导入 EasyLLM 数据库。
 //
 // 用法:
-//   go run ./cmd/importsub2api <sub2api-export.json>
+//
+//	go run ./cmd/importsub2api <sub2api-export.json>
 //
 // 会自动使用与 EasyLLM 主程序相同的数据库路径（由环境变量 / 默认配置决定）。
 package main
@@ -23,8 +24,10 @@ import (
 
 // sub2api 导出格式
 type sub2apiExport struct {
-	ExportedAt string          `json:"exported_at"`
-	Proxies    json.RawMessage `json:"proxies"`
+	Type       string           `json:"type"`
+	Version    int              `json:"version"`
+	ExportedAt string           `json:"exported_at"`
+	Proxies    json.RawMessage  `json:"proxies"`
 	Accounts   []sub2apiAccount `json:"accounts"`
 }
 
@@ -44,8 +47,11 @@ type sub2apiAccount struct {
 
 type sub2apiCredentials struct {
 	AccessToken      string `json:"access_token"`
+	RefreshToken     string `json:"refresh_token"`
+	IDToken          string `json:"id_token"`
 	ChatGPTAccountID string `json:"chatgpt_account_id"`
 	ChatGPTUserID    string `json:"chatgpt_user_id"`
+	OrganizationID   string `json:"organization_id"`
 	ClientID         string `json:"client_id"`
 	Email            string `json:"email"`
 	ExpiresAt        string `json:"expires_at"`
@@ -144,20 +150,29 @@ func main() {
 		}
 
 		account := &models.OpenAIAccount{
-			ID:           uuid.New().String(),
-			Email:        email,
-			AccountType:  models.OpenAIAccountTypeOAuth,
-			Status:       "active",
-			AccessToken:  sPtr(accessToken),
-			ExpiresAt:    expiresAt,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID:          uuid.New().String(),
+			Email:       email,
+			AccountType: models.OpenAIAccountTypeOAuth,
+			Status:      "active",
+			AccessToken: sPtr(accessToken),
+			ExpiresAt:   expiresAt,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if sa.Credentials.RefreshToken != "" {
+			account.RefreshToken = sPtr(sa.Credentials.RefreshToken)
+		}
+		if sa.Credentials.IDToken != "" {
+			account.IDToken = sPtr(sa.Credentials.IDToken)
 		}
 		if sa.Credentials.ChatGPTAccountID != "" {
 			account.ChatGPTAccountID = sPtr(sa.Credentials.ChatGPTAccountID)
 		}
 		if sa.Credentials.ChatGPTUserID != "" {
 			account.ChatGPTUserID = sPtr(sa.Credentials.ChatGPTUserID)
+		}
+		if sa.Credentials.OrganizationID != "" {
+			account.OrganizationID = sPtr(sa.Credentials.OrganizationID)
 		}
 		if sa.Credentials.PlanType != "" {
 			account.Plan = sPtr(sa.Credentials.PlanType)

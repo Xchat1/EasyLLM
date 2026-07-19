@@ -137,7 +137,7 @@
             v-model="globalConfig.default_model"
             type="text"
             class="input"
-            placeholder="gpt-5.5"
+            placeholder="gpt-5.6-sol"
           />
           <p class="mt-1 text-xs text-gray-500">未在映射表中的 Codex 模型名将自动使用此默认上游模型</p>
         </div>
@@ -149,7 +149,7 @@
             v-model="globalConfig.model_map_json"
             class="input font-mono text-sm"
             rows="4"
-            placeholder='{"codex-model": "upstream-model", "gpt-5.4": "deepseek-v4-pro"}'
+            placeholder='{"gpt-5.6-sol": "upstream-reasoner", "gpt-5.6-terra": "upstream-chat", "gpt-5.6-luna": "upstream-fast"}'
           />
           <p class="mt-1 text-xs text-gray-500">JSON 格式，或逗号分隔的 key:value 对</p>
         </div>

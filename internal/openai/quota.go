@@ -170,7 +170,7 @@ func fetchUsageQuota(ctx context.Context, client *http.Client, accessToken, chat
 
 func fetchCodexHeadersQuota(ctx context.Context, client *http.Client, accessToken, chatgptAccountID string) (*QuotaInfo, error) {
 	reqBody := map[string]interface{}{
-		"model": "gpt-5.5",
+		"model": CodexDefaultModel,
 		"input": []interface{}{
 			map[string]interface{}{
 				"role": "user",

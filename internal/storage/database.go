@@ -42,40 +42,11 @@ func InitDB(cfg *config.Config) error {
 
 // AutoMigrate runs database migrations for all models
 func AutoMigrate() error {
-	if err := DB.AutoMigrate(
+	return DB.AutoMigrate(
 		&models.OpenAIAccount{},
 		&models.CodexAccount{},
 		&models.AppSettings{},
-	); err != nil {
-		return err
-	}
-	return PurgeNonOpenAITables()
-}
-
-// PurgeNonOpenAITables removes any table outside the current local
-// OpenAI/Codex data model.
-func PurgeNonOpenAITables() error {
-	if DB == nil {
-		return nil
-	}
-	allowed := map[string]bool{
-		"open_ai_accounts": true,
-		"codex_accounts":   true,
-		"app_settings":     true,
-	}
-	tables, err := DB.Migrator().GetTables()
-	if err != nil {
-		return err
-	}
-	for _, table := range tables {
-		if allowed[table] || table == "sqlite_sequence" {
-			continue
-		}
-		if err := DB.Migrator().DropTable(table); err != nil {
-			return fmt.Errorf("drop non-openai table %s: %w", table, err)
-		}
-	}
-	return nil
+	)
 }
 
 // GetDB returns the database instance

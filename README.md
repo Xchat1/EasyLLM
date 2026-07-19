@@ -166,15 +166,3 @@ git config core.hooksPath .githooks
 ## License
 
 EasyLLM is licensed under the [Apache License 2.0](./LICENSE).
-
-## 交流与反馈
-
-<p align="center">
-  <a href="./qun.jpg">
-    <img src="./qun.jpg" alt="Codex JSON 共享群二维码" width="220">
-  </a>
-</p>
-
-<p align="center">
-  <sub>扫码加入 Codex JSON 共享群；二维码过期时请查看仓库中的最新图片。</sub>
-</p>

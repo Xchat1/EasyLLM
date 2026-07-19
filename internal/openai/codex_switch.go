@@ -15,7 +15,7 @@ import (
 const (
 	codexAPIServiceProviderID      = "easyllm"
 	codexAPIServiceProviderName    = "EasyLLM API Service"
-	codexAPIServiceDefaultModel    = "gpt-5.5"
+	codexAPIServiceDefaultModel    = CodexDefaultModel
 	codexAPIServiceDefaultWireAPI  = "responses"
 	codexAPIServiceRequiresAuthKey = "requires_openai_auth"
 	codexDesktopLocalAccessID      = "codex_local_access"

@@ -55,6 +55,17 @@ const router = createRouter({
 
 router.beforeEach(async (to, from, next) => {
   syncMacAppFromRoute(to)
+
+  if (to.meta.public) {
+    next()
+    return
+  }
+
+  const token = localStorage.getItem('easyllm_token')
+  if (!token) {
+    next('/login')
+    return
+  }
   next()
 })
 

@@ -122,8 +122,8 @@ func TestFunctionCallOutputBecomesToolMessage(t *testing.T) {
 
 func TestConvertToolFlatToNested(t *testing.T) {
 	flat := map[string]interface{}{
-		"type":     "function",
-		"name":     "my_fn",
+		"type":        "function",
+		"name":        "my_fn",
 		"description": "does stuff",
 		"parameters":  map[string]interface{}{"type": "object"},
 	}
@@ -164,13 +164,23 @@ func TestPreferredCodexModel(t *testing.T) {
 		expected     string
 	}{
 		{
-			name: "prefer gpt-5.5 from map",
+			name: "prefer gpt-5.6 sol from map",
 			modelMap: map[string]string{
-				"gpt-5.4": "deepseek-chat",
-				"gpt-5.5": "deepseek-reasoner",
+				"gpt-5.6-luna":  "deepseek-chat",
+				"gpt-5.6-sol":   "deepseek-reasoner",
+				"gpt-5.6-terra": "deepseek-chat",
 			},
 			defaultModel: "deepseek-reasoner",
-			expected:     "gpt-5.5",
+			expected:     "gpt-5.6-sol",
+		},
+		{
+			name: "prefer gpt-5.6 alias before terra",
+			modelMap: map[string]string{
+				"gpt-5.6-terra": "deepseek-chat",
+				"gpt-5.6":       "deepseek-reasoner",
+			},
+			defaultModel: "deepseek-reasoner",
+			expected:     "gpt-5.6",
 		},
 		{
 			name:         "fallback to codex placeholder default",
@@ -182,7 +192,7 @@ func TestPreferredCodexModel(t *testing.T) {
 			name:         "upstream default without map",
 			modelMap:     nil,
 			defaultModel: "deepseek-reasoner",
-			expected:     "gpt-5.5",
+			expected:     "gpt-5.6-sol",
 		},
 	}
 	for _, tt := range tests {
@@ -196,15 +206,15 @@ func TestPreferredCodexModel(t *testing.T) {
 
 func TestMapModelName(t *testing.T) {
 	modelMap := map[string]string{
-		"gpt-5.4":        "deepseek-v4-pro",
-		"gpt-5.5":        "deepseek-v4-pro",
+		"gpt-5.4": "deepseek-v4-pro",
+		"gpt-5.5": "deepseek-v4-pro",
 	}
 
 	tests := []struct {
-		input         string
-		modelMap      map[string]string
-		defaultModel  string
-		expected      string
+		input        string
+		modelMap     map[string]string
+		defaultModel string
+		expected     string
 	}{
 		{"gpt-5.4", modelMap, "", "deepseek-v4-pro"},
 		{"gpt-5.5", modelMap, "", "deepseek-v4-pro"},
@@ -303,11 +313,11 @@ func TestSkipDuplicateFunctionCallFromHistory(t *testing.T) {
 	history := []ChatMessage{
 		{Role: "user", Content: "run command"},
 		{
-			Role:      "assistant",
+			Role: "assistant",
 			ToolCalls: []interface{}{
 				map[string]interface{}{
-					"id":   "call_1",
-					"type": "function",
+					"id":       "call_1",
+					"type":     "function",
 					"function": map[string]interface{}{"name": "exec", "arguments": `{"cmd":"ls"}`},
 				},
 			},

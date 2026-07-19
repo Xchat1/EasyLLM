@@ -65,7 +65,7 @@ func TestSortedToolIndices(t *testing.T) {
 
 func TestMapModelNameWildcard(t *testing.T) {
 	modelMap := map[string]string{"*": "deepseek-chat"}
-	got := MapModelName("gpt-5.4", modelMap, "")
+	got := MapModelName("gpt-5.6-sol", modelMap, "")
 	if got != "deepseek-chat" {
 		t.Fatalf("expected deepseek-chat, got %q", got)
 	}
@@ -112,8 +112,8 @@ func TestApplyRelayConfigUpdateNormalizesAndPreservesLimits(t *testing.T) {
 		APIKey:          " relay-key ",
 		AuthHeader:      " Authorization ",
 		AuthValuePrefix: " Bearer ",
-		DefaultModel:    "gpt-5.5",
-		ModelMapJSON:    `{"gpt-5.5":"mistral-large-latest"}`,
+		DefaultModel:    "gpt-5.6-sol",
+		ModelMapJSON:    `{"gpt-5.6-sol":"mistral-large-latest"}`,
 		ToolDenylistStr: "web_search, file_search",
 	})
 
@@ -129,7 +129,7 @@ func TestApplyRelayConfigUpdateNormalizesAndPreservesLimits(t *testing.T) {
 	if got.APIKey != "relay-key" || got.AuthHeader != "Authorization" || got.AuthValuePrefix != "Bearer" {
 		t.Fatalf("unexpected auth fields: key=%q header=%q prefix=%q", got.APIKey, got.AuthHeader, got.AuthValuePrefix)
 	}
-	if got.ModelMap["gpt-5.5"] != "mistral-large-latest" {
+	if got.ModelMap["gpt-5.6-sol"] != "mistral-large-latest" {
 		t.Fatalf("model map was not parsed: %#v", got.ModelMap)
 	}
 	if !got.ToolDenylist["web_search"] || !got.ToolDenylist["file_search"] {

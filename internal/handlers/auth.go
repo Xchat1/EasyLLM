@@ -174,6 +174,19 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		auth := strings.TrimSpace(c.GetHeader("Authorization"))
+		const bearerPrefix = "Bearer "
+		if len(auth) <= len(bearerPrefix) || !strings.EqualFold(auth[:len(bearerPrefix)], bearerPrefix) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, models.APIError{Error: "Authentication required", Code: "UNAUTHORIZED"})
+			return
+		}
+
+		token := strings.TrimSpace(auth[len(bearerPrefix):])
+		if token == "" || verifyJWT(token, config.Get().App.SecretKey) != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, models.APIError{Error: "Invalid or expired token", Code: "UNAUTHORIZED"})
+			return
+		}
+
 		c.Next()
 	}
 }
@@ -220,11 +233,22 @@ func generateJWT(secret string) (string, error) {
 }
 
 // verifyJWT validates a JWT token signed with HMAC-SHA256.
-// Kept for future re-enabling of AuthMiddleware; currently auth is bypassed.
 func verifyJWT(tokenStr, secret string) error {
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) != 3 {
 		return fmt.Errorf("invalid token format")
+	}
+	if secret == "" {
+		return fmt.Errorf("missing signing secret")
+	}
+
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return fmt.Errorf("invalid header encoding")
+	}
+	var header jwtHeader
+	if err := json.Unmarshal(headerJSON, &header); err != nil || header.Alg != "HS256" || header.Typ != "JWT" {
+		return fmt.Errorf("invalid header")
 	}
 
 	signingInput := parts[0] + "." + parts[1]
@@ -246,7 +270,10 @@ func verifyJWT(tokenStr, secret string) error {
 		return fmt.Errorf("invalid payload")
 	}
 
-	if time.Now().Unix() > payload.Exp {
+	if payload.Iss != "easyllm" {
+		return fmt.Errorf("invalid issuer")
+	}
+	if payload.Exp <= 0 || time.Now().Unix() >= payload.Exp {
 		return fmt.Errorf("token expired")
 	}
 
