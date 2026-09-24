@@ -37,7 +37,7 @@
 
         <nav class="flex-1 space-y-5 overflow-y-auto px-3 py-4">
           <section>
-            <div class="px-2 pb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Codex</div>
+            <div class="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider text-gray-400">渠道</div>
             <div class="space-y-1">
               <router-link
                 v-for="item in codexNavRoutes"
@@ -64,7 +64,7 @@
           </section>
 
           <section>
-            <div class="px-2 pb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">系统</div>
+            <div class="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider text-gray-400">系统</div>
             <div class="space-y-1">
               <router-link
                 v-for="item in systemRoutes"
@@ -93,15 +93,19 @@
               <span class="block truncate text-xs text-gray-500">{{ themeModeShortLabel }} · {{ accentThemeLabel }}</span>
             </span>
           </button>
-          <div class="rounded-2xl border border-gray-800 bg-gray-950/60 px-3 py-3 text-xs">
+          <router-link
+            to="/settings"
+            class="block rounded-2xl border border-gray-800 bg-gray-950/60 px-3 py-2.5 text-xs transition-colors hover:border-gray-700 hover:bg-gray-900/60 cursor-pointer"
+            title="点击前往系统设置查看服务端口与状态"
+          >
             <div class="flex items-center justify-between">
-              <span class="text-gray-500">Local API</span>
+              <span class="text-gray-400 font-medium">Local API</span>
               <div class="flex items-center gap-2">
-                <span class="h-2 w-2 rounded-full" :class="serverRunning ? 'bg-emerald-400' : 'bg-gray-600'" />
-                <span class="text-gray-300">:{{ serverPort }}</span>
+                <span class="h-2 w-2 rounded-full" :class="serverRunning ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50' : 'bg-gray-600'" />
+                <span class="text-gray-200 font-mono font-medium">:{{ serverPort }}</span>
               </div>
             </div>
-          </div>
+          </router-link>
           <button
             v-if="isLoggedIn"
             @click="handleLogout"
@@ -148,8 +152,8 @@
         class="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4"
         @click.self="cancelOperationConfirm"
       >
-        <div class="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 shadow-2xl">
-          <div class="flex items-start gap-4 border-b border-gray-700 p-6">
+        <div class="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 shadow-2xl max-h-[calc(100vh-2.5rem)] flex flex-col overflow-hidden">
+          <div class="flex items-start gap-4 border-b border-gray-700 p-6 shrink-0">
             <div class="operation-confirm-mark" :class="operationConfirmMarkClass" aria-hidden="true">
               {{ operationConfirmMark }}
             </div>
@@ -161,7 +165,7 @@
               </p>
             </div>
           </div>
-          <div class="flex items-center justify-end gap-2 p-6">
+          <div class="flex items-center justify-end gap-2 p-6 shrink-0">
             <button type="button" class="btn btn-secondary" @click="cancelOperationConfirm">
               {{ operationConfirm.cancelText }}
             </button>
@@ -194,6 +198,7 @@ const codexNavRoutes = codexRoutes
 const systemRoutes = appSystemRoutes
 // codexModeRoutes: Relay 等 Codex 对接模式，显示在 Codex 分区末尾
 
+const isMac = ref(isMacApp())
 const serverRunning = ref(false)
 const serverPort = ref(8022)
 const SIDEBAR_MIN_WIDTH = 220
@@ -324,6 +329,7 @@ async function handleLogout() {
 }
 
 async function checkServerStatus() {
+  if (document.hidden || window.__easyllm_hidden) return
   try {
     const data = await settingsAPI.apiServerStatus()
     serverRunning.value = data.running
@@ -384,6 +390,8 @@ function stopSidebarResize() {
   window.removeEventListener('pointercancel', stopSidebarResize)
 }
 
+let appVisibilityHandler = null
+
 onMounted(async () => {
   window.addEventListener('keydown', handleAppKeydown)
   syncMacAppFromRoute(route)
@@ -397,8 +405,17 @@ onMounted(async () => {
       // ignore
     }
   }
+  isMac.value = isMacApp()
   checkServerStatus()
-  statusInterval = setInterval(checkServerStatus, 30000)
+  statusInterval = setInterval(checkServerStatus, 60000)
+
+  appVisibilityHandler = () => {
+    if (!document.hidden && !window.__easyllm_hidden) {
+      checkServerStatus()
+    }
+  }
+  document.addEventListener('visibilitychange', appVisibilityHandler)
+  window.addEventListener('easyllm-app-visibility', appVisibilityHandler)
 })
 
 onUnmounted(() => {
@@ -407,6 +424,10 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleAppKeydown)
   if (operationConfirmResolver) operationConfirmResolver(false)
   stopSidebarResize()
+  if (appVisibilityHandler) {
+    document.removeEventListener('visibilitychange', appVisibilityHandler)
+    window.removeEventListener('easyllm-app-visibility', appVisibilityHandler)
+  }
 })
 </script>
 
@@ -493,7 +514,7 @@ onUnmounted(() => {
 }
 
 .sidebar-reopen-btn {
-  @apply fixed left-3 top-3 z-40 flex h-8 w-8 items-center justify-center rounded-lg border text-xl leading-none shadow-xl transition-colors;
+  @apply fixed left-3 top-10 z-40 flex h-8 w-8 items-center justify-center rounded-lg border text-xl leading-none shadow-xl transition-colors;
   background: var(--app-sidebar-bg);
   border-color: var(--app-border);
   color: var(--app-text-secondary);
@@ -533,23 +554,26 @@ onUnmounted(() => {
 }
 
 .nav-item {
-  @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors;
+  @apply flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-all duration-150;
   color: var(--app-text-secondary);
 }
 
 .nav-item:hover {
   background: var(--app-control-hover-bg);
-  color: var(--app-text);
+  color: var(--app-text-primary);
+  transform: translateX(2px);
 }
 
 .nav-item-active {
-  color: #fff;
+  color: #fff !important;
   background: linear-gradient(135deg, var(--app-accent), var(--app-accent-strong));
-  box-shadow: 0 14px 34px var(--app-accent-shadow);
+  box-shadow: 0 4px 14px var(--app-accent-shadow);
+  transform: none !important;
 }
 
 .nav-item-active:hover {
-  color: #fff;
+  color: #fff !important;
   background: linear-gradient(135deg, var(--app-accent), var(--app-accent-strong));
+  transform: none !important;
 }
 </style>

@@ -7,7 +7,7 @@ import (
 
 func TestRelayLogStoreLogAndRecent(t *testing.T) {
 	store := NewRelayLogStore()
-	store.Log("info", "hello", "gpt-5.5", "resp_1")
+	store.Log("info", "hello", "gpt-5.6-sol", "resp_1")
 	store.Log("error", "failed", "", "")
 
 	recent := store.Recent(10)

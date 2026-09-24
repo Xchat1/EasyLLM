@@ -57,9 +57,28 @@
     <!-- OAuth Accounts Tab -->
     <div v-if="activeTab === 'oauth'">
       <div v-if="loading" class="text-center py-12 text-gray-400">加载中...</div>
-      <div v-else-if="oauthAccounts.length === 0" class="text-center py-12 text-gray-500">
-        <p class="text-base mb-1">暂无 OAuth 账号</p>
-        <p class="text-sm">点击"导入"或"OAuth 登录"添加账号</p>
+      <div v-else-if="oauthAccounts.length === 0" class="py-16 px-6 my-6 rounded-2xl border-2 border-dashed border-gray-800 bg-gray-900/20 text-center max-w-xl mx-auto">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+          </svg>
+        </div>
+        <h3 class="text-base font-semibold text-white mb-2">暂无 OAuth 账号</h3>
+        <p class="text-sm text-gray-400 mb-6 max-w-md mx-auto leading-relaxed">支持通过浏览器一键登录获取 OAuth Token，或导入现有 CPA / Token 格式的 JSON 账号文件。</p>
+        <div class="flex items-center justify-center gap-3">
+          <button @click="openOAuthDialog" class="btn btn-primary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+            </svg>
+            OAuth 登录
+          </button>
+          <button @click="showImportDialog = true" class="btn btn-secondary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+            </svg>
+            导入账号
+          </button>
+        </div>
       </div>
       <template v-else>
         <!-- Quota refresh bar -->
@@ -67,7 +86,8 @@
           <div v-if="quotaLastFetched" class="text-xs text-gray-500">
             配额更新于 {{ quotaLastFetched }}
           </div>
-          <div class="account-toolbar account-toolbar--oauth">
+          <div class="w-full overflow-x-auto pb-1 scrollbar-none">
+            <div class="account-toolbar account-toolbar--oauth">
             <div class="toolbar-section toolbar-section--search">
               <input
                 v-model="searchQuery"
@@ -222,6 +242,7 @@
             </div>
           </div>
         </div>
+      </div>
         <div class="grid" :class="accountGridClass">
           <div
             v-for="account in paginatedOAuth"
@@ -286,19 +307,26 @@
                 <span v-if="account._verified && !hasDisplayQuotaData(account)" class="text-[10px] text-green-400">✓ 有效</span>
               </div>
 
-              <!-- Forbidden badge -->
-              <div v-if="account.quota_is_forbidden" class="flex items-center gap-1 rounded bg-red-500/10 px-2 py-1 text-[10px] text-red-400">
-                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8 0-1.85.63-3.55 1.69-4.9L16.9 18.31C15.55 19.37 13.85 20 12 20zm6.31-3.1L7.1 5.69C8.45 4.63 10.15 4 12 4c4.42 0 8 3.58 8 8 0 1.85-.63 3.55-1.69 4.9z"/>
-                </svg>
-                {{ quotaForbiddenLabel(account) }}
+              <!-- Status warning / error if any (基本报错一致: 统一大小、统一颜色) -->
+              <div v-if="account.quota_is_forbidden" class="rounded-lg bg-rose-500/10 border border-rose-500/20 p-2 text-xs text-rose-400 flex items-center gap-1.5">
+                <span class="shrink-0">⚠️</span>
+                <span>403 Forbidden: {{ quotaForbiddenLabel(account) }}</span>
               </div>
-
-              <div v-if="isRegionRestricted(account)" class="flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
-                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2 1 21h22L12 2zm0 6 1 7h-2l1-7zm0 10.5a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/>
-                </svg>
-                当前出口地区受限，未能查询配额
+              <div v-else-if="account.status === 'reauth_required'" class="rounded-lg bg-rose-500/10 border border-rose-500/20 p-2 text-xs text-rose-400 flex items-center gap-1.5">
+                <span class="shrink-0">⚠️</span>
+                <span>登录已失效，需重新授权登录</span>
+              </div>
+              <div v-else-if="isExpired(account.expires_at)" class="rounded-lg bg-amber-500/10 border border-amber-500/20 p-2 text-xs text-amber-400 flex items-center gap-1.5">
+                <span class="shrink-0">⚠️</span>
+                <span>Token 已过期，请点击刷新 Token</span>
+              </div>
+              <div v-else-if="isRegionRestricted(account)" class="rounded-lg bg-amber-500/10 border border-amber-500/20 p-2 text-xs text-amber-300 flex items-center gap-1.5">
+                <span class="shrink-0">⚠️</span>
+                <span>当前出口地区受限，未能查询配额</span>
+              </div>
+              <div v-else-if="account._quota_http_status && account._quota_http_status !== 200" class="rounded-lg bg-rose-500/10 border border-rose-500/20 p-2 text-xs text-rose-400 flex items-center gap-1.5">
+                <span class="shrink-0">⚠️</span>
+                <span>配额查询异常 (HTTP {{ account._quota_http_status }})</span>
               </div>
 
               <!-- 5h quota bar -->
@@ -438,65 +466,78 @@
 
     <!-- API Accounts Tab -->
     <div v-if="activeTab === 'api'">
-      <div v-if="apiAccounts.length === 0" class="text-center py-12 text-gray-500">
-        <p class="text-base mb-1">暂无 API 账号</p>
-        <p class="text-sm">点击「添加 API 账号」配置自定义 API 端点</p>
+      <div v-if="apiAccounts.length === 0" class="py-16 px-6 my-6 rounded-2xl border-2 border-dashed border-gray-800 bg-gray-900/20 text-center max-w-xl mx-auto">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+          </svg>
+        </div>
+        <h3 class="text-base font-semibold text-white mb-2">暂无自定义 API 账号</h3>
+        <p class="text-sm text-gray-400 mb-6 max-w-md mx-auto leading-relaxed">配置自定义第三方 OpenAI 兼容 API 端点（Base URL、API Key 与对应模型），并在本地无缝切换。</p>
+        <button @click="openAddAPIDialog" class="btn btn-primary">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+          </svg>
+          添加 API 账号
+        </button>
       </div>
       <template v-else>
-        <div class="account-toolbar account-toolbar--api mb-3">
-          <div class="toolbar-section toolbar-section--search">
-            <input
-              v-model="apiSearchQuery"
-              class="toolbar-input toolbar-search"
-              placeholder="搜索 API"
-              title="按 provider、model、base URL 搜索 API 账号"
-            />
-          </div>
-          <div class="toolbar-section toolbar-section--view">
-            <button
-              @click="toggleAccountLayout"
-              class="toolbar-btn toolbar-btn--layout"
-              :class="accountLayout === 'dense' ? 'bg-blue-600/20 hover:bg-blue-600/30 border-blue-500/40 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
-              :title="accountLayout === 'dense' ? '当前为紧凑布局：点击切换标准布局' : '当前为标准布局：点击切换紧凑布局'"
-              aria-label="切换账号列表布局"
-            >
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z"/>
-              </svg>
-              {{ accountLayout === 'dense' ? '紧凑' : '标准' }}
-            </button>
-          </div>
-          <div class="toolbar-section toolbar-section--selection">
-            <button
-              v-if="filteredAPIAccounts.length > 0"
-              @click="toggleSelectAllAPI"
-              :disabled="bulkDeleting"
-              class="toolbar-btn toolbar-btn-neutral toolbar-btn--select"
-              :title="allAPISelected ? `取消全选当前 API 筛选结果（${filteredAPIAccounts.length}）` : `全选当前 API 筛选结果（${filteredAPIAccounts.length}）`"
-            >
-              {{ allAPISelected ? '取消' : `全选 ${filteredAPIAccounts.length}` }}
-            </button>
-            <button
-              v-if="selectedAPIIds.length > 0"
-              @click="clearAPISelection"
-              :disabled="bulkDeleting"
-              class="toolbar-btn toolbar-btn-neutral"
-              title="清空当前已选 API 账号"
-            >
-              清空
-            </button>
-            <div class="toolbar-status">
-              已选 {{ selectedAPIIds.length }}
+        <div class="w-full overflow-x-auto pb-1 scrollbar-none">
+          <div class="account-toolbar account-toolbar--api mb-3">
+            <div class="toolbar-section toolbar-section--search">
+              <input
+                v-model="apiSearchQuery"
+                class="toolbar-input toolbar-search"
+                placeholder="搜索 API"
+                title="按 provider、model、base URL 搜索 API 账号"
+              />
             </div>
-            <button
-              v-if="selectedAPIIds.length > 0"
-              @click="openBulkDeleteConfirm"
-              :disabled="bulkDeleting"
-              class="toolbar-btn toolbar-btn-danger"
-              :title="`批量删除已选 API 账号（${selectedAPIIds.length}）`"
-            >
-              {{ bulkDeleting ? '删除中' : `删除 ${selectedAPIIds.length}` }}
-            </button>
+            <div class="toolbar-section toolbar-section--view">
+              <button
+                @click="toggleAccountLayout"
+                class="toolbar-btn toolbar-btn--layout"
+                :class="accountLayout === 'dense' ? 'bg-blue-600/20 hover:bg-blue-600/30 border-blue-500/40 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300'"
+                :title="accountLayout === 'dense' ? '当前为紧凑布局：点击切换标准布局' : '当前为标准布局：点击切换紧凑布局'"
+                aria-label="切换账号列表布局"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z"/>
+                </svg>
+                {{ accountLayout === 'dense' ? '紧凑' : '标准' }}
+              </button>
+            </div>
+            <div class="toolbar-section toolbar-section--selection">
+              <button
+                v-if="filteredAPIAccounts.length > 0"
+                @click="toggleSelectAllAPI"
+                :disabled="bulkDeleting"
+                class="toolbar-btn toolbar-btn-neutral toolbar-btn--select"
+                :title="allAPISelected ? `取消全选当前 API 筛选结果（${filteredAPIAccounts.length}）` : `全选当前 API 筛选结果（${filteredAPIAccounts.length}）`"
+              >
+                {{ allAPISelected ? '取消' : `全选 ${filteredAPIAccounts.length}` }}
+              </button>
+              <button
+                v-if="selectedAPIIds.length > 0"
+                @click="clearAPISelection"
+                :disabled="bulkDeleting"
+                class="toolbar-btn toolbar-btn-neutral"
+                title="清空当前已选 API 账号"
+              >
+                清空
+              </button>
+              <div class="toolbar-status">
+                已选 {{ selectedAPIIds.length }}
+              </div>
+              <button
+                v-if="selectedAPIIds.length > 0"
+                @click="openBulkDeleteConfirm"
+                :disabled="bulkDeleting"
+                class="toolbar-btn toolbar-btn-danger"
+                :title="`批量删除已选 API 账号（${selectedAPIIds.length}）`"
+              >
+                {{ bulkDeleting ? '删除中' : `删除 ${selectedAPIIds.length}` }}
+              </button>
+            </div>
           </div>
         </div>
         <div class="grid" :class="accountGridClass">
@@ -568,8 +609,8 @@
 
     <!-- Group Manager Dialog -->
     <div v-if="showGroupManager" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="showGroupManager = false">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl shadow-2xl">
-        <div class="flex items-center justify-between p-6 border-b border-gray-700">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[calc(100vh-2.5rem)] overflow-hidden">
+        <div class="flex items-center justify-between p-6 border-b border-gray-700 shrink-0">
           <h2 class="text-lg font-semibold text-white">账号分组</h2>
           <button @click="showGroupManager = false" class="text-gray-400 hover:text-white">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -577,7 +618,7 @@
             </svg>
           </button>
         </div>
-        <div class="p-6 space-y-4">
+        <div class="p-6 space-y-4 overflow-y-auto flex-1 min-h-0">
           <div class="grid sm:grid-cols-[1fr_auto] gap-2">
             <input v-model="newGroupName" class="input" placeholder="新分组名称" />
             <button @click="createAccountGroup" class="btn btn-primary">新建分组</button>
@@ -614,8 +655,8 @@
 
     <!-- Batch Import Dialog -->
     <div v-if="showImportDialog" class="import-dialog-overlay fixed inset-0 flex items-center justify-center z-50 p-4">
-      <div class="import-dialog-panel bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl shadow-2xl">
-        <div class="flex items-center justify-between p-6 border-b border-gray-700">
+      <div class="import-dialog-panel bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[calc(100vh-2.5rem)] overflow-hidden">
+        <div class="flex items-center justify-between p-6 border-b border-gray-700 shrink-0">
           <h2 class="text-lg font-semibold text-white">导入账号</h2>
           <button @click="closeImportDialog" class="text-gray-400 hover:text-white">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -623,7 +664,7 @@
             </svg>
           </button>
         </div>
-        <div class="p-6 space-y-4">
+        <div class="p-6 space-y-4 overflow-y-auto flex-1 min-h-0">
 
           <!-- Import mode tabs -->
           <div class="grid grid-cols-3 gap-1 bg-gray-800 rounded-lg p-1">
@@ -917,7 +958,7 @@
           </div>
         </div>
 
-        <div class="flex flex-wrap justify-end gap-3 p-6 border-t border-gray-700">
+        <div class="flex flex-wrap justify-end gap-3 p-6 border-t border-gray-700 shrink-0">
           <button @click="closeImportDialog" class="btn btn-secondary" :disabled="importing">关闭</button>
           <button
             v-if="canRunImport && !importResults"
@@ -933,8 +974,8 @@
 
     <!-- OAuth Login Dialog -->
     <div v-if="showOAuthDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
-        <div class="flex items-center justify-between p-6 border-b border-gray-700">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[calc(100vh-2.5rem)] overflow-hidden">
+        <div class="flex items-center justify-between p-6 border-b border-gray-700 shrink-0">
           <h2 class="text-lg font-semibold text-white">OpenAI OAuth 登录</h2>
           <button @click="closeOAuthDialog" class="text-gray-400 hover:text-white">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -942,7 +983,7 @@
             </svg>
           </button>
         </div>
-        <div class="p-6 space-y-4">
+        <div class="p-6 space-y-4 overflow-y-auto flex-1 min-h-0">
           <div v-if="!oauthState.authUrl">
             <p class="text-gray-400 text-sm mb-4">点击下方按钮后会自动打开浏览器，并等待本机回调自动完成登录；如果自动回调不可用，也可以手动粘贴完整回调地址或 `code`。</p>
             <button @click="generateOAuthUrl" :disabled="oauthState.loading" class="btn btn-primary w-full">
@@ -993,8 +1034,8 @@
 
     <!-- Add/Edit API Account Dialog -->
     <div v-if="showAddAPIDialog" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl">
-        <div class="flex items-center justify-between p-6 border-b border-gray-700">
+      <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[calc(100vh-2.5rem)] overflow-hidden">
+        <div class="flex items-center justify-between p-6 border-b border-gray-700 shrink-0">
           <h2 class="text-lg font-semibold text-white">{{ editingAPIAccount ? '编辑' : '添加' }} API 账号</h2>
           <button @click="closeAPIDialog" class="text-gray-400 hover:text-white">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1002,14 +1043,32 @@
             </svg>
           </button>
         </div>
-        <div class="p-6 space-y-4">
+        <div class="p-6 space-y-4 overflow-y-auto flex-1 min-h-0">
           <div>
             <label class="block text-xs text-gray-400 mb-1">Model Provider <span class="text-red-400">*</span></label>
             <input v-model="apiForm.model_provider" class="input w-full" placeholder="openai"/>
           </div>
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Model <span class="text-red-400">*</span></label>
-            <input v-model="apiForm.model" class="input w-full" placeholder="e.g. gpt-5.6-sol"/>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs text-gray-400">Model <span class="text-red-400">*</span></label>
+              <span class="text-[10px] text-gray-500">快捷选择</span>
+            </div>
+            <div class="flex flex-wrap gap-1 mb-2">
+              <button
+                v-for="m in supportedCodexModels"
+                :key="m.id"
+                type="button"
+                @click="apiForm.model = m.id"
+                class="text-[11px] px-2 py-0.5 rounded border border-gray-700 bg-gray-800/80 hover:bg-gray-700 text-gray-300 transition-colors"
+                :class="{ '!border-blue-500 !bg-blue-500/20 !text-blue-300 font-medium': apiForm.model === m.id }"
+              >
+                {{ m.label }}
+              </button>
+            </div>
+            <input v-model="apiForm.model" list="supported-codex-models" class="input w-full" placeholder="e.g. gpt-6-astra"/>
+            <datalist id="supported-codex-models">
+              <option v-for="m in supportedCodexModels" :key="m.id" :value="m.id">{{ m.label }} ({{ m.desc }})</option>
+            </datalist>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Base URL <span class="text-red-400">*</span></label>
@@ -1040,7 +1099,7 @@
           </div>
           <p v-if="apiFormError" class="text-red-400 text-sm">{{ apiFormError }}</p>
         </div>
-        <div class="flex justify-end gap-3 p-6 border-t border-gray-700">
+        <div class="flex justify-end gap-3 p-6 border-t border-gray-700 shrink-0">
           <button @click="closeAPIDialog" class="btn btn-secondary">取消</button>
           <button @click="saveAPIAccount" :disabled="savingAPI" class="btn btn-primary">
             {{ savingAPI ? '保存中...' : '保存' }}
@@ -1279,6 +1338,30 @@
                 </div>
                 <div class="api-service-value-field mt-4">
                   <code class="api-service-value">127.0.0.1</code>
+                </div>
+              </div>
+            </div>
+
+            <!-- 支持模型列表 -->
+            <div class="rounded-xl border border-gray-700/80 bg-gray-900/60 p-3 mt-4">
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-xs font-semibold text-gray-300">支持模型</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">GPT-6 & GPT-5.6</span>
+                </div>
+                <span class="text-[11px] text-gray-500">支持全部 GPT-6 / GPT-5.6 系列模型</span>
+              </div>
+              <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                <div
+                  v-for="m in supportedCodexModels"
+                  :key="m.id"
+                  class="flex flex-col p-2 rounded-lg bg-gray-800/60 border border-gray-700/60 hover:border-gray-600 transition-colors"
+                >
+                  <div class="flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full shrink-0" :class="m.badgeColor"></span>
+                    <span class="text-xs font-medium text-gray-200 truncate">{{ m.label }}</span>
+                  </div>
+                  <div class="text-[10px] text-gray-400 font-mono mt-1 truncate">{{ m.id }}</div>
                 </div>
               </div>
             </div>
@@ -1756,6 +1839,14 @@ const apiForm = ref({
 const providerDisplayNames = {
   openai: 'OpenAI'
 }
+
+const supportedCodexModels = [
+  { id: 'gpt-6-astra', label: 'GPT-6 Astra', desc: '超强旗舰', badgeColor: 'bg-purple-400' },
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna', desc: '快速高效', badgeColor: 'bg-indigo-400' },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', desc: '旗舰推理', badgeColor: 'bg-amber-400' },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', desc: '全能平衡', badgeColor: 'bg-emerald-400' },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', desc: '极速响应', badgeColor: 'bg-cyan-400' },
+]
 
 const showServiceConfigDialog = ref(false)
 const savingServiceConfig = ref(false)
@@ -4547,7 +4638,7 @@ onBeforeUnmount(() => {
 }
 
 .account-card-compact {
-  @apply rounded-lg border px-3.5 py-3 transition-all;
+  @apply rounded-lg border px-3.5 py-3 transition-all min-w-0 overflow-hidden;
   background: var(--app-surface);
   border-color: var(--app-border);
   color: var(--app-text);
@@ -4757,6 +4848,7 @@ onBeforeUnmount(() => {
 .account-toolbar--oauth .toolbar-btn--select {
   @apply min-w-[62px];
 }
+.account-toolbar--oauth .toolbar-section--actions,
 .account-toolbar--oauth .toolbar-section--selection {
   @apply justify-end;
 }
@@ -4980,6 +5072,7 @@ onBeforeUnmount(() => {
     @apply w-full max-w-none;
   }
 }
+
 .account-toolbar--oauth :is(.toolbar-input, .toolbar-select) {
   width: 100%;
   min-width: 0;

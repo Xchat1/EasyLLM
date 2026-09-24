@@ -5,8 +5,6 @@ EasyLLM 是一个轻量级 OpenAI / Codex 账号管理与本地编码对接工�
 [![GitHub](https://img.shields.io/badge/GitHub-EasyLLM-blue?logo=github)](https://github.com/Xchat1/EasyLLM)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](./LICENSE)
 
-![EasyLLM 总览](./总览.png)
-
 ## 核心能力
 
 - 统一管理 OpenAI / Codex OAuth 账号、API Key 账号和 Codex CLI 本机配置。

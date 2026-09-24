@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -29,6 +30,8 @@ type App struct {
 	cfg          *config.Config
 	auth         *handlers.AuthHandler
 	openai       *handlers.OpenAIHandler
+	antigravity  *handlers.AntigravityHandler
+	cursor       *handlers.CursorHandler
 	settings     *handlers.SettingsHandler
 	codexProxy   *proxy.CodexProxy
 	openaiStore  *storage.OpenAIStorage
@@ -52,6 +55,8 @@ func New(cfg *config.Config) (*App, error) {
 	// Initialize storages
 	openaiStore := storage.NewOpenAIStorage(db)
 	codexStore := storage.NewCodexStorage(db)
+	antigravityStore := storage.NewAntigravityStorage(db)
+	cursorStore := storage.NewCursorStorage(db)
 	// Load persisted settings into config
 	loadPersistedSettings(cfg)
 
@@ -70,6 +75,8 @@ func New(cfg *config.Config) (*App, error) {
 		cfg:          cfg,
 		auth:         handlers.NewAuthHandler(),
 		openai:       handlers.NewOpenAIHandler(openaiStore, codexStore),
+		antigravity:  handlers.NewAntigravityHandler(antigravityStore),
+		cursor:       handlers.NewCursorHandler(cursorStore),
 		settings:     handlers.NewSettingsHandler(),
 		codexProxy:   codexProxy,
 		openaiStore:  openaiStore,
@@ -124,12 +131,18 @@ func (a *App) setupRouter() {
 	// 公开：API 服务状态（侧栏轮询用，不鉴权，避免 401 导致反复跳登录）
 	api.GET("/api-server/status", a.settings.GetAPIServerStatus)
 
+	// The native menu bar uses loopback; remote clients must authenticate.
+	api.GET("/antigravity/summary", summaryAccessMiddleware(), a.antigravity.GetSummary)
+	api.POST("/antigravity/summary/refresh", summaryAccessMiddleware(), a.antigravity.RefreshSummary)
+
 	// Protected routes require a valid login JWT.
 	protected := r.Group("/api/v1")
 	protected.Use(handlers.AuthMiddleware())
 
 	a.auth.RegisterProtectedRoutes(protected)
 	a.openai.RegisterRoutes(protected)
+	a.antigravity.RegisterRoutes(protected)
+	a.cursor.RegisterRoutes(protected)
 	a.settings.RegisterRoutes(protected)
 
 	// Legacy API endpoint (compatible with original ATM API)
@@ -482,6 +495,17 @@ func isAllowedBrowserOrigin(origin string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func summaryAccessMiddleware() gin.HandlerFunc {
+	authenticate := handlers.AuthMiddleware()
+	return func(c *gin.Context) {
+		if isLoopbackRemoteAddr(c.Request.RemoteAddr) {
+			c.Next()
+			return
+		}
+		authenticate(c)
+	}
+}
+
 func isLoopbackRemoteAddr(remoteAddr string) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
@@ -501,6 +525,15 @@ func (a *App) Run() error {
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 0, // no timeout — streaming endpoints (SSE) can run for minutes
 	}
+
+	// Periodic idle memory scrubber: return unused heap pages to macOS kernel
+	memTicker := time.NewTicker(2 * time.Minute)
+	defer memTicker.Stop()
+	go func() {
+		for range memTicker.C {
+			debug.FreeOSMemory()
+		}
+	}()
 
 	// Start server in goroutine
 	go func() {

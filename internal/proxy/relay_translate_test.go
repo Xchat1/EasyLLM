@@ -164,6 +164,27 @@ func TestPreferredCodexModel(t *testing.T) {
 		expected     string
 	}{
 		{
+			name: "prefer gpt-6 astra over other models",
+			modelMap: map[string]string{
+				"gpt-6-astra":   "deepseek-reasoner",
+				"gpt-6-luna":    "deepseek-chat",
+				"gpt-5.6-sol":   "deepseek-reasoner",
+				"gpt-5.6-terra": "deepseek-chat",
+			},
+			defaultModel: "deepseek-reasoner",
+			expected:     "gpt-6-astra",
+		},
+		{
+			name: "prefer gpt-6 luna over gpt-5.6",
+			modelMap: map[string]string{
+				"gpt-6-luna":    "deepseek-chat",
+				"gpt-5.6-sol":   "deepseek-reasoner",
+				"gpt-5.6-terra": "deepseek-chat",
+			},
+			defaultModel: "deepseek-reasoner",
+			expected:     "gpt-6-luna",
+		},
+		{
 			name: "prefer gpt-5.6 sol from map",
 			modelMap: map[string]string{
 				"gpt-5.6-luna":  "deepseek-chat",
@@ -206,8 +227,8 @@ func TestPreferredCodexModel(t *testing.T) {
 
 func TestMapModelName(t *testing.T) {
 	modelMap := map[string]string{
-		"gpt-5.4": "deepseek-v4-pro",
-		"gpt-5.5": "deepseek-v4-pro",
+		"gpt-5.4":     "deepseek-v4-pro",
+		"gpt-5.6-sol": "deepseek-v4-pro",
 	}
 
 	tests := []struct {
@@ -217,12 +238,12 @@ func TestMapModelName(t *testing.T) {
 		expected     string
 	}{
 		{"gpt-5.4", modelMap, "", "deepseek-v4-pro"},
-		{"gpt-5.5", modelMap, "", "deepseek-v4-pro"},
+		{"gpt-5.6-sol", modelMap, "", "deepseek-v4-pro"},
 		{"unknown-model", modelMap, "", "unknown-model"},
-		{"unknown-model", modelMap, "gpt-5.5", "unknown-model"},
-		{"gpt-5.5", nil, "deepseek-reasoner", "deepseek-reasoner"},
-		{"gpt-5.5", map[string]string{"gpt-5.5": "custom"}, "deepseek-reasoner", "custom"},
-		{"", nil, "gpt-5.5", "gpt-5.5"},
+		{"unknown-model", modelMap, "gpt-5.6-sol", "unknown-model"},
+		{"gpt-5.6-sol", nil, "deepseek-reasoner", "deepseek-reasoner"},
+		{"gpt-5.6-sol", map[string]string{"gpt-5.6-sol": "custom"}, "deepseek-reasoner", "custom"},
+		{"", nil, "gpt-5.6-sol", "gpt-5.6-sol"},
 	}
 
 	for _, tt := range tests {
@@ -235,14 +256,14 @@ func TestMapModelName(t *testing.T) {
 
 func TestParseModelMap(t *testing.T) {
 	// Test JSON format
-	jsonStr := `{"gpt-5.4":"deepseek-v4-pro","gpt-5.5":"deepseek-v4-flash"}`
+	jsonStr := `{"gpt-5.4":"deepseek-v4-pro","gpt-5.6-sol":"deepseek-v4-flash"}`
 	result := ParseModelMap(jsonStr)
 	if result["gpt-5.4"] != "deepseek-v4-pro" {
 		t.Errorf("expected 'deepseek-v4-pro', got '%s'", result["gpt-5.4"])
 	}
 
 	// Test comma format
-	commaStr := "gpt-5.4:deepseek-v4-pro, gpt-5.5:deepseek-v4-flash"
+	commaStr := "gpt-5.4:deepseek-v4-pro, gpt-5.6-sol:deepseek-v4-flash"
 	result2 := ParseModelMap(commaStr)
 	if result2["gpt-5.4"] != "deepseek-v4-pro" {
 		t.Errorf("expected 'deepseek-v4-pro', got '%s'", result2["gpt-5.4"])

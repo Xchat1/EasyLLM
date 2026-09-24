@@ -31,6 +31,33 @@ func setupProxyAccessTestDB(t *testing.T) {
 	storage.DB = db
 }
 
+func TestSummaryAccessRequiresRemoteAuthentication(t *testing.T) {
+	setupProxyAccessTestDB(t)
+	if err := storage.SaveSetting("auth_enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { storage.DB.Where("key = ?", "auth_enabled").Delete(&models.AppSettings{}) })
+	r := gin.New()
+	r.GET("/summary", summaryAccessMiddleware(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	for _, tc := range []struct {
+		addr   string
+		status int
+	}{
+		{"127.0.0.1:12345", http.StatusNoContent},
+		{"[::1]:12345", http.StatusNoContent},
+		{"192.0.2.1:12345", http.StatusUnauthorized},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/summary", nil)
+		req.RemoteAddr = tc.addr
+		req.Header.Set("X-Forwarded-For", "127.0.0.1")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != tc.status {
+			t.Fatalf("address %s: got %d, want %d", tc.addr, w.Code, tc.status)
+		}
+	}
+}
+
 func TestAllowLocalProxyFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupProxyAccessTestDB(t)

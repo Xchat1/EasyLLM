@@ -129,6 +129,8 @@ Codex CLI 始终连接本地 `http://localhost:8022/v1`，无感知上游切换�
 
 ```json
 {
+  "gpt-6-astra": "deepseek-reasoner",
+  "gpt-6-luna": "deepseek-chat",
   "gpt-5.6-sol": "deepseek-reasoner",
   "gpt-5.6-terra": "deepseek-chat",
   "gpt-5.6-luna": "deepseek-chat",
@@ -136,7 +138,13 @@ Codex CLI 始终连接本地 `http://localhost:8022/v1`，无感知上游切换�
 }
 ```
 
-Codex CLI 请求 `gpt-5.6-sol` 时，EasyLLM 实际向上游发送 `deepseek-reasoner`。`gpt-5.6` 是 Sol 的别名；如无特殊兼容需求，建议在映射中使用显式的 `gpt-5.6-sol`。
+Codex CLI 请求 `gpt-6-astra` 或 `gpt-5.6-sol` 时，EasyLLM 实际向上游发送对应的映射模型。`gpt-5.6` 是 Sol 的别名。支持的模型包括：
+- `gpt-6-astra`：GPT-6 Astra
+- `gpt-6-luna`：GPT-6 Luna
+- `gpt-5.6-sol`：GPT-5.6 Sol
+- `gpt-5.6-terra`：GPT-5.6 Terra
+- `gpt-5.6-luna`：GPT-5.6 Luna
+
 
 ## 调用示例
 

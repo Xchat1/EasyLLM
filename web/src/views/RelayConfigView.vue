@@ -1,9 +1,14 @@
 <template>
   <div class="p-6 space-y-6">
     <section class="rounded-3xl border border-gray-800 bg-gradient-to-br from-slate-200/10 via-gray-200/5 to-gray-950 p-6">
-      <h1 class="text-3xl font-semibold text-white">Relay 配置</h1>
-      <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">
-        配置 Relay 模式，让 Codex 客户端 / Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容的上游提供商。支持添加多个渠道，自动轮询分流。
+      <div class="flex items-center gap-3 mb-2">
+        <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/20 text-blue-400 text-xl border border-blue-500/30">
+          🔄
+        </span>
+        <h1 class="text-2xl font-bold text-white">Relay 反向代理配置</h1>
+      </div>
+      <p class="max-w-3xl text-sm leading-relaxed text-gray-300">
+        对接任意 OpenAI 兼容上游服务商（DeepSeek、Mistral、OpenRouter、Kimi 等），通过内置 Responses 协议转换，让 Codex 客户端自动轮询调度。
       </p>
     </section>
 
@@ -14,13 +19,15 @@
     <div v-else class="space-y-6">
 
       <!-- ── 上游渠道 ─────────────────────────────────────────── -->
-      <section class="card p-5 space-y-5">
-        <div class="flex items-center justify-between">
+      <section class="card p-5 space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-gray-800/80 pb-4">
           <div>
-            <h2 class="text-lg font-semibold text-white">上游渠道</h2>
-            <p class="mt-1 text-sm text-gray-500">添加一个或多个 OpenAI 兼容上游，EasyLLM 自动按策略轮询分流。</p>
+            <h2 class="text-lg font-bold text-white flex items-center gap-2">
+              <span>🌐</span> 上游渠道
+            </h2>
+            <p class="mt-1 text-xs text-gray-400">配置第三方模型服务源，支持多渠道负载均衡与故障分流。</p>
           </div>
-          <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2.5">
             <select v-model="upstreamStrategy" class="input input-sm w-36">
               <option value="round_robin">轮询（Round Robin）</option>
             </select>
@@ -29,32 +36,39 @@
         </div>
 
         <!-- 渠道列表 -->
-        <div v-if="upstreams.length === 0" class="text-center py-6 text-gray-500 text-sm border border-dashed border-gray-700 rounded-xl">
-          暂无上游渠道，点击「添加渠道」开始配置
+        <div v-if="upstreams.length === 0" class="text-center py-8 text-gray-500 text-sm border border-dashed border-gray-800 rounded-xl space-y-2">
+          <div>暂无上游渠道</div>
+          <button class="btn btn-sm btn-secondary" @click="openAddUpstream">+ 添加第一个渠道</button>
         </div>
-        <div v-else class="space-y-3">
+        <div v-else class="space-y-2.5">
           <div
             v-for="(u, idx) in upstreams"
             :key="u.id"
-            class="upstream-card"
-            :class="{ 'upstream-card--disabled': !u.enabled }"
+            class="flex items-center justify-between p-3 rounded-xl border border-gray-800/80 bg-gray-950/60 hover:border-gray-700 transition-colors"
+            :class="{ 'opacity-60': !u.enabled }"
           >
-            <div class="flex items-center gap-3 min-w-0">
-              <label class="relative inline-flex items-center cursor-pointer shrink-0" :title="u.enabled ? '禁用' : '启用'">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <label class="relative inline-flex items-center cursor-pointer shrink-0" :title="u.enabled ? '点击禁用' : '点击启用'">
                 <input type="checkbox" v-model="upstreams[idx].enabled" class="sr-only peer" />
-                <div class="upstream-toggle peer-checked:bg-blue-500"></div>
+                <div class="w-8 h-4.5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-2 flex-wrap">
-                  <span class="text-sm font-medium text-white truncate">{{ u.name || '未命名渠道' }}</span>
-                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 font-mono truncate max-w-[240px]">{{ u.upstream_url }}</span>
-                </div>
-                <div class="text-xs text-gray-500 mt-0.5">{{ u.api_key ? '已配置 API Key' : '⚠️ 未配置 API Key' }}</div>
+
+              <div class="h-8 w-8 shrink-0 rounded-lg bg-gray-800/80 border border-gray-700/60 flex items-center justify-center text-xs shadow-sm">
+                🌐
+              </div>
+
+              <div class="min-w-0 flex-1 flex flex-col sm:flex-row sm:items-center sm:gap-3">
+                <span class="text-sm font-semibold text-white truncate max-w-[160px]">{{ u.name || '未命名渠道' }}</span>
+                <span class="text-xs px-2 py-0.5 rounded-md bg-gray-900 border border-gray-800 text-gray-400 font-mono truncate max-w-[260px]" :title="u.upstream_url">{{ u.upstream_url }}</span>
+                <span class="text-xs shrink-0 font-medium" :class="u.api_key ? 'text-emerald-400' : 'text-amber-400'">
+                  {{ u.api_key ? '✓ 已配置 Key' : '⚠️ 未配置 Key' }}
+                </span>
               </div>
             </div>
-            <div class="flex items-center gap-2 shrink-0">
+
+            <div class="flex items-center gap-1.5 shrink-0 ml-3">
               <button class="btn btn-sm btn-secondary" @click="editUpstream(idx)">编辑</button>
-              <button class="btn btn-sm btn-danger" @click="removeUpstream(idx)">删除</button>
+              <button class="btn btn-sm btn-secondary hover:!bg-red-500/20 hover:!border-red-500/40 hover:!text-red-300" @click="removeUpstream(idx)">删除</button>
             </div>
           </div>
         </div>
@@ -85,6 +99,7 @@
                 <option value="xai">xAI (Grok)</option>
                 <option value="codestral">Codestral</option>
                 <option value="xiaomi">Xiaomi (MiMo)</option>
+                <option value="antigravity">Antigravity (Google Cloud Code)</option>
               </select>
             </div>
           </div>
@@ -124,34 +139,81 @@
       </section>
 
       <!-- ── 模型映射（全局） ────────────────────────────────── -->
-      <section class="card p-5 space-y-5">
-        <div>
-          <h2 class="text-lg font-semibold text-white">模型映射 <span class="text-sm font-normal text-gray-500">（全局，适用于所有渠道）</span></h2>
-          <p class="mt-1 text-sm text-gray-500">将 Codex 模型名称映射为上游模型名称。</p>
+      <section class="card p-5 space-y-4">
+        <div class="border-b border-gray-800/80 pb-3">
+          <h2 class="text-lg font-bold text-white flex items-center gap-2">
+            <span>🔀</span> 模型映射 <span class="text-xs font-normal text-gray-500">（全局适用于所有渠道）</span>
+          </h2>
+          <p class="mt-1 text-xs text-gray-400">将 Codex 客户端请求的模型名透明映射为上游服务商支持的模型名。</p>
         </div>
 
         <div>
           <label class="label" for="relay-default-model">默认模型</label>
+          <div class="flex flex-wrap gap-1.5 mb-2">
+            <button
+              v-for="m in supportedCodexModels"
+              :key="m.id"
+              type="button"
+              @click="globalConfig.default_model = m.id"
+              class="text-xs px-2.5 py-1 rounded-lg border border-gray-700/80 bg-gray-800/80 hover:bg-gray-700 text-gray-300 transition-colors"
+              :class="{ '!border-blue-500 !bg-blue-500/20 !text-blue-300 font-semibold shadow-sm': globalConfig.default_model === m.id }"
+            >
+              {{ m.label }}
+            </button>
+          </div>
           <input
             id="relay-default-model"
             v-model="globalConfig.default_model"
             type="text"
             class="input"
-            placeholder="gpt-5.6-sol"
+            placeholder="gpt-6-astra"
           />
           <p class="mt-1 text-xs text-gray-500">未在映射表中的 Codex 模型名将自动使用此默认上游模型</p>
         </div>
 
         <div>
-          <label class="label" for="relay-model-map">模型映射 (JSON)</label>
+          <div class="flex flex-wrap items-center justify-between mb-2 gap-2">
+            <label class="label mb-0" for="relay-model-map">模型映射 (JSON)</label>
+            <div class="flex items-center gap-2 text-xs">
+              <button
+                type="button"
+                @click="formatModelMapJSON"
+                class="btn btn-xs btn-secondary"
+                title="美化并检查 JSON 语法"
+              >
+                格式化 JSON
+              </button>
+              <button
+                type="button"
+                @click="fillSampleModelMap"
+                class="btn btn-xs btn-secondary text-blue-400 hover:text-blue-300"
+                title="填入推荐的 GPT-6 / 5.6 模型映射示例"
+              >
+                + 填入示例
+              </button>
+              <button
+                type="button"
+                @click="globalConfig.model_map_json = '{}'"
+                class="btn btn-xs btn-secondary text-gray-400"
+                title="清空模型映射"
+              >
+                清空
+              </button>
+            </div>
+          </div>
           <textarea
             id="relay-model-map"
             v-model="globalConfig.model_map_json"
             class="input font-mono text-sm"
-            rows="4"
-            placeholder='{"gpt-5.6-sol": "upstream-reasoner", "gpt-5.6-terra": "upstream-chat", "gpt-5.6-luna": "upstream-fast"}'
+            rows="6"
+            placeholder='{"gpt-6-astra": "upstream-reasoner", "gpt-6-luna": "upstream-chat", "gpt-5.6-sol": "upstream-reasoner", "gpt-5.6-terra": "upstream-chat", "gpt-5.6-luna": "upstream-fast"}'
           />
-          <p class="mt-1 text-xs text-gray-500">JSON 格式，或逗号分隔的 key:value 对</p>
+          <div class="flex items-center justify-between text-xs text-gray-500 mt-1.5">
+            <span>支持 GPT-6 Astra / Luna，GPT-5.6 Sol / Terra / Luna 等标准模型名</span>
+            <span v-if="jsonValidationText" :class="jsonValid ? 'text-emerald-400 font-mono font-medium' : 'text-red-400 font-mono font-medium'">
+              {{ jsonValidationText }}
+            </span>
+          </div>
         </div>
       </section>
 
@@ -379,6 +441,7 @@ import { localRelayServiceURL } from '@/lib/runtime'
 
 // ── State ──────────────────────────────────────────────────────
 const confirmOperation = inject('confirmOperation')
+const notify = inject('notify', (msg, type) => {})
 const loading = ref(false)
 const saving = ref(false)
 const saveMessage = ref('')
@@ -500,6 +563,54 @@ async function removeUpstream(idx) {
   upstreams.value.splice(idx, 1)
 }
 
+const supportedCodexModels = [
+  { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
+  { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
+]
+
+function fillSampleModelMap() {
+  globalConfig.value.model_map_json = JSON.stringify({
+    'gpt-6-astra': 'deepseek-reasoner',
+    'gpt-6-luna': 'deepseek-chat',
+    'gpt-5.6-sol': 'deepseek-reasoner',
+    'gpt-5.6-terra': 'deepseek-chat',
+    'gpt-5.6-luna': 'deepseek-chat'
+  }, null, 2)
+  notify('已填入 GPT-6 / 5.6 模型映射示例', 'info')
+}
+
+function formatModelMapJSON() {
+  if (!globalConfig.value.model_map_json || !globalConfig.value.model_map_json.trim()) {
+    notify('模型映射为空', 'warning')
+    return
+  }
+  try {
+    const parsed = JSON.parse(globalConfig.value.model_map_json)
+    globalConfig.value.model_map_json = JSON.stringify(parsed, null, 2)
+    notify('JSON 格式化成功', 'success')
+  } catch (err) {
+    notify('JSON 语法错误: ' + err.message, 'error')
+  }
+}
+
+const jsonValid = computed(() => {
+  if (!globalConfig.value.model_map_json || !globalConfig.value.model_map_json.trim()) return true
+  try {
+    JSON.parse(globalConfig.value.model_map_json)
+    return true
+  } catch {
+    return false
+  }
+})
+
+const jsonValidationText = computed(() => {
+  if (!globalConfig.value.model_map_json || !globalConfig.value.model_map_json.trim()) return ''
+  return jsonValid.value ? '✓ JSON 格式正确' : '✗ JSON 语法错误'
+})
+
 // Provider quick-fill
 const providerConfigs = {
   openai:     { base_url: 'https://api.openai.com/v1',                         auth_header: '', auth_value_prefix: '' },
@@ -512,6 +623,7 @@ const providerConfigs = {
   xai:        { base_url: 'https://api.x.ai/v1',                                auth_header: '', auth_value_prefix: '' },
   codestral:  { base_url: 'https://api.mistral.ai/v1',                          auth_header: '', auth_value_prefix: '' },
   xiaomi:     { base_url: 'https://token-plan-cn.xiaomimimo.com/v1',            auth_header: 'api-key', auth_value_prefix: '' },
+  antigravity:{ base_url: 'https://daily-cloudcode-pa.googleapis.com',          auth_header: 'Authorization', auth_value_prefix: 'Bearer ' },
 }
 
 function applyProvider() {
@@ -607,6 +719,7 @@ async function saveConfig() {
   if (!codexContextFormValid.value) {
     saveMessage.value = '上下文与压缩阈值不合法'
     saveMessageType.value = 'error'
+    notify(saveMessage.value, 'error')
     return false
   }
   saving.value = true
@@ -620,10 +733,12 @@ async function saveConfig() {
     await loadConfig()
     saveMessage.value = '配置已保存'
     saveMessageType.value = 'success'
+    notify('Relay 配置已保存', 'success')
     return true
   } catch (err) {
     saveMessage.value = '保存失败: ' + (err.message || '未知错误')
     saveMessageType.value = 'error'
+    notify(saveMessage.value, 'error')
     return false
   } finally {
     saving.value = false
@@ -652,10 +767,12 @@ async function clearSessions() {
     await relayAPI.clearSessions()
     saveMessage.value = '会话历史已清空'
     saveMessageType.value = 'success'
+    notify('会话历史已清空', 'success')
     await loadStats()
   } catch (err) {
     saveMessage.value = '清空失败: ' + (err.message || '未知错误')
     saveMessageType.value = 'error'
+    notify(saveMessage.value, 'error')
   }
 }
 
@@ -665,6 +782,7 @@ async function injectCodexConfig() {
   if (enabled.length === 0) {
     saveMessage.value = '请先添加并启用至少一个上游渠道'
     saveMessageType.value = 'error'
+    notify(saveMessage.value, 'warning')
     return
   }
   // Save first
@@ -687,12 +805,14 @@ async function injectCodexConfig() {
         ? `Codex 配置注入成功，Codex 客户端${restarted}。`
         : 'Codex 配置注入成功！请重启 Codex 客户端或 Codex CLI。'
       saveMessageType.value = 'success'
+      notify(saveMessage.value, 'success')
     } else {
       throw new Error(data.message || '注入失败')
     }
   } catch (err) {
     saveMessage.value = '注入失败: ' + err.message
     saveMessageType.value = 'error'
+    notify(saveMessage.value, 'error')
   } finally {
     injecting.value = false
   }
@@ -703,6 +823,7 @@ function copyText(text) {
   navigator.clipboard.writeText(text).then(() => {
     saveMessage.value = '已复制到剪贴板'
     saveMessageType.value = 'success'
+    notify('已复制到剪贴板', 'success')
     setTimeout(() => { saveMessage.value = '' }, 2000)
   })
 }

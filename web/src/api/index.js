@@ -49,6 +49,8 @@ export const authAPI = {
   check: () => rawApi.get('/auth/check').then(r => r.data),
   login: (password) => rawApi.post('/auth/login', { password }).then(r => r.data),
   setup: (password) => rawApi.post('/auth/setup', { password }).then(r => r.data),
+  enable: (data) => rawApi.post('/auth/enable', data).then(r => r.data),
+  disable: (data) => rawApi.post('/auth/disable', data).then(r => r.data),
   logout: () => api.post('/auth/logout'),
   changePassword: (old_password, new_password) => api.post('/auth/change-password', { old_password, new_password }),
 }
@@ -112,6 +114,45 @@ export const relayAPI = {
   getLogs: (limit = 100) => api.get('/relay/logs', { params: { limit } }),
   clearLogs: () => api.delete('/relay/logs'),
   injectCodex: (data) => api.post('/relay/inject-codex', data),
+}
+
+// Antigravity API
+export const antigravityAPI = {
+  list: () => api.get('/antigravity/accounts'),
+  get: (id) => api.get(`/antigravity/accounts/${id}`),
+  add: (data) => api.post('/antigravity/accounts', data),
+  update: (id, data) => api.put(`/antigravity/accounts/${id}`, data),
+  delete: (id) => api.delete(`/antigravity/accounts/${id}`),
+  deleteMany: (ids) => api.delete('/antigravity/accounts', { data: { ids } }),
+  activate: (id) => api.post(`/antigravity/accounts/${id}/activate`),
+  refresh: (id) => longApi.post(`/antigravity/accounts/${id}/refresh`),
+  refreshAll: () => longApi.post('/antigravity/accounts/refresh-all'),
+  wakeup: (id, data = {}) => longApi.post(`/antigravity/accounts/${id}/wakeup`, data),
+  // OAuth
+  startOAuth: () => api.post('/antigravity/oauth/start'),
+  completeOAuth: (data) => longApi.post('/antigravity/oauth/complete', data),
+  submitCallback: (data) => api.post('/antigravity/oauth/submit-callback', data),
+  cancelOAuth: (data) => api.post('/antigravity/oauth/cancel', data),
+  // Import/Export
+  importAccounts: (data) => api.post('/antigravity/accounts/import', data),
+  exportJSON: () => api.get('/antigravity/accounts/export'),
+}
+
+// Cursor API
+export const cursorAPI = {
+  list: () => api.get('/cursor/accounts'),
+  get: (id) => api.get(`/cursor/accounts/${id}`),
+  add: (data) => api.post('/cursor/accounts', data),
+  update: (id, data) => api.put(`/cursor/accounts/${id}`, data),
+  delete: (id) => api.delete(`/cursor/accounts/${id}`),
+  deleteMany: (ids) => api.delete('/cursor/accounts', { data: { ids } }),
+  activate: (id) => api.post(`/cursor/accounts/${id}/activate`),
+  refresh: (id) => longApi.post(`/cursor/accounts/${id}/refresh`),
+  refreshAll: () => longApi.post('/cursor/accounts/refresh-all'),
+  wakeup: (id) => longApi.post(`/cursor/accounts/${id}/wakeup`),
+  detectLocal: () => longApi.post('/cursor/detect-local'),
+  importAccounts: (data) => api.post('/cursor/accounts/import', data),
+  exportJSON: () => api.get('/cursor/accounts/export'),
 }
 
 export { longApi }

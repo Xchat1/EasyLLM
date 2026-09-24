@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="url(#cursor-grad-top)"/>
+  <path d="M2 7V17L12 22V12L2 7Z" fill="url(#cursor-grad-left)"/>
+  <path d="M22 7V17L12 22V12L22 7Z" fill="url(#cursor-grad-right)"/>
+  <defs>
+    <linearGradient id="cursor-grad-top" x1="2" y1="2" x2="22" y2="12" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A855F7"/>
+      <stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+    <linearGradient id="cursor-grad-left" x1="2" y1="7" x2="12" y2="22" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4F46E5"/>
+      <stop offset="1" stop-color="#312E81"/>
+    </linearGradient>
+    <linearGradient id="cursor-grad-right" x1="12" y1="12" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#4C1D95"/>
+    </linearGradient>
+  </defs>
+</svg>

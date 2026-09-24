@@ -6,8 +6,8 @@ import (
 
 func TestRelayUsageStoreRecordAndSnapshot(t *testing.T) {
 	store := &RelayUsageStore{}
-	store.Record("gpt-5.5", false, 100, 50, 150, 10)
-	store.Record("gpt-5.5", true, 200, 80, 280, 0)
+	store.Record("gpt-5.6-sol", false, 100, 50, 150, 10)
+	store.Record("gpt-5.6-sol", true, 200, 80, 280, 0)
 
 	snap := store.Snapshot()
 	if snap.RequestCount != 2 {
@@ -28,8 +28,8 @@ func TestRelayUsageStoreRecordAndSnapshot(t *testing.T) {
 	if snap.CachedTokens != 10 {
 		t.Fatalf("expected 10 cached tokens, got %d", snap.CachedTokens)
 	}
-	if snap.LastModel != "gpt-5.5" {
-		t.Fatalf("expected last model gpt-5.5, got %q", snap.LastModel)
+	if snap.LastModel != "gpt-5.6-sol" {
+		t.Fatalf("expected last model gpt-5.6-sol, got %q", snap.LastModel)
 	}
 }
 
@@ -37,7 +37,7 @@ func TestRelayUsageStoreRecordCallHistory(t *testing.T) {
 	store := &RelayUsageStore{}
 	store.RecordCall(RelayCallRecord{
 		Provider:      "DeepSeek",
-		CodexModel:    "gpt-5.5",
+		CodexModel:    "gpt-5.6-sol",
 		UpstreamModel: "deepseek-coder",
 		Stream:        true,
 		InputTokens:   100,

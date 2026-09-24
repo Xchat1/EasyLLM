@@ -18,6 +18,11 @@ data/
 auth/
 exports/
 backups/
+imports/
+tokens/
+accounts/
+sessions/
+cookies/
 *.db
 *.db-*
 *.sqlite
@@ -36,9 +41,20 @@ token*.json
 *cpa*.json
 *backup*.json
 *export*.json
+*account*.json
+*accounts*.json
+*session*.json
+*sub2api*.json
 easyllm-accounts-*.json
 easyllm_accounts_*.json
+easyllm-cursor-accounts-*.json
+antigravity-accounts-*.json
 codex_tokens_*.json
+codex_accounts*.json
+*.session
+*.session-data
+*.cookie
+*.cookies
 *.pem
 *.key
 *.p12
@@ -69,6 +85,9 @@ web/dist/
 
 # Temp/backup files
 logs/
+scratch/
+# Local account screenshots are not publishable assets.
+/总览.png
 *.log
 *.bak
 *.backup
@@ -77,6 +96,7 @@ logs/
 *.swp
 *.swo
 .codex_tmp/
+.codex-go-cache/
 *_new.vue
 OpenAI账号显示优化说明.md
 功能对齐报告.md

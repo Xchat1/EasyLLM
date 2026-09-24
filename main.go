@@ -5,12 +5,18 @@ import (
 	"easyllm/internal/server"
 	"log"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Tune Go runtime for minimal memory footprint on macOS:
+	// Set target memory limit to 48MB and trigger GC at 50% heap growth.
+	debug.SetMemoryLimit(48 * 1024 * 1024)
+	debug.SetGCPercent(50)
+
 	// Load .env file if present
 	godotenv.Load()
 

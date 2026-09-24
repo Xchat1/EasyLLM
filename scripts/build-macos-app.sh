@@ -22,10 +22,20 @@ ICONSET_DIR="${BUILD_DIR}/${APP_NAME}.iconset"
 ICON_BUILDER="${BUILD_DIR}/make-app-icon"
 APP_ICON_SOURCE="${ROOT_DIR}/web/src/assets/brand/easyllm-app-icon.png"
 
+INSTALL_APP=0
+RESTART_APP=0
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --package)
       PACKAGE_RELEASE=1
+      ;;
+    --install)
+      INSTALL_APP=1
+      ;;
+    --restart)
+      INSTALL_APP=1
+      RESTART_APP=1
       ;;
     --version)
       VERSION="${2:?缺少 --version 参数}"
@@ -142,6 +152,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
   </dict>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
 </dict>
 </plist>
 PLIST
@@ -166,4 +178,20 @@ if [[ "${PACKAGE_RELEASE}" == "1" ]]; then
   echo "→ 生成 release zip"
   ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "${ZIP_PATH}"
   echo "Package: ${ZIP_PATH}"
+fi
+
+if [[ "${INSTALL_APP}" == "1" ]]; then
+  echo "→ 覆盖安装到 /Applications/${APP_NAME}.app"
+  pkill -9 -x "${APP_NAME}" 2>/dev/null || true
+  pkill -9 -x "easyllm" 2>/dev/null || true
+  rm -rf "/Applications/${APP_NAME}.app"
+  cp -R "${APP_DIR}" "/Applications/${APP_NAME}.app"
+  echo "已覆盖安装到 /Applications/${APP_NAME}.app"
+fi
+
+if [[ "${RESTART_APP}" == "1" ]]; then
+  echo "→ 正在重新启动应用..."
+  sleep 1
+  open "/Applications/${APP_NAME}.app"
+  echo "EasyLLM 已成功重启。"
 fi

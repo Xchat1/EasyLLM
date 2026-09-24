@@ -609,14 +609,14 @@ func TestFindMatchingOAuthAccountDoesNotUseEmailWhenScopedIDDiffers(t *testing.T
 	existingAccounts := []models.OpenAIAccount{
 		{
 			ID:               "existing-id",
-			Email:            "musfeldisolde751+9871@gmail.com",
+			Email:            "fixture-user@example.com",
 			AccountType:      models.OpenAIAccountTypeOAuth,
 			ChatGPTAccountID: sPtr("acct-existing"),
 			OrganizationID:   sPtr("org-existing"),
 		},
 	}
 	incoming := &models.OpenAIAccount{
-		Email:            "musfeldisolde751+9871@gmail.com",
+		Email:            "fixture-user@example.com",
 		AccountType:      models.OpenAIAccountTypeOAuth,
 		ChatGPTAccountID: sPtr("acct-incoming"),
 		OrganizationID:   sPtr("org-incoming"),
@@ -649,7 +649,7 @@ func TestImportCPABytesReimportsSameEmailWithoutDuplicate(t *testing.T) {
 	handler := NewOpenAIHandler(storage.NewOpenAIStorage(db), storage.NewCodexStorage(db))
 
 	sessionJSON := []byte(`{
-		"user": {"email": "musfeldisolde751+9871@gmail.com"},
+		"user": {"email": "fixture-user@example.com"},
 		"expires": "2026-10-02T07:11:09.740Z",
 		"account": {
 			"id": "ff598c4d-ccaf-40c1-bfaa-cb94565764b1",
@@ -675,7 +675,7 @@ func TestImportCPABytesReimportsSameEmailWithoutDuplicate(t *testing.T) {
 	var imported *models.OpenAIAccount
 	for _, account := range accounts {
 		if account.AccountType == models.OpenAIAccountTypeOAuth &&
-			strings.EqualFold(account.Email, "musfeldisolde751+9871@gmail.com") {
+			strings.EqualFold(account.Email, "fixture-user@example.com") {
 			oauthCount++
 			imported = &account
 		}

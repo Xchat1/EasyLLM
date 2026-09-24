@@ -46,8 +46,21 @@ func (h *AuthHandler) InitializeDefaultPassword() error {
 		return fmt.Errorf("failed to save default password: %w", err)
 	}
 
-	fmt.Printf("[AUTH] Default password initialized\n")
+	_ = storage.SaveSetting("auth_enabled", "true")
+
+	fmt.Printf("[AUTH] Default password initialized and auth enabled\n")
 	return nil
+}
+
+// IsAuthEnabled returns whether access password authentication is enabled.
+// Preserve password protection for databases created before auth_enabled existed.
+func IsAuthEnabled() bool {
+	val, ok := storage.GetSetting("auth_enabled")
+	if ok {
+		return val == "true"
+	}
+	_, hasPassword := storage.GetSetting("auth_password")
+	return hasPassword
 }
 
 func (h *AuthHandler) RegisterRoutes(rg *gin.RouterGroup) {
@@ -55,6 +68,8 @@ func (h *AuthHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	auth.POST("/login", h.Login)
 	auth.GET("/check", h.Check)
 	auth.POST("/setup", h.Setup)
+	auth.POST("/enable", h.EnableAuth)
+	auth.POST("/disable", h.DisableAuth)
 }
 
 func (h *AuthHandler) RegisterProtectedRoutes(rg *gin.RouterGroup) {
@@ -66,7 +81,96 @@ func (h *AuthHandler) RegisterProtectedRoutes(rg *gin.RouterGroup) {
 func (h *AuthHandler) Check(c *gin.Context) {
 	_, hasPassword := storage.GetSetting("auth_password")
 	c.JSON(http.StatusOK, gin.H{
+		"auth_enabled": IsAuthEnabled(),
 		"password_set": hasPassword,
+	})
+}
+
+func (h *AuthHandler) EnableAuth(c *gin.Context) {
+	var req struct {
+		Password    string `json:"password"`
+		OldPassword string `json:"old_password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "Invalid request payload", Code: "INVALID_REQUEST"})
+		return
+	}
+
+	stored, hasPassword := storage.GetSetting("auth_password")
+
+	if IsAuthEnabled() {
+		if !hasPassword || bcrypt.CompareHashAndPassword([]byte(stored), []byte(req.OldPassword)) != nil {
+			c.JSON(http.StatusUnauthorized, models.APIError{Error: "Current password required", Code: "UNAUTHORIZED"})
+			return
+		}
+	}
+
+	if strings.TrimSpace(req.Password) != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIError{Error: "密码加密失败", Code: "INTERNAL_ERROR"})
+			return
+		}
+		if err := storage.SaveSetting("auth_password", string(hash)); err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIError{Error: "保存密码失败", Code: "INTERNAL_ERROR"})
+			return
+		}
+	} else if !hasPassword {
+		c.JSON(http.StatusBadRequest, models.APIError{Error: "请设置访问密码", Code: "PASSWORD_REQUIRED"})
+		return
+	}
+
+	if err := storage.SaveSetting("auth_enabled", "true"); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: "保存认证状态失败", Code: "INTERNAL_ERROR"})
+		return
+	}
+
+	token, err := generateJWT(config.Get().App.SecretKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: "生成令牌失败", Code: "INTERNAL_ERROR"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"auth_enabled": true,
+		"token":        token,
+		"message":      "访问密码保护已开启",
+	})
+}
+
+func (h *AuthHandler) DisableAuth(c *gin.Context) {
+	if !IsAuthEnabled() {
+		c.JSON(http.StatusOK, gin.H{"success": true, "auth_enabled": false, "message": "访问密码未开启"})
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	stored, hasPassword := storage.GetSetting("auth_password")
+	if hasPassword {
+		if strings.TrimSpace(req.Password) == "" {
+			c.JSON(http.StatusBadRequest, models.APIError{Error: "请输入当前密码以关闭密码保护", Code: "PASSWORD_REQUIRED"})
+			return
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(stored), []byte(req.Password)); err != nil {
+			c.JSON(http.StatusUnauthorized, models.APIError{Error: "密码错误，无法关闭密码保护", Code: "UNAUTHORIZED"})
+			return
+		}
+	}
+
+	if err := storage.SaveSetting("auth_enabled", "false"); err != nil {
+		c.JSON(http.StatusInternalServerError, models.APIError{Error: "保存认证状态失败", Code: "INTERNAL_ERROR"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"auth_enabled": false,
+		"message":      "访问密码保护已关闭（免密访问模式）",
 	})
 }
 
@@ -95,16 +199,24 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 		return
 	}
 
+	_ = storage.SaveSetting("auth_enabled", "true")
+
 	token, err := generateJWT(config.Get().App.SecretKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIError{Error: "Failed to generate token", Code: "INTERNAL_ERROR"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "token": token})
+	c.JSON(http.StatusOK, gin.H{"success": true, "token": token, "auth_enabled": true})
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
+	if !IsAuthEnabled() {
+		token, _ := generateJWT(config.Get().App.SecretKey)
+		c.JSON(http.StatusOK, gin.H{"success": true, "token": token, "auth_enabled": false})
+		return
+	}
+
 	stored, ok := storage.GetSetting("auth_password")
 	if !ok {
 		c.JSON(http.StatusBadRequest, models.APIError{Error: "No password set, use setup first", Code: "NO_PASSWORD"})
@@ -130,7 +242,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "token": token})
+	c.JSON(http.StatusOK, gin.H{"success": true, "token": token, "auth_enabled": true})
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
@@ -174,6 +286,11 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !IsAuthEnabled() {
+			c.Next()
+			return
+		}
+
 		auth := strings.TrimSpace(c.GetHeader("Authorization"))
 		const bearerPrefix = "Bearer "
 		if len(auth) <= len(bearerPrefix) || !strings.EqualFold(auth[:len(bearerPrefix)], bearerPrefix) {

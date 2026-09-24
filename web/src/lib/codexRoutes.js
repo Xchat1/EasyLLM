@@ -1,4 +1,5 @@
 import openAIIcon from '@/assets/brand/openai.svg'
+import cursorIcon from '@/assets/brand/cursor.svg'
 
 export const codexRoutes = [
   {
@@ -13,6 +14,31 @@ export const codexRoutes = [
     managementMode: 'legacy',
     heroClass: 'from-sky-500/20 via-blue-400/10 to-gray-950',
     supports: { instances: false, wakeup: false, quota: true },
+  },
+  {
+    id: 'antigravity',
+    label: 'Antigravity',
+    icon: '🚀',
+    iconBg: '#1e1b4b',
+    route: '/antigravity',
+    description: '管理 Google OAuth 账号、配额监控与 Antigravity IDE 切号。',
+    category: 'workspace',
+    managementMode: 'generic',
+    heroClass: 'from-orange-500/20 via-amber-400/10 to-gray-950',
+    supports: { instances: false, wakeup: true, quota: true },
+  },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    icon: '⚡',
+    iconSrc: cursorIcon,
+    iconBg: '#18181b',
+    route: '/cursor',
+    description: '管理 Cursor 账号凭据、配额监控与 Cursor IDE 一键切号。',
+    category: 'workspace',
+    managementMode: 'generic',
+    heroClass: 'from-purple-500/20 via-indigo-400/10 to-gray-950',
+    supports: { instances: false, wakeup: true, quota: true },
   },
 ]
 

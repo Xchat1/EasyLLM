@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { defaultHomePath, syncMacAppFromRoute } from '@/lib/runtime'
+import { fetchAuthStatus } from '@/lib/auth'
 
 const routes = [
   {
@@ -25,8 +26,24 @@ const routes = [
     meta: { title: 'Codex', icon: '🤖' },
   },
   {
+    path: '/antigravity',
+    name: 'antigravity',
+    component: () => import('@/views/AntigravityView.vue'),
+    meta: { title: 'Antigravity', icon: '🚀' },
+  },
+  {
+    path: '/cursor',
+    name: 'cursor',
+    component: () => import('@/views/CursorView.vue'),
+    meta: { title: 'Cursor', icon: '⚡' },
+  },
+  {
     path: '/openai',
     redirect: '/codex',
+  },
+  {
+    path: '/ag',
+    redirect: '/antigravity',
   },
   {
     path: '/docs',
@@ -56,15 +73,29 @@ const router = createRouter({
 router.beforeEach(async (to, from, next) => {
   syncMacAppFromRoute(to)
 
+  const authStatus = await fetchAuthStatus()
+  const authEnabled = !!authStatus?.auth_enabled
+
+  if (to.path === '/login') {
+    if (!authEnabled) {
+      next(defaultHomePath())
+      return
+    }
+    next()
+    return
+  }
+
   if (to.meta.public) {
     next()
     return
   }
 
-  const token = localStorage.getItem('easyllm_token')
-  if (!token) {
-    next('/login')
-    return
+  if (authEnabled) {
+    const token = localStorage.getItem('easyllm_token')
+    if (!token) {
+      next('/login')
+      return
+    }
   }
   next()
 })

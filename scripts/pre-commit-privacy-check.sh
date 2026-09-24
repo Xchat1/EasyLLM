@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-remote_name="${1:-origin}"
-remote_url="${2:-}"
-null_sha="0000000000000000000000000000000000000000"
-
 trim_line() {
   printf '%s' '[redacted]'
 }
@@ -55,15 +51,6 @@ should_skip_content_scan() {
   return 1
 }
 
-added_lines_for_file() {
-  local commit="$1"
-  local path="$2"
-
-  git show --format= --unified=0 --no-ext-diff "$commit" -- "$path" \
-    | grep -E '^\+' \
-    | grep -vE '^\+\+\+' || true
-}
-
 match_secret_line() {
 	local lines="$1"
 	local line
@@ -99,65 +86,44 @@ match_secret_line() {
 	return 1
 }
 
-print_header=1
 hit_count=0
+print_header=1
 
-while read -r local_ref local_sha remote_ref remote_sha; do
-  [ -z "${local_ref:-}" ] && continue
-  [ "${local_sha:-$null_sha}" = "$null_sha" ] && continue
+while IFS= read -r -d '' path; do
+  [ -z "$path" ] && continue
 
-  if [ "${remote_sha:-$null_sha}" = "$null_sha" ]; then
-    commit_cmd=(git rev-list "$local_sha" --not --remotes="$remote_name")
-  else
-    commit_cmd=(git rev-list "$remote_sha..$local_sha")
+  if is_blocked_path "$path"; then
+    if [ "$print_header" -eq 1 ]; then
+      echo "Commit blocked: detected staged file that commonly contains private credentials or sensitive account data."
+      print_header=0
+    fi
+    echo "  - blocked staged file path: '$path'"
+    hit_count=$((hit_count + 1))
+    continue
   fi
 
-  while IFS= read -r commit; do
-    [ -z "$commit" ] && continue
+  if should_skip_content_scan "$path"; then
+    continue
+  fi
 
-    while IFS= read -r -d '' path; do
-      [ -z "$path" ] && continue
+  added_lines="$(git diff --cached --unified=0 --no-ext-diff -- "$path" | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+  [ -z "$added_lines" ] && continue
 
-      if is_blocked_path "$path"; then
-        if [ "$print_header" -eq 1 ]; then
-          echo "Push blocked: detected files that commonly contain secrets or private data."
-          echo "Remote: ${remote_name} ${remote_url}"
-          echo
-          print_header=0
-        fi
-        echo "  - commit ${commit:0:12}: blocked file path '$path'"
-        hit_count=$((hit_count + 1))
-        continue
-      fi
-
-      if should_skip_content_scan "$path"; then
-        continue
-      fi
-
-      added_lines="$(added_lines_for_file "$commit" "$path")"
-      [ -z "$added_lines" ] && continue
-
-      if preview="$(match_secret_line "$added_lines")"; then
-        if [ "$print_header" -eq 1 ]; then
-          echo "Push blocked: detected content that looks like a secret or credential."
-          echo "Remote: ${remote_name} ${remote_url}"
-          echo
-          print_header=0
-        fi
-        echo "  - commit ${commit:0:12}: suspicious content in '$path'"
-        echo "    preview: $(trim_line "$preview")"
-        hit_count=$((hit_count + 1))
-      fi
-    done < <(git diff-tree --root -r --no-commit-id --name-only -z --diff-filter=ACMRT "$commit")
-  done < <("${commit_cmd[@]}")
-done
+  if preview="$(match_secret_line "$added_lines")"; then
+    if [ "$print_header" -eq 1 ]; then
+      echo "Commit blocked: detected staged content that looks like a secret or credential."
+      print_header=0
+    fi
+    echo "  - suspicious content in staged file: '$path'"
+    echo "    preview: $(trim_line "$preview")"
+    hit_count=$((hit_count + 1))
+  fi
+done < <(git diff --cached --name-only -z --diff-filter=ACMRT)
 
 if [ "$hit_count" -gt 0 ]; then
   echo
-  echo "Fix suggestion:"
-  echo "  1. Move secrets to ignored files such as .env or auth/*.json."
-  echo "  2. Remove tracked secret files with: git rm --cached <file>"
-  echo "  3. If secrets were committed earlier, rewrite or drop those commits before pushing."
+  echo "Security protection: commit aborted to prevent committing private account data."
+  echo "Please unstage the sensitive file with: git reset HEAD <file>"
   exit 1
 fi
 

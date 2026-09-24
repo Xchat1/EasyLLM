@@ -189,34 +189,129 @@
       </article>
     </section>
 
-    <section v-else class="card p-5 space-y-5">
-      <div>
-        <h2 class="text-lg font-semibold text-white">访问安全</h2>
-        <p class="mt-1 text-sm text-gray-500">继续保留 EasyLLM 自身的登录密码能力。</p>
-      </div>
-
-      <div class="max-w-xl space-y-4">
-        <div v-if="passwordSet">
-          <label class="label">当前密码</label>
-          <input v-model="pwForm.oldPassword" type="password" class="input" placeholder="输入当前密码" />
-        </div>
+    <section v-else class="card p-6 space-y-6">
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between border-b border-gray-800 pb-4">
         <div>
-          <label class="label">{{ passwordSet ? '新密码' : '设置密码' }}</label>
-          <input v-model="pwForm.newPassword" type="password" class="input" placeholder="输入密码" />
+          <h2 class="text-lg font-semibold text-white">访问安全与密码保护</h2>
+          <p class="mt-1 text-sm text-gray-400">
+            EasyLLM 默认免密访问。开启密码保护后，访问 Web 控制台与客户端将需要输入访问密码。
+          </p>
         </div>
-        <div>
-          <label class="label">确认密码</label>
-          <input v-model="pwForm.confirmPassword" type="password" class="input" placeholder="再次输入" />
-        </div>
-        <div v-if="pwError" class="rounded-2xl border border-red-700 bg-red-900/20 px-4 py-3 text-sm text-red-300">
-          {{ pwError }}
+        <div class="flex items-center gap-2 shrink-0">
+          <span
+            class="px-2.5 py-1 text-xs font-medium rounded-full border flex items-center gap-1.5"
+            :class="authEnabled ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : 'bg-gray-800 text-gray-400 border-gray-700'"
+          >
+            <span class="h-1.5 w-1.5 rounded-full" :class="authEnabled ? 'bg-emerald-400' : 'bg-gray-500'"></span>
+            {{ authEnabled ? '已开启密码保护' : '未开启 (默认免密)' }}
+          </span>
         </div>
       </div>
 
-      <div class="flex justify-end">
-        <button class="btn btn-primary" :disabled="pwSaving" @click="savePassword">
-          {{ pwSaving ? '保存中...' : passwordSet ? '修改密码' : '设置密码' }}
-        </button>
+      <!-- State 1: Auth is currently DISABLED (Default) -->
+      <div v-if="!authEnabled" class="space-y-4">
+        <div class="rounded-2xl border border-gray-800 bg-gray-950/60 p-4 text-sm text-gray-300 space-y-2">
+          <div class="font-medium text-white flex items-center gap-2">
+            <span>🛡️ 免密访问模式</span>
+          </div>
+          <p class="text-xs text-gray-400 leading-relaxed">
+            当前处于免密访问状态，您和任何访问本服务的人无需登录即可直接管理渠道与配置。
+            若您的 EasyLLM 暴露在局域网或公网，建议开启密码保护以保障凭据安全。
+          </p>
+        </div>
+
+        <div class="max-w-xl space-y-4 pt-2">
+          <h3 class="text-sm font-semibold text-white">开启访问密码</h3>
+          <div>
+            <label class="label">设置新密码 *</label>
+            <input v-model="pwForm.newPassword" type="password" class="input" placeholder="输入访问密码" />
+          </div>
+          <div>
+            <label class="label">确认密码 *</label>
+            <input v-model="pwForm.confirmPassword" type="password" class="input" placeholder="再次输入确认密码" />
+          </div>
+          <div v-if="pwError" class="rounded-2xl border border-red-700 bg-red-900/20 px-4 py-3 text-sm text-red-300">
+            {{ pwError }}
+          </div>
+
+          <div class="flex flex-wrap items-center gap-3 pt-2">
+            <button class="btn btn-primary" :disabled="pwSaving" @click="enablePasswordAuth">
+              {{ pwSaving ? '开启中...' : '开启密码保护' }}
+            </button>
+            <button
+              v-if="passwordSet"
+              class="btn btn-secondary text-xs"
+              :disabled="pwSaving"
+              @click="enableWithExistingPassword"
+              title="使用此前设置过的密码直接启用"
+            >
+              使用已有密码直接启用
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- State 2: Auth is currently ENABLED -->
+      <div v-else class="space-y-6">
+        <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-sm text-emerald-300">
+          <div class="font-medium text-emerald-200 flex items-center gap-2">
+            <span>🔒 密码保护已生效</span>
+          </div>
+          <p class="text-xs text-emerald-400/80 mt-1 leading-relaxed">
+            已开启访问控制。未携带有效身份令牌的访问将被重定向到登录页面。
+          </p>
+        </div>
+
+        <!-- Section A: Change Password -->
+        <div class="max-w-xl space-y-4">
+          <h3 class="text-sm font-semibold text-white">修改访问密码</h3>
+          <div>
+            <label class="label">当前密码 *</label>
+            <input v-model="pwForm.oldPassword" type="password" class="input" placeholder="输入当前密码" />
+          </div>
+          <div>
+            <label class="label">新密码 *</label>
+            <input v-model="pwForm.newPassword" type="password" class="input" placeholder="输入新密码" />
+          </div>
+          <div>
+            <label class="label">确认新密码 *</label>
+            <input v-model="pwForm.confirmPassword" type="password" class="input" placeholder="再次输入新密码" />
+          </div>
+          <div v-if="pwError" class="rounded-2xl border border-red-700 bg-red-900/20 px-4 py-3 text-sm text-red-300">
+            {{ pwError }}
+          </div>
+          <div class="flex justify-start">
+            <button class="btn btn-primary" :disabled="pwSaving" @click="savePassword">
+              {{ pwSaving ? '保存中...' : '修改密码' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Section B: Disable Password (turn off) -->
+        <div class="border-t border-gray-800 pt-6 max-w-xl space-y-4">
+          <div>
+            <h3 class="text-sm font-semibold text-rose-400">关闭密码保护</h3>
+            <p class="text-xs text-gray-500 mt-0.5">
+              关闭后将恢复为免密模式，访问 EasyLLM 将不再要求输入密码。
+            </p>
+          </div>
+          <div>
+            <label class="label">输入当前密码以确认关闭 *</label>
+            <input v-model="disableForm.password" type="password" class="input" placeholder="输入当前密码" />
+          </div>
+          <div v-if="disableError" class="rounded-2xl border border-red-700 bg-red-900/20 px-4 py-3 text-sm text-red-300">
+            {{ disableError }}
+          </div>
+          <div>
+            <button
+              class="btn btn-danger"
+              :disabled="pwDisabling"
+              @click="disablePasswordAuth"
+            >
+              {{ pwDisabling ? '关闭中...' : '确认关闭密码保护 (恢复免密)' }}
+            </button>
+          </div>
+        </div>
       </div>
     </section>
   </div>
@@ -227,6 +322,7 @@ import { computed, inject, onMounted, ref } from 'vue'
 import { authAPI, settingsAPI } from '@/api'
 import { ACCENT_THEMES, THEME_MODES } from '@/config/theme'
 import { useAppearance } from '@/composables/useAppearance'
+import { setAuthStatusCache } from '@/lib/auth'
 
 const notify = inject('notify')
 const { themeMode, accentTheme, setThemeMode, setAccentTheme } = useAppearance()
@@ -245,14 +341,18 @@ const proxy = ref({ enabled: false, host: '', port: 0, username: '', password: '
 const database = ref({ type: 'sqlite', sqlite_path: '' })
 const quotaCheck = ref({ timeout_seconds: 60, concurrency: 10 })
 const sysInfo = ref({})
+const authEnabled = ref(false)
 const passwordSet = ref(false)
 const quotaCheckSaving = ref(false)
 const quotaCheckRunning = ref(false)
 const quotaCheckResult = ref('')
 
 const pwForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
+const disableForm = ref({ password: '' })
 const pwError = ref('')
+const disableError = ref('')
 const pwSaving = ref(false)
+const pwDisabling = ref(false)
 
 const appearance = computed(() => ({
   mode: themeMode.value,
@@ -276,7 +376,9 @@ async function loadSettings() {
     database.value = { ...database.value, ...databaseData }
     quotaCheck.value = { ...quotaCheck.value, ...quotaCheckData }
     sysInfo.value = sysData
+    authEnabled.value = !!authData.auth_enabled
     passwordSet.value = !!authData.password_set
+    setAuthStatusCache(authData)
   } catch (error) {
     notify?.(error.message || '加载设置失败', 'error')
   }
@@ -361,8 +463,60 @@ async function runQuotaCheck() {
   }
 }
 
+async function enablePasswordAuth() {
+  pwError.value = ''
+  if (!pwForm.value.newPassword) {
+    pwError.value = '请输入访问密码'
+    return
+  }
+  if (pwForm.value.newPassword !== pwForm.value.confirmPassword) {
+    pwError.value = '两次输入的密码不一致'
+    return
+  }
+
+  pwSaving.value = true
+  try {
+    const res = await authAPI.enable({ password: pwForm.value.newPassword })
+    if (res?.token) {
+      localStorage.setItem('easyllm_token', res.token)
+    }
+    authEnabled.value = true
+    passwordSet.value = true
+    setAuthStatusCache({ auth_enabled: true, password_set: true })
+    pwForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
+    notify?.('访问密码保护已开启', 'success')
+  } catch (err) {
+    pwError.value = err.message || '开启密码保护失败'
+  } finally {
+    pwSaving.value = false
+  }
+}
+
+async function enableWithExistingPassword() {
+  pwSaving.value = true
+  pwError.value = ''
+  try {
+    const res = await authAPI.enable({})
+    if (res?.token) {
+      localStorage.setItem('easyllm_token', res.token)
+    }
+    authEnabled.value = true
+    passwordSet.value = true
+    setAuthStatusCache({ auth_enabled: true, password_set: true })
+    notify?.('访问密码保护已开启', 'success')
+  } catch (err) {
+    pwError.value = err.message || '开启密码保护失败'
+  } finally {
+    pwSaving.value = false
+  }
+}
+
 async function savePassword() {
   pwError.value = ''
+  if (!pwForm.value.oldPassword) {
+    pwError.value = '请输入当前密码'
+    return
+  }
   if (!pwForm.value.newPassword) {
     pwError.value = '请输入新密码'
     return
@@ -374,21 +528,34 @@ async function savePassword() {
 
   pwSaving.value = true
   try {
-    if (passwordSet.value) {
-      await authAPI.changePassword(pwForm.value.oldPassword, pwForm.value.newPassword)
-    } else {
-      const result = await authAPI.setup(pwForm.value.newPassword)
-      if (result?.token) {
-        localStorage.setItem('easyllm_token', result.token)
-      }
-      passwordSet.value = true
-    }
+    await authAPI.changePassword(pwForm.value.oldPassword, pwForm.value.newPassword)
     pwForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
-    notify?.('密码已更新', 'success')
+    notify?.('密码已成功修改', 'success')
   } catch (error) {
     pwError.value = error.message || '密码保存失败'
   } finally {
     pwSaving.value = false
+  }
+}
+
+async function disablePasswordAuth() {
+  disableError.value = ''
+  if (!disableForm.value.password) {
+    disableError.value = '请输入当前密码以确认关闭'
+    return
+  }
+
+  pwDisabling.value = true
+  try {
+    await authAPI.disable({ password: disableForm.value.password })
+    authEnabled.value = false
+    setAuthStatusCache({ auth_enabled: false })
+    disableForm.value = { password: '' }
+    notify?.('访问密码保护已关闭（恢复免密访问模式）', 'success')
+  } catch (err) {
+    disableError.value = err.message || '关闭密码保护失败'
+  } finally {
+    pwDisabling.value = false
   }
 }
 </script>

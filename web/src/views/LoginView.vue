@@ -51,6 +51,7 @@ import { useRouter } from 'vue-router'
 import { authAPI } from '../api'
 import logoUrl from '@/assets/brand/easyllm-app-icon.png'
 import { defaultHomePath } from '@/lib/runtime'
+import { setAuthStatusCache } from '@/lib/auth'
 
 const router = useRouter()
 const password = ref('')
@@ -63,9 +64,13 @@ const isSetup = ref(false)
 onMounted(async () => {
   try {
     const data = await authAPI.check()
+    if (!data.auth_enabled) {
+      router.replace(defaultHomePath())
+      return
+    }
     isSetup.value = !data.password_set
   } catch {
-    isSetup.value = true
+    isSetup.value = false
   }
 })
 
@@ -81,6 +86,7 @@ async function handleSubmit() {
     try {
       const data = await authAPI.setup(password.value)
       localStorage.setItem('easyllm_token', data.token)
+      setAuthStatusCache({ auth_enabled: true, password_set: true })
       router.replace(defaultHomePath())
     } catch (e) {
       error.value = e.message || '设置失败'
@@ -92,6 +98,7 @@ async function handleSubmit() {
     try {
       const data = await authAPI.login(password.value)
       localStorage.setItem('easyllm_token', data.token)
+      setAuthStatusCache({ auth_enabled: true, password_set: true })
       router.replace(defaultHomePath())
     } catch (e) {
       error.value = '密码错误'

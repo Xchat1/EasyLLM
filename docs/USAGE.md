@@ -97,7 +97,7 @@ Relay 模式让 Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容的上游提�
 进入侧边栏 **Codex → Relay**：
 
 1. 在「上游渠道」区域点击「添加渠道」，填写上游 URL 和 API Key
-2. 根据需要配置模型映射（如 `{"gpt-5.6-sol":"deepseek-reasoner","gpt-5.6-terra":"deepseek-chat","gpt-5.6-luna":"deepseek-chat"}`）
+2. 根据需要配置模型映射（如 `{"gpt-6-astra":"deepseek-reasoner","gpt-6-luna":"deepseek-chat","gpt-5.6-sol":"deepseek-reasoner","gpt-5.6-terra":"deepseek-chat"}`）
 3. 点击「启动并注入 Codex」，EasyLLM 自动写入 `~/.codex/config.toml`
 
 多个启用渠道会按 round-robin 轮询；渠道 URL、API Key、认证头和认证前缀会在保存时自动去除多余空白，空 URL 的渠道不会参与转发。
@@ -193,3 +193,7 @@ GET  /pool/status
 - EasyLLM 面向本机 Codex/OpenAI 对接，脚本模式默认监听 `127.0.0.1:8022`，不要对公网开放。
 - 不要将 `.env`、`data/`、`auth/`、数据库、Token/CPA JSON、导出备份、日志、`build/`、`web/dist/` 或本地助手目录提交到 Git。
 - 生成 release zip 后，建议运行 `./scripts/check-release-archives.sh build/release/*.zip` 检查发布包是否包含私有文件或疑似密钥。
+
+## Antigravity OAuth 本地配置
+
+Antigravity OAuth 登录与 Token 刷新需要在本地 `.env` 中设置 `ANTIGRAVITY_OAUTH_CLIENT_SECRET`；可用 `ANTIGRAVITY_OAUTH_CLIENT_ID` 覆盖客户端 ID。密钥仅保存在本机，不应放入源码、文档或提交历史。`.env` 已被 Git 忽略。

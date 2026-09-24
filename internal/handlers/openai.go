@@ -3288,7 +3288,7 @@ func (h *OpenAIHandler) codexLocalAccessState(c *gin.Context) models.CodexLocalA
 		Running:     running,
 		BaseURL:     baseURL,
 		APIPortURL:  strings.TrimRight(baseURL, "/") + "/responses",
-		ModelIDs:    openaiplatform.GPT56CodexModelIDs(),
+		ModelIDs:    openaiplatform.SupportedCodexModelIDs(),
 		MemberCount: len(collection.AccountIDs),
 		Stats:       h.buildCodexLocalAccessStats(),
 	}
