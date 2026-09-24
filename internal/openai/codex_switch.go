@@ -62,7 +62,7 @@ func SwitchCodexOAuthAccount(accessToken, refreshToken, idToken string, accountI
 		return fmt.Errorf("failed to marshal auth.json: %w", err)
 	}
 
-	if err := os.WriteFile(authFile, authJSON, 0600); err != nil {
+	if err := writeCodexFileAtomic(authFile, authJSON, 0600); err != nil {
 		return fmt.Errorf("failed to write auth.json: %w", err)
 	}
 
@@ -101,8 +101,11 @@ func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI
 	authData := map[string]interface{}{}
 
 	// Read existing auth.json if exists
-	if data, err := os.ReadFile(authFile); err == nil {
-		json.Unmarshal(data, &authData)
+	if data, err := os.ReadFile(authFile); err == nil && len(data) > 0 {
+		// 损坏的旧文件必须报错而不是吞掉：否则后续重写会静默丢弃旧 OAuth tokens。
+		if err := json.Unmarshal(data, &authData); err != nil {
+			return fmt.Errorf("failed to parse existing auth.json: %w", err)
+		}
 	}
 
 	authData["OPENAI_API_KEY"] = apiKey
@@ -112,7 +115,7 @@ func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI
 	if err != nil {
 		return fmt.Errorf("failed to marshal auth.json: %w", err)
 	}
-	if err := os.WriteFile(authFile, authJSON, 0600); err != nil {
+	if err := writeCodexFileAtomic(authFile, authJSON, 0600); err != nil {
 		return fmt.Errorf("failed to write auth.json: %w", err)
 	}
 
@@ -155,7 +158,7 @@ func SwitchCodexAPIAccount(modelProvider, model, baseURL, apiKey string, wireAPI
 		configContent += "\n" + existingConfig
 	}
 
-	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+	if err := writeCodexFileAtomic(configFile, []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("failed to write config.toml: %w", err)
 	}
 
@@ -193,8 +196,11 @@ func SwitchCodexAPIService(baseURL, apiKey string, contextConfig ...codexconfig.
 	configFile := filepath.Join(codexDir, "config.toml")
 
 	authData := map[string]interface{}{}
-	if data, err := os.ReadFile(authFile); err == nil {
-		_ = json.Unmarshal(data, &authData)
+	if data, err := os.ReadFile(authFile); err == nil && len(data) > 0 {
+		// 损坏的旧文件必须报错而不是吞掉：否则后续重写会静默丢弃旧 OAuth tokens。
+		if err := json.Unmarshal(data, &authData); err != nil {
+			return fmt.Errorf("failed to parse existing auth.json: %w", err)
+		}
 	}
 	authData["OPENAI_API_KEY"] = apiKey
 	delete(authData, "tokens")
@@ -203,12 +209,12 @@ func SwitchCodexAPIService(baseURL, apiKey string, contextConfig ...codexconfig.
 	if err != nil {
 		return fmt.Errorf("failed to marshal auth.json: %w", err)
 	}
-	if err := os.WriteFile(authFile, authJSON, 0600); err != nil {
+	if err := writeCodexFileAtomic(authFile, authJSON, 0600); err != nil {
 		return fmt.Errorf("failed to write auth.json: %w", err)
 	}
 
 	configContent := buildCodexAPIServiceConfig(configFile, baseURL, resolveCodexContextConfig(contextConfig...))
-	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+	if err := writeCodexFileAtomic(configFile, []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("failed to write config.toml: %w", err)
 	}
 	return nil
@@ -279,8 +285,11 @@ func RemoveCodexAPIService(apiKey string) error {
 	configFile := filepath.Join(codexDir, "config.toml")
 
 	authData := map[string]interface{}{}
-	if data, err := os.ReadFile(authFile); err == nil {
-		_ = json.Unmarshal(data, &authData)
+	if data, err := os.ReadFile(authFile); err == nil && len(data) > 0 {
+		// 损坏的旧文件必须报错而不是吞掉：否则后续重写会静默丢弃旧 OAuth tokens。
+		if err := json.Unmarshal(data, &authData); err != nil {
+			return fmt.Errorf("failed to parse existing auth.json: %w", err)
+		}
 		currentKey, _ := authData["OPENAI_API_KEY"].(string)
 		if currentKey == "" || currentKey == strings.TrimSpace(apiKey) || strings.HasPrefix(currentKey, "easyllm_codex_") {
 			delete(authData, "OPENAI_API_KEY")
@@ -288,7 +297,7 @@ func RemoveCodexAPIService(apiKey string) error {
 			if err != nil {
 				return fmt.Errorf("failed to marshal auth.json: %w", err)
 			}
-			if err := os.WriteFile(authFile, authJSON, 0600); err != nil {
+			if err := writeCodexFileAtomic(authFile, authJSON, 0600); err != nil {
 				return fmt.Errorf("failed to write auth.json: %w", err)
 			}
 		}
@@ -296,7 +305,7 @@ func RemoveCodexAPIService(apiKey string) error {
 
 	if data, err := os.ReadFile(configFile); err == nil {
 		configContent := stripCodexAPIServiceManagedConfig(string(data), codexAPIServiceProviderID)
-		if err := os.WriteFile(configFile, []byte(strings.TrimLeft(configContent, "\n")), 0644); err != nil {
+		if err := writeCodexFileAtomic(configFile, []byte(strings.TrimLeft(configContent, "\n")), 0644); err != nil {
 			return fmt.Errorf("failed to write config.toml: %w", err)
 		}
 	}
@@ -406,15 +415,18 @@ func SwitchCodexRelayProvider(relayBaseURL, model, proxyOrigin string, contextCo
 
 	authFile := filepath.Join(codexDir, "auth.json")
 	authData := map[string]interface{}{}
-	if data, err := os.ReadFile(authFile); err == nil {
-		_ = json.Unmarshal(data, &authData)
+	if data, err := os.ReadFile(authFile); err == nil && len(data) > 0 {
+		// 损坏的旧文件必须报错而不是吞掉：否则后续重写会静默丢弃旧 OAuth tokens。
+		if err := json.Unmarshal(data, &authData); err != nil {
+			return fmt.Errorf("failed to parse existing auth.json: %w", err)
+		}
 	}
 	delete(authData, "OPENAI_API_KEY")
 	authJSON, err := json.MarshalIndent(authData, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal auth.json: %w", err)
 	}
-	if err := os.WriteFile(authFile, authJSON, 0600); err != nil {
+	if err := writeCodexFileAtomic(authFile, authJSON, 0600); err != nil {
 		return fmt.Errorf("failed to write auth.json: %w", err)
 	}
 
@@ -441,8 +453,47 @@ func SwitchCodexRelayProvider(relayBaseURL, model, proxyOrigin string, contextCo
 	if strings.TrimSpace(existing) != "" {
 		configContent += "\n" + existing
 	}
-	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+	if err := writeCodexFileAtomic(configFile, []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("failed to write config.toml: %w", err)
+	}
+	return nil
+}
+
+// writeCodexFileAtomic 原子写入 Codex 配置文件：先写入同目录临时文件并 fsync 落盘，
+// 再 rename 原子替换。避免进程在 os.WriteFile 截断写入中途崩溃时留下半截文件，
+// 导致 auth.json / config.toml 损坏、凭证丢失。
+func writeCodexFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}()
+
+	if err := tmp.Chmod(perm); err != nil {
+		return fmt.Errorf("failed to chmod temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("failed to sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("failed to replace config file: %w", err)
+	}
+	if err := os.Chmod(path, perm); err != nil {
+		return fmt.Errorf("failed to chmod config file: %w", err)
 	}
 	return nil
 }
@@ -577,11 +628,11 @@ func applyCodexContextConfigToFile(configFile string, config codexconfig.Context
 			if len(lines) == 0 {
 				return nil
 			}
-			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+			return writeCodexFileAtomic(configFile, []byte(strings.Join(lines, "\n")+"\n"), 0644)
 		}
 		return err
 	}
-	return os.WriteFile(configFile, []byte(applyCodexContextConfig(string(data), config)), 0644)
+	return writeCodexFileAtomic(configFile, []byte(applyCodexContextConfig(string(data), config)), 0644)
 }
 
 func applyCodexContextConfig(content string, config codexconfig.ContextConfig) string {
@@ -635,7 +686,7 @@ func injectChatGPTBaseURL(configFile, baseURL string) error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			line := fmt.Sprintf(`chatgpt_base_url = "%s"`, baseURL)
-			return os.WriteFile(configFile, []byte(line+"\n"), 0644)
+			return writeCodexFileAtomic(configFile, []byte(line+"\n"), 0644)
 		}
 		return err
 	}
@@ -657,7 +708,7 @@ func injectChatGPTBaseURL(configFile, baseURL string) error {
 	} else {
 		content = line + "\n" + content
 	}
-	return os.WriteFile(configFile, []byte(content), 0644)
+	return writeCodexFileAtomic(configFile, []byte(content), 0644)
 }
 
 // cleanConfigTOMLAPIFields removes API-related keys from config.toml
@@ -714,5 +765,5 @@ func cleanConfigTOMLAPIFields(configFile string) error {
 		}
 	}
 
-	return os.WriteFile(configFile, []byte(strings.Join(filtered, "\n")), 0644)
+	return writeCodexFileAtomic(configFile, []byte(strings.Join(filtered, "\n")), 0644)
 }

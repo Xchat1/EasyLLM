@@ -197,9 +197,21 @@ func checkAccountQuota(account map[string]interface{}) quotaCheckOutcome {
 			outcome.errMsg = lastErr.Error()
 			return outcome
 		}
+		code := extractHTTPStatusCode(lastErr.Error())
+		// 429 限流和 503 服务暂不可用属于瞬态故障，凭据并未失效，保留账号避免误删
+		if code == 429 || code == 503 {
+			outcome.keep = true
+			outcome.category = "rate_limited"
+			if code == 503 {
+				outcome.category = "service_unavailable"
+			}
+			outcome.httpCode = code
+			outcome.errMsg = lastErr.Error()
+			return outcome
+		}
 		outcome.keep = false
 		outcome.category = "failed"
-		outcome.httpCode = extractHTTPStatusCode(lastErr.Error())
+		outcome.httpCode = code
 		outcome.errMsg = lastErr.Error()
 		return outcome
 	}

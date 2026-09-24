@@ -48,9 +48,10 @@ func New(cfg *config.Config) (*App, error) {
 
 	db := storage.GetDB()
 	dataDir := cfg.App.DataDir
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
+	_ = os.Chmod(dataDir, 0700)
 
 	// Initialize storages
 	openaiStore := storage.NewOpenAIStorage(db)
@@ -155,8 +156,16 @@ func (a *App) setupRouter() {
 		})
 	})
 
-	// Legacy pool status endpoint (compatible with original ATM API)
+	// Legacy pool status endpoint (compatible with original ATM API).
+	// Emails are masked to prevent unauthenticated enumeration of account emails.
+	// If authentication is enabled and request is remote, verify authentication.
 	r.GET("/pool/status", func(c *gin.Context) {
+		if handlers.IsAuthEnabled() && !isLoopbackRemoteAddr(c.Request.RemoteAddr) {
+			handlers.AuthMiddleware()(c)
+			if c.IsAborted() {
+				return
+			}
+		}
 		if a.codexProxy == nil {
 			c.JSON(http.StatusOK, gin.H{
 				"total_accounts":   0,
@@ -167,6 +176,17 @@ func (a *App) setupRouter() {
 			return
 		}
 		status := a.codexProxy.GetPoolStatus()
+		if status != nil && len(status.Accounts) > 0 {
+			maskedAccounts := make([]models.CodexAccount, len(status.Accounts))
+			for i, acct := range status.Accounts {
+				maskedAccounts[i] = acct
+				maskedAccounts[i].Email = maskEmail(acct.Email)
+			}
+			statusCopy := *status
+			statusCopy.Accounts = maskedAccounts
+			c.JSON(http.StatusOK, &statusCopy)
+			return
+		}
 		c.JSON(http.StatusOK, status)
 	})
 
@@ -602,6 +622,28 @@ func loadPersistedSettings(cfg *config.Config) {
 	}
 }
 
+func maskEmail(email string) string {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return ""
+	}
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		if len(email) <= 2 {
+			return "***"
+		}
+		return email[:1] + "***" + email[len(email)-1:]
+	}
+	user, domain := parts[0], parts[1]
+	if len(user) <= 1 {
+		return "*@" + domain
+	}
+	if len(user) == 2 {
+		return string(user[0]) + "*@" + domain
+	}
+	return string(user[0]) + "***" + string(user[len(user)-1]) + "@" + domain
+}
+
 func parseInt(s string) int {
 	var i int
 	fmt.Sscanf(s, "%d", &i)
@@ -641,32 +683,28 @@ func webUICacheMiddleware() gin.HandlerFunc {
 }
 
 func ipBlacklistMiddleware(cfg *config.Config) gin.HandlerFunc {
-	// Pre-build the blocklist set once, not per-request.
-	type blacklist struct {
-		enabled bool
-		ips     map[string]struct{}
-	}
-	bl := &blacklist{
-		enabled: cfg.IPBlacklist.Enabled && len(cfg.IPBlacklist.IPs) > 0,
-		ips:     make(map[string]struct{}, len(cfg.IPBlacklist.IPs)),
-	}
-	for _, ip := range cfg.IPBlacklist.IPs {
-		bl.ips[ip] = struct{}{}
-	}
 	return func(c *gin.Context) {
-		if !bl.enabled {
+		currentCfg := cfg
+		if currentCfg == nil {
+			currentCfg = config.Get()
+		}
+		if currentCfg == nil || !currentCfg.IPBlacklist.Enabled || len(currentCfg.IPBlacklist.IPs) == 0 {
 			c.Next()
 			return
 		}
-		if _, ok := bl.ips[c.ClientIP()]; ok {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error": gin.H{
-					"message": "Your IP has been blocked",
-					"type":    "forbidden",
-					"code":    "403",
-				},
-			})
-			return
+
+		clientIP := c.ClientIP()
+		for _, blockedIP := range currentCfg.IPBlacklist.IPs {
+			if blockedIP == clientIP {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"error": gin.H{
+						"message": "Your IP has been blocked",
+						"type":    "forbidden",
+						"code":    "403",
+					},
+				})
+				return
+			}
 		}
 		c.Next()
 	}

@@ -1,6 +1,9 @@
 package openai
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLocalProxyOriginNormalizesLoopbackHost(t *testing.T) {
 	got := LocalProxyOrigin("127.0.0.1:58855")
@@ -33,3 +36,18 @@ func TestLocalCodexProxyAPIBaseURL(t *testing.T) {
 		t.Fatalf("LocalCodexProxyAPIBaseURL() = %q, want %q", got, want)
 	}
 }
+
+func TestLocalProxyOriginDiscardsUntrustedHost(t *testing.T) {
+	for _, hostile := range []string{
+		"evil.attacker.com",
+		"attacker.com:8022",
+		"http://evil.com:9000",
+		"192.168.1.100:8022",
+	} {
+		got := LocalProxyOrigin(hostile)
+		if !strings.HasPrefix(got, "http://localhost:") {
+			t.Fatalf("LocalProxyOrigin(%q) = %q, must bind to localhost", hostile, got)
+		}
+	}
+}
+

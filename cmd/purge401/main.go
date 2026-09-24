@@ -1,6 +1,9 @@
 // purge401: 按 EasyLLM「配额」按钮逻辑测试系统内 OAuth 账号并清理。
 //
-// 默认删除所有非 200 账号（含 forbidden/401/网络失败等），仅保留 quota/verified。
+// 仅删除凭证明确失效的账号：HTTP 401 在任何模式下都删除；forbidden/403 仅在默认
+// 模式下删除（-401-only 模式保留）。网络超时、DNS/TLS 失败、HTTP 429/503 等瞬时
+// 错误以及未知错误一律保留，避免网络抖动或上游故障时误删有效账号。
+// 删除前会打印待删清单并要求输入 yes 确认。
 //
 // 用法:
 //
@@ -35,6 +38,8 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "只测试不删除")
 	only401 := flag.Bool("401-only", false, "仅删除 401，保留 forbidden 等非 200")
 	workers := flag.Int("workers", 10, "并发数")
+	yes := flag.Bool("yes", false, "跳过确认提示直接执行删除 (适用于自动化脚本)")
+	flag.BoolVar(yes, "y", false, "跳过确认提示直接执行删除 (同 -yes)")
 	flag.Parse()
 
 	cfg := config.Load()
@@ -66,7 +71,7 @@ func main() {
 	if *only401 {
 		fmt.Printf("测试 %d 个 OAuth 账号，仅删除 401...\n", len(oauthAccounts))
 	} else {
-		fmt.Printf("测试 %d 个 OAuth 账号，删除所有非 200...\n", len(oauthAccounts))
+		fmt.Printf("测试 %d 个 OAuth 账号，删除凭证明确失效的账号（401；默认模式下含 forbidden/403）...\n", len(oauthAccounts))
 	}
 	if *dryRun {
 		fmt.Println("dry-run 模式：不会删除账号")
@@ -125,6 +130,22 @@ func main() {
 		return
 	}
 
+	fmt.Println("\n待删除账号清单（将永久删除，无法恢复）:")
+	for _, r := range results {
+		if r.delete {
+			fmt.Printf("  - %s (HTTP %d, %s: %s)\n", r.account.Email, r.httpCode, r.category, r.errMsg)
+		}
+	}
+	if !*yes {
+		fmt.Print("确认删除吗？输入 yes 继续: ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if strings.ToLower(strings.TrimSpace(confirm)) != "yes" {
+			fmt.Println("已取消，未删除任何账号")
+			return
+		}
+	}
+
 	if err := store.DeleteMany(deleteIDs); err != nil {
 		log.Fatalf("删除失败: %v", err)
 	}
@@ -142,7 +163,7 @@ func testAccount(account *models.OpenAIAccount, store *storage.OpenAIStorage, on
 			result.category = "failed"
 			result.httpCode = extractHTTPCode(err.Error())
 			result.errMsg = err.Error()
-			result.delete = !only401 || is401Error(err)
+			result.delete = shouldDeleteAccount(err, result.httpCode, only401)
 			return result
 		}
 		accessToken = derefStr(account.AccessToken)
@@ -153,7 +174,8 @@ func testAccount(account *models.OpenAIAccount, store *storage.OpenAIStorage, on
 		result.category = "missing_token"
 		result.httpCode = 0
 		result.errMsg = "missing access_token"
-		result.delete = !only401
+		// 没有任何可用 token 的账号无法判定凭证明确失效，一律保留，由用户手动处理。
+		result.delete = false
 		return result
 	}
 
@@ -163,7 +185,7 @@ func testAccount(account *models.OpenAIAccount, store *storage.OpenAIStorage, on
 			result.category = "failed"
 			result.httpCode = extractHTTPCode(refreshErr.Error())
 			result.errMsg = refreshErr.Error()
-			result.delete = !only401 || is401Error(refreshErr)
+			result.delete = shouldDeleteAccount(refreshErr, result.httpCode, only401)
 			return result
 		}
 		accessToken = derefStr(account.AccessToken)
@@ -175,7 +197,7 @@ func testAccount(account *models.OpenAIAccount, store *storage.OpenAIStorage, on
 		result.category = "failed"
 		result.httpCode = extractHTTPCode(err.Error())
 		result.errMsg = err.Error()
-		result.delete = !only401 || is401Error(err)
+		result.delete = shouldDeleteAccount(err, result.httpCode, only401)
 		return result
 	}
 
@@ -247,6 +269,42 @@ func is401Error(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "HTTP 401") ||
 		strings.Contains(msg, "refresh_token 已轮换失效")
+}
+
+// isNetworkError 识别瞬时网络故障：这类错误说明不了账号本身有问题，绝不能触发删除。
+// （与 cmd/filtersub2api 的同名函数保持一致的分类口径。）
+func isNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "EOF") ||
+		strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "TLS handshake") ||
+		strings.Contains(msg, "no such host")
+}
+
+// shouldDeleteAccount 决定一次失败的账号检测是否值得永久删除。
+// 只有凭证明确失效（HTTP 401）才删除；网络错误、429/503 等瞬时错误和未知错误一律保留。
+// forbidden/403 沿用项目惯例：默认模式删除，-401-only 模式保留。
+func shouldDeleteAccount(err error, httpCode int, only401 bool) bool {
+	if isNetworkError(err) {
+		return false
+	}
+	code := httpCode
+	if code == 0 && err != nil {
+		code = extractHTTPCode(err.Error())
+	}
+	switch code {
+	case 401:
+		return true
+	case 403:
+		return !only401
+	default:
+		return false
+	}
 }
 
 func extractHTTPCode(message string) int {

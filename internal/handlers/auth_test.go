@@ -256,3 +256,36 @@ func signTestJWT(t *testing.T, secret string, header jwtHeader, payload jwtPaylo
 	_, _ = mac.Write([]byte(signingInput))
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
+
+func TestEnableAuthPreventsAccountTakeoverWhenDisabled(t *testing.T) {
+	setupTestAuthDB(t)
+	gin.SetMode(gin.TestMode)
+
+	// Save existing password and explicitly disable auth
+	hash, _ := bcrypt.GenerateFromPassword([]byte("original-secret"), bcrypt.MinCost)
+	_ = storage.SaveSetting("auth_password", string(hash))
+	_ = storage.SaveSetting("auth_enabled", "false")
+
+	h := NewAuthHandler()
+	r := gin.New()
+	rg := r.Group("/api/v1")
+	h.RegisterRoutes(rg)
+
+	// Attacker attempts to change password without old password
+	attackBody, _ := json.Marshal(map[string]string{"password": "hacked-password"})
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/auth/enable", bytes.NewReader(attackBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized for unauthenticated password reset, got %d", w.Code)
+	}
+
+	// Verify password in DB was NOT changed
+	stored, _ := storage.GetSetting("auth_password")
+	if bcrypt.CompareHashAndPassword([]byte(stored), []byte("original-secret")) != nil {
+		t.Fatalf("stored password was altered by unauthorized request!")
+	}
+}
+

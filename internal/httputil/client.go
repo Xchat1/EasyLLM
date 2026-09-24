@@ -25,15 +25,19 @@ func NewChatGPTClient(timeout time.Duration) *http.Client {
 }
 
 // NewChatGPTStreamingClient is like NewChatGPTClient but disables compression for SSE streams.
+//
+// The overall client Timeout is intentionally disabled (0): http.Client.Timeout spans
+// the entire response body read, so any SSE stream living longer than the timeout
+// would be aborted mid-stream ("Client.Timeout exceeded while reading body").
+// Streams are terminated via the request context instead; ResponseHeaderTimeout
+// (set on the transport by NewChatGPTTransport) still guards against hung upstreams.
+// The timeout parameter is kept for API compatibility and no longer bounds the request.
 func NewChatGPTStreamingClient(timeout time.Duration) *http.Client {
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
 	transport := NewChatGPTTransport()
 	transport.DisableCompression = true
 	return &http.Client{
 		Transport: transport,
-		Timeout:   timeout,
+		// Timeout: 0 — disabled for long-lived SSE streams, see above.
 	}
 }
 

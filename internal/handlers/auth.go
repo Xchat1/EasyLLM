@@ -105,6 +105,27 @@ func (h *AuthHandler) EnableAuth(c *gin.Context) {
 		}
 	}
 
+	// If a password is already configured, any new password requires verifying the current password
+	// (or having a valid JWT) to prevent unauthenticated account takeover.
+	if hasPassword && strings.TrimSpace(req.Password) != "" {
+		isJWTValid := false
+		if authHeader := c.GetHeader("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			cfg := config.Get()
+			secret := ""
+			if cfg != nil {
+				secret = cfg.App.SecretKey
+			}
+			if token != "" && verifyJWT(token, secret) == nil {
+				isJWTValid = true
+			}
+		}
+		if !isJWTValid && bcrypt.CompareHashAndPassword([]byte(stored), []byte(req.OldPassword)) != nil {
+			c.JSON(http.StatusUnauthorized, models.APIError{Error: "Current password required", Code: "UNAUTHORIZED"})
+			return
+		}
+	}
+
 	if strings.TrimSpace(req.Password) != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {

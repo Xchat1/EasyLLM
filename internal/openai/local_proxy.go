@@ -10,38 +10,37 @@ import (
 )
 
 // LocalProxyOrigin 返回 EasyLLM 本地代理根地址（无 /v1 后缀），供 Codex CLI 注入使用。
-// hostOverride 通常来自 HTTP 请求的 Host，为空时回退到配置端口。
+// 始终绑定到 localhost，避免外部 HTTP 请求通过恶意 Host 头将外部地址写入 config.toml
+// 导致本地 Codex CLI 凭据外泄 (Host Header Poisoning)。
 func LocalProxyOrigin(hostOverride string) string {
 	host := strings.TrimSpace(hostOverride)
 	if parsed, err := url.Parse(host); err == nil && parsed.Host != "" {
 		host = parsed.Host
 	}
-	if host == "" {
-		cfg := config.Get()
-		port := 8022
-		if cfg != nil && cfg.Server.Port > 0 {
-			port = cfg.Server.Port
-		}
-		return fmt.Sprintf("http://localhost:%d", port)
+
+	cfg := config.Get()
+	defaultPort := "8022"
+	if cfg != nil && cfg.Server.Port > 0 {
+		defaultPort = strconv.Itoa(cfg.Server.Port)
 	}
 
-	hostOnly, port, err := net.SplitHostPort(host)
-	if err != nil {
-		hostOnly = host
-		port = ""
+	if host == "" {
+		return fmt.Sprintf("http://localhost:%s", defaultPort)
 	}
-	if hostOnly == "" || hostOnly == "0.0.0.0" || hostOnly == "::" || hostOnly == "[::]" ||
-		strings.EqualFold(hostOnly, "localhost") || net.ParseIP(hostOnly) != nil {
-		hostOnly = "localhost"
+
+	_, port, err := net.SplitHostPort(host)
+	if err != nil {
+		port = defaultPort
 	}
 	if port == "" {
-		cfg := config.Get()
-		port = "8022"
-		if cfg != nil && cfg.Server.Port > 0 {
-			port = strconv.Itoa(cfg.Server.Port)
-		}
+		port = defaultPort
 	}
-	return fmt.Sprintf("http://%s", net.JoinHostPort(hostOnly, port))
+
+	if p, err := strconv.Atoi(port); err != nil || p <= 0 || p > 65535 {
+		port = defaultPort
+	}
+
+	return fmt.Sprintf("http://%s", net.JoinHostPort("localhost", port))
 }
 
 // LocalProxyAPIBaseURL 返回 EasyLLM OpenAI 兼容 API 根地址（含 /v1）。

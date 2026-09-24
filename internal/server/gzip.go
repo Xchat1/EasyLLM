@@ -3,6 +3,7 @@ package server
 import (
 	"compress/gzip"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,19 @@ func (g *gzipWriter) Write(data []byte) (int, error) {
 
 func (g *gzipWriter) WriteString(s string) (int, error) {
 	return g.writer.Write([]byte(s))
+}
+
+// Flush 实现 http.Flusher：先把 gzip 缓冲区里的数据刷到底层 writer，
+// 再把 Flush 透传到底层 writer。没有它，流式 handler 的 Flush 只会刷
+// 底层 writer，而 gzip 缓冲区的数据要等 handler 结束（gz.Close）才吐出，
+// SSE/流式响应会被迫退化成“结束时一次性返回”，客户端还可能超时。
+func (g *gzipWriter) Flush() {
+	if gz, ok := g.writer.(*gzip.Writer); ok {
+		_ = gz.Flush()
+	}
+	if flusher, ok := g.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 // GzipMiddleware compresses responses with gzip to optimize transfer speed and performance.

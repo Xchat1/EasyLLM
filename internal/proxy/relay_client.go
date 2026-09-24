@@ -9,14 +9,16 @@ import (
 	"time"
 )
 
-// NewRelayHTTPClient returns an HTTP client for upstream relay requests with optional proxy support.
-func NewRelayHTTPClient() *http.Client {
+// newRelayTransport builds the shared transport for relay upstream requests
+// with optional proxy support.
+func newRelayTransport() *http.Transport {
 	cfg := config.Get()
 	transport := &http.Transport{
-		DisableCompression:  true,
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 20,
-		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:    true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 120 * time.Second,
 	}
 
 	if cfg != nil && cfg.Proxy.Enabled && cfg.Proxy.Host != "" {
@@ -31,10 +33,26 @@ func NewRelayHTTPClient() *http.Client {
 			transport.Proxy = http.ProxyURL(u)
 		}
 	}
+	return transport
+}
 
+// NewRelayHTTPClient returns an HTTP client for upstream relay requests with optional proxy support.
+func NewRelayHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout:   300 * time.Second,
-		Transport: transport,
+		Transport: newRelayTransport(),
+	}
+}
+
+// NewRelayStreamingHTTPClient returns an HTTP client dedicated to upstream relay
+// SSE streams. The overall client Timeout is disabled (0): http.Client.Timeout spans
+// the entire response body read, so a stream living longer than the timeout would be
+// aborted mid-stream. Streams are terminated via the request context instead;
+// ResponseHeaderTimeout still guards against hung upstreams.
+func NewRelayStreamingHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: newRelayTransport(),
+		// Timeout: 0 — disabled for long-lived SSE streams, see above.
 	}
 }
 

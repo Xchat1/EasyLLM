@@ -30,13 +30,19 @@ func InitDB(cfg *config.Config) error {
 	if sqlitePath == "" {
 		sqlitePath = filepath.Join(cfg.App.DataDir, "easyllm.db")
 	}
-	if err := os.MkdirAll(filepath.Dir(sqlitePath), 0755); err != nil {
+	dir := filepath.Dir(sqlitePath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
+	_ = os.Chmod(dir, 0700)
 	DB, err = gorm.Open(sqlite.Open(sqlitePath), gormConfig)
 	if err != nil {
 		return fmt.Errorf("failed to open sqlite: %w", err)
 	}
+	// Restrict SQLite database and WAL files to owner-only read/write (0600)
+	_ = os.Chmod(sqlitePath, 0600)
+	_ = os.Chmod(sqlitePath+"-wal", 0600)
+	_ = os.Chmod(sqlitePath+"-shm", 0600)
 
 	if sqlDB, err := DB.DB(); err == nil {
 		sqlDB.SetMaxOpenConns(1)

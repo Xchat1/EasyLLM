@@ -29,9 +29,13 @@ type RelayHandler struct {
 	Sessions *RelaySessionStore
 	Config   *RelayConfig
 	Client   *http.Client
-	Usage    *RelayUsageStore
-	Logs     *RelayLogStore
-	rrIndex  int64 // atomic round-robin counter for multi-upstream selection
+	// StreamingClient is a dedicated upstream client for long-lived SSE streams.
+	// It has no overall client Timeout (the shared Client's 300s Timeout would
+	// abort streams mid-response); streams are bounded by the request context.
+	StreamingClient *http.Client
+	Usage           *RelayUsageStore
+	Logs            *RelayLogStore
+	rrIndex         int64 // atomic round-robin counter for multi-upstream selection
 }
 
 // selectUpstream picks an upstream for the next request using round-robin.
@@ -79,11 +83,12 @@ func NewRelayHandler(config *RelayConfig) *RelayHandler {
 		sessions = NewRelaySessionStore()
 	}
 	return &RelayHandler{
-		Sessions: sessions,
-		Config:   config,
-		Client:   NewRelayHTTPClient(),
-		Usage:    NewRelayUsageStore(),
-		Logs:     NewRelayLogStore(),
+		Sessions:        sessions,
+		Config:          config,
+		Client:          NewRelayHTTPClient(),
+		StreamingClient: NewRelayStreamingHTTPClient(),
+		Usage:           NewRelayUsageStore(),
+		Logs:            NewRelayLogStore(),
 	}
 }
 
@@ -351,9 +356,15 @@ func (h *RelayHandler) handleStreaming(c *gin.Context, chatReq *ChatRequest, res
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 
-	// Create stream translator args
+	// Create stream translator args.
+	// Streaming uses a dedicated client without an overall Timeout — the shared
+	// h.Client's 300s Timeout would abort long-lived SSE streams mid-response.
+	streamClient := h.StreamingClient
+	if streamClient == nil {
+		streamClient = h.Client
+	}
 	args := RelayStreamTranslator{
-		Client:          h.Client,
+		Client:          streamClient,
 		UpstreamURL:     buildChatCompletionsURL(upstreamURL),
 		APIKey:          apiKey,
 		AuthHeader:      authHeader,

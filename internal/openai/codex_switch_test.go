@@ -229,3 +229,53 @@ func TestSwitchCodexRelayProviderAndState(t *testing.T) {
 		t.Fatalf("unexpected base_url %q", state.BaseURL)
 	}
 }
+
+func TestWriteCodexFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "sub", "config.json")
+	data := []byte(`{"test": true}`)
+
+	if err := writeCodexFileAtomic(target, data, 0600); err != nil {
+		t.Fatalf("writeCodexFileAtomic failed: %v", err)
+	}
+
+	read, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("failed to read written file: %v", err)
+	}
+	if string(read) != string(data) {
+		t.Fatalf("content mismatch: got %s, want %s", string(read), string(data))
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("perm mismatch: got %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestSwitchCodexAPIServiceFailsOnCorruptedAuthJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	authFile := filepath.Join(codexDir, "auth.json")
+	// Write half-truncated invalid JSON
+	if err := os.WriteFile(authFile, []byte(`{"tokens": {"access_token": "foo`), 0600); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+
+	err := SwitchCodexAPIService("http://localhost:18080/v1", "easyllm_codex_test")
+	if err == nil {
+		t.Fatalf("expected error when existing auth.json is corrupted, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to parse existing auth.json") {
+		t.Fatalf("expected 'failed to parse existing auth.json' error, got %v", err)
+	}
+}
+

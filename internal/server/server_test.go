@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"easyllm/config"
 	"easyllm/internal/models"
 	"easyllm/internal/proxy"
 	"easyllm/internal/storage"
@@ -334,3 +335,45 @@ func TestIsWebSocketUpgradeAcceptsConnectionTokenList(t *testing.T) {
 func strPtr(value string) *string {
 	return &value
 }
+
+func TestIPBlacklistMiddlewareRuntimeUpdate(t *testing.T) {
+	cfg := &config.Config{
+		IPBlacklist: config.IPBlacklistConfig{
+			Enabled: false,
+			IPs:     []string{"198.51.100.5"},
+		},
+	}
+
+	r := gin.New()
+	r.Use(ipBlacklistMiddleware(cfg))
+	r.GET("/test-ip", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	// 1. Blacklist disabled -> should allow
+	req := httptest.NewRequest(http.MethodGet, "/test-ip", nil)
+	req.RemoteAddr = "198.51.100.5:12345"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 when blacklist disabled, got %d", w.Code)
+	}
+
+	// 2. Enable blacklist at runtime without restarting
+	cfg.IPBlacklist.Enabled = true
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req)
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 after enabling blacklist at runtime, got %d", w2.Code)
+	}
+
+	// 3. Request from different IP should be allowed
+	reqAllowed := httptest.NewRequest(http.MethodGet, "/test-ip", nil)
+	reqAllowed.RemoteAddr = "203.0.113.10:12345"
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, reqAllowed)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("expected 200 for non-blacklisted IP, got %d", w3.Code)
+	}
+}
+
