@@ -2,8 +2,8 @@ package models
 
 import "time"
 
-const AppVersion = "2.0.0"
-const AppGitRepo = "https://github.com/libaxuan/EasyLLM"
+const AppVersion = "2.0.2"
+const AppGitRepo = "https://github.com/Xchat1/EasyLLM"
 
 // AppSettings stores application settings in the database
 type AppSettings struct {

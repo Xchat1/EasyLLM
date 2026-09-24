@@ -1,24 +1,26 @@
 # EasyLLM
 
-EasyLLM 是一个轻量级 OpenAI / Codex 账号管理与本地编码对接工具，后端使用 Go，前端使用 Vue 3。它把账号导入、Token 刷新、配额查询、Codex CLI 配置切换和本地 OpenAI 兼容代理集中到一个本机界面里，不提供公网部署服务。
+EasyLLM 是一个轻量级 AI 编码账号管理与本地代理对接工具（支持 OpenAI / Codex、Antigravity、Cursor），后端使用 Go，前端使用 Vue 3。它把账号导入、OAuth 与 Token 刷新、配额查询、本地 CLI 配置切换和 OpenAI 兼容代理集中到一个本机界面里，不提供公网部署服务。
 
 [![GitHub](https://img.shields.io/badge/GitHub-EasyLLM-blue?logo=github)](https://github.com/Xchat1/EasyLLM)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](./LICENSE)
 
 ## 核心能力
 
-- 统一管理 OpenAI / Codex OAuth 账号、API Key 账号和 Codex CLI 本机配置。
-- 一键切换 Codex 当前账号，自动写入 `~/.codex/auth.json` 与本机代理配置。
-- 批量导入 Token、CPA、refresh token 列表和 EasyLLM 备份文件，适合多账号迁移与恢复。
-- 内置 OpenAI 兼容本地代理，提供 `/v1/responses`、`/v1/chat/completions`、`/v1/models` 等接口。
-- 内置 **Relay 模式**：Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容上游（DeepSeek、Mistral、OpenRouter、Kimi、Qwen、MiMo 等），支持多渠道 round-robin 轮询、模型映射和协议转换。
-- OAuth / Codex 本地 API 代理池支持 `auto`、`round_robin`、`random`、`least_used`、`quota_high_first` 等调度策略，并可按账号状态和剩余额度自动跳过或优先选择账号。
-- 支持配额刷新、全局配额检测、Token 刷新、账号可用性检查和 Codex 本地 API 服务注入。
-- 支持 Codex 上下文窗口预设（默认、516K、1M、自定义），注入时自动写入或清理 `config.toml` 中的上下文字段。
-- Dashboard 展示 Codex 本地代理和 Relay 的最近调用、状态码、模型、耗时和 Token 用量；Relay 页面提供实时日志、会话历史统计和一键清理。
-- 支持本机 API Key 鉴权、IP 黑名单、HTTP 代理转发和本地 SQLite 持久化。
-- 默认不保留代理请求内容；Relay 日志和调用统计只记录状态、模型、Token 用量等运行元数据，减少提示词、响应内容和账号敏感信息落盘。
-- 支持脚本启动、手动构建、Windows zip 和 macOS App 打包分发。
+- **多平台凭据管理**：统一管理 OpenAI / Codex（OAuth & API Key）、Antigravity 与 Cursor 账号凭据与本地 CLI 环境。
+- **Antigravity 集成**：支持 Antigravity OAuth 登录与 Refresh Token 刷新、配额/模型额度查询与激活、一键切换本地 CLI 凭据与唤醒状态。
+- **Cursor 集成**：支持 Cursor 账号/Token 录入与刷新、使用量与额度查询、账号轮换切换。
+- **Codex CLI 一键切换**：自动原子写入 `~/.codex/auth.json` 与本机代理配置，支持凭据防损坏与异常恢复。
+- **批量导入与恢复**：批量导入 Token、CPA、refresh token 列表和 EasyLLM 备份文件，适合多账号迁移与恢复。
+- **本地 API 代理池**：内置 OpenAI 兼容代理（`/v1/responses`、`/v1/chat/completions`、`/v1/models` 等），支持 `auto`、`round_robin`、`quota_high_first` 等调度策略，自动根据额度与健康度轮换。
+- **Relay 模式**：Codex CLI 通过 EasyLLM 对接任意 OpenAI 兼容上游（DeepSeek、Mistral、OpenRouter、Kimi、Qwen 等），支持多渠道轮询、模型映射和协议转换。
+- **高可用与长流式保障**：流式 SSE 接口零死限断开，结合 `http.Flusher` 兼容 gzip 分块实时传输；长任务、大文件补全不断流。
+- **安全与防误删防护**：
+  - `purge401` 与 `filtersub2api` 仅剔除明确失效凭据，网络抖动、429 限流和 503 故障一律保留，关键清理具备交互式清单二次确认。
+  - 本地代理严格锚定 `localhost`，阻断外部 Host Header 投毒攻击。
+  - 访问认证与密码重置防接管保护，本地 SQLite 数据库（`0600`）与数据目录（`0700`）权限隔离。
+- **Dashboard & 监控**：展示本地代理池与 Relay 的最近调用、状态码、模型、耗时和 Token 用量；Relay 实时日志与会话历史统计。
+- **跨平台分发**：支持脚本启动、手动构建、Windows zip 和 macOS App（原生菜单栏与窗口外壳）打包分发。
 
 ## 项目优势
 
@@ -41,6 +43,8 @@ EasyLLM 是一个轻量级 OpenAI / Codex 账号管理与本地编码对接工�
 ## 主要使用入口
 
 - 「Codex 管理」：导入 OAuth / API Key / CPA / 备份文件，刷新 Token 与配额，切换或注入 Codex 配置。
+- 「Antigravity 管理」：管理 Antigravity OAuth 账号、模型额度监控、Token 唤醒与 CLI 配置一键切换。
+- 「Cursor 管理」：录入与管理 Cursor 凭证、实时查询使用额度与账号状态。
 - 「服务配置」：启动 Codex 本地 API 服务，选择代理池账号、路由策略、端口和本机 API Key。
 - 「Relay 配置」：维护第三方上游渠道、模型映射、工具拒绝列表、会话历史限制和 Codex 上下文参数。
 - 「Dashboard」：查看本地代理池、Relay 请求统计、最近调用记录和运行状态。
@@ -105,14 +109,14 @@ open build/macos/EasyLLM.app
 生成 macOS Release zip：
 
 ```bash
-./scripts/build-macos-app.sh --package --version 2.0.0
-./scripts/check-release-archives.sh build/release/EasyLLM-2.0.0-macos-*.zip
+./scripts/build-macos-app.sh --package --version 2.0.2
+./scripts/check-release-archives.sh build/release/EasyLLM-2.0.2-macos-*.zip
 ```
 
 Windows Release zip 由 Windows / PowerShell 环境执行：
 
 ```powershell
-.\scripts\package-windows.ps1 -Version 2.0.0 -Arch amd64
+.\scripts\package-windows.ps1 -Version 2.0.2 -Arch amd64
 ```
 
 发布包生成后建议执行仓库内置隐私扫描脚本，确认 zip 中没有 `.env`、数据库、Token JSON、日志或本地助手配置等私有文件。
