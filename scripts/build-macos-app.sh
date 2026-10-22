@@ -89,7 +89,7 @@ rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}/web" "${GOCACHE}" "${SWIFT_MODULE_CACHE}" "${CLANG_MODULE_CACHE_PATH}"
 
 echo "→ 编译 Go 后端"
-CGO_ENABLED=1 go build -trimpath -ldflags="-w -s" -o "${RESOURCES_DIR}/easyllm" .
+CGO_ENABLED=1 GOTOOLCHAIN=go1.26.10 go build -trimpath -ldflags="-w -s" -o "${RESOURCES_DIR}/easyllm" .
 chmod +x "${RESOURCES_DIR}/easyllm"
 
 echo "→ 拷贝前端资源"

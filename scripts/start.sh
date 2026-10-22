@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # EasyLLM 快速启动脚本 (macOS / Linux)
 # 用法:
-#   ./scripts/start.sh           # go run 模式（开发）
+#   ./scripts/start.sh           # GOTOOLCHAIN=go1.26.10 go run 模式（开发）
 #   ./scripts/start.sh --build   # 先构建前端和后端再运行
 #   ./scripts/start.sh --prod    # 运行已编译的二进制
 
@@ -95,7 +95,7 @@ build_frontend() {
 build_backend() {
   echo
   echo "→ 编译 Go 后端..."
-  CGO_ENABLED=1 go build -ldflags="-w -s" -o easyllm .
+  CGO_ENABLED=1 GOTOOLCHAIN=go1.26.10 go build -ldflags="-w -s" -o easyllm .
   echo "✓ 编译完成 -> ./easyllm"
 }
 
@@ -105,9 +105,9 @@ load_env
 case "${MODE}" in
   dev)
     echo
-    echo "→ 以 go run 方式启动（开发模式）"
+    echo "→ 以 GOTOOLCHAIN=go1.26.10 go run 方式启动（开发模式）"
     print_info
-    exec go run main.go
+    exec env GOTOOLCHAIN=go1.26.10 go run main.go
     ;;
   build)
     build_frontend

@@ -8,6 +8,7 @@ param(
     [switch]$build,
     [switch]$prod
 )
+$env:GOTOOLCHAIN = "go1.26.10"
 
 # ── 切换到项目根目录 ──────────────────────────────────────────────────────────
 $rootDir = Split-Path -Parent $PSScriptRoot

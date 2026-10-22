@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$env:GOTOOLCHAIN = "go1.26.10"
 
 $rootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $rootDir
